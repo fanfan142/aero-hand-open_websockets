@@ -1,4 +1,8 @@
-# Aero Hand WebSocket C DLL CMake配置
+# Aero Hand WebSocket C DLL
+# CMake configuration for building the cross-language WebSocket library
+#
+# License: Apache-2.0
+# Based on: TetherIA/aero-hand-open (https://github.com/TetherIA/aero-hand-open)
 
 cmake_minimum_required(VERSION 3.10)
 project(aero_ws_dll C)
@@ -6,7 +10,7 @@ project(aero_ws_dll C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# 输出配置
+# Output configuration
 set(BUILD_SHARED_LIBS ON)
 
 if(WIN32)
@@ -21,15 +25,15 @@ endif()
 
 include_directories(include)
 
-# 源文件
+# Source files
 set(SOURCES
     src/aero_ws.c
 )
 
-# 创建动态库
+# Create shared library
 add_library(aero_ws SHARED ${SOURCES})
 
-# 设置输出名称
+# Set output properties
 set_target_properties(aero_ws PROPERTIES
     OUTPUT_NAME "aero_ws"
     PREFIX ${DLL_PREFIX}
@@ -37,19 +41,19 @@ set_target_properties(aero_ws PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${OUTPUT_DIR}
 )
 
-# Windows DLL导出定义
+# Windows DLL export definition
 if(WIN32)
     target_compile_definitions(aero_ws PRIVATE AERO_WS_EXPORTS)
 endif()
 
-# 链接库
+# Link libraries
 if(WIN32)
     target_link_libraries(aero_ws ws2_32)
 else()
     target_link_libraries(aero_ws pthread)
 endif()
 
-# 安装配置
+# Install configuration
 install(TARGETS aero_ws
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib

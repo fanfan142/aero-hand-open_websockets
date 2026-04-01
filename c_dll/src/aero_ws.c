@@ -1,5 +1,8 @@
 /**
  * Aero Hand WebSocket C DLL Implementation
+ *
+ * License: Apache-2.0
+ * Based on: TetherIA/aero-hand-open (https://github.com/TetherIA/aero-hand-open)
  */
 
 #include <stdio.h>

@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "Aero Hand Open Team"}
+    {name = "fanfan142", email = "fanfan142@users.noreply.github.com"}
+]
+maintainers = [
+    {name = "fanfan142", email = "fanfan142@users.noreply.github.com"}
 ]
 keywords = ["robotics", "websocket", "servo", "esp32", "aero-hand"]
 classifiers = [

@@ -24,7 +24,6 @@ from .protocol import (
     JointState,
     parse_command,
     build_response,
-    build_response,
     build_states_response,
     build_error,
 )
