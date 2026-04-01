@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aero Hand 7DoF Control Panel</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #eee;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: #00d4ff;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #a8c6ff;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .status-bar,
+        .connection-panel,
+        .control-panel,
+        .log-panel {
+            background: rgba(255,255,255,0.06);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-bar {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 12px;
+        }
+
+        .status-bar .connected { color: #00ff88; }
+        .status-bar .disconnected { color: #ff4444; }
+
+        .connection-panel,
+        .control-panel {
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .connection-panel h3,
+        .control-panel h3,
+        .log-title {
+            margin-bottom: 15px;
+            color: #00d4ff;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        input {
+            padding: 10px 15px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 14px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+
+        .btn-primary:hover {
+            background: #00b8e6;
+        }
+
+        .btn-danger {
+            background: #ff4757;
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background: #ff3344;
+        }
+
+        .btn-success {
+            background: #2ed573;
+            color: #1a1a2e;
+        }
+
+        .btn-success:hover {
+            background: #26b863;
+        }
+
+        .panel-hint {
+            color: #9db2d1;
+            font-size: 13px;
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }
+
+        .slider-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 14px;
+        }
+
+        .slider-card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 14px;
+        }
+
+        .slider-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            gap: 12px;
+        }
+
+        .slider-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .slider-key {
+            font-size: 12px;
+            color: #7da0c9;
+        }
+
+        .slider-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #9db2d1;
+            margin-bottom: 10px;
+        }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .slider-row input[type="range"] {
+            flex: 1;
+            height: 6px;
+            -webkit-appearance: none;
+            background: rgba(255,255,255,0.18);
+            border-radius: 3px;
+            padding: 0;
+        }
+
+        .slider-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #00d4ff;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 212, 255, 0.45);
+        }
+
+        .angle-value {
+            width: 58px;
+            text-align: right;
+            font-size: 14px;
+            color: #00d4ff;
+            font-weight: 600;
+        }
+
+        .protocol-preview {
+            margin-top: 18px;
+            padding: 14px;
+            background: rgba(0,0,0,0.25);
+            border-radius: 10px;
+        }
+
+        .protocol-preview h4 {
+            color: #00d4ff;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .protocol-preview pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #d7e6ff;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+
+        .log-wrap {
+            margin-top: 20px;
+        }
+
+        .log-title {
+            padding: 0 4px 10px;
+        }
+
+        .log-panel {
+            padding: 15px;
+            height: 220px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            background: rgba(0,0,0,0.3);
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+        }
+
+        .log-send { color: #00d4ff; }
+        .log-recv { color: #2ed573; }
+        .log-error { color: #ff4757; }
+        .log-info { color: #d7e6ff; }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 14px;
+            }
+
+            .slider-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .slider-title,
+            .slider-meta,
+            .slider-row,
+            .input-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .angle-value {
+                width: 100%;
+                text-align: left;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Aero Hand Open - 7DoF Web Control</h1>
+        <div class="subtitle">SDK 风格 7 自由度控制，前端自动展开为固件 15 关节协议</div>
+
+        <div class="status-bar">
+            Status: <span id="connectionStatus" class="disconnected">Disconnected</span>
+            | Server: <span id="serverInfo">-</span>
+        </div>
+
+        <div class="connection-panel">
+            <h3>Connection</h3>
+            <div class="input-group">
+                <input type="text" id="hostInput" value="192.168.4.1" placeholder="Host">
+                <input type="number" id="portInput" value="8765" placeholder="Port">
+                <button class="btn-primary" id="connectBtn" onclick="toggleConnection()">Connect</button>
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <h3>Compact 7DoF Control</h3>
+            <div class="panel-hint">
+                朋友们，这里是 SDK 同款紧凑控制语义：拇指 3 维 + 四指各 1 维。页面内部会自动展开成固件当前支持的 15 个关节，再通过 <code>multi_joint_control</code> 发给 ESP32。
+            </div>
+
+            <div class="slider-grid" id="sliderGrid"></div>
+
+            <div class="protocol-preview">
+                <h4>Expanded 15-Joint Preview</h4>
+                <pre id="protocolPreview">{}</pre>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn-success" onclick="sendHoming()">Homing (归零)</button>
+                <button class="btn-primary" onclick="sendAllZeros()">All Zeros</button>
+                <button class="btn-primary" onclick="requestStates()">Get States</button>
+                <button class="btn-danger" onclick="clearLog()">Clear Log</button>
+            </div>
+        </div>
+
+        <div class="log-wrap">
+            <div class="log-title">WebSocket Log</div>
+            <div class="log-panel" id="logPanel">
+                <div class="log-entry log-info">Ready to connect...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const COMPACT_CONTROLS = [
+            { id: 'thumb_cmc_abd', label: '拇指外展', key: 'thumb_abduction', min: 0, max: 100, defaultValue: 0, unit: '°' },
+            { id: 'thumb_cmc_flex', label: '拇指屈曲', key: 'thumb_flex', min: 0, max: 55, defaultValue: 0, unit: '°' },
+            { id: 'thumb_mcp_ip', label: '拇指肌腱', key: 'thumb_tendon', min: 0, max: 90, defaultValue: 0, unit: '°' },
+            { id: 'index_flexion', label: '食指', key: 'index_finger', min: 0, max: 90, defaultValue: 0, unit: '°' },
+            { id: 'middle_flexion', label: '中指', key: 'middle_finger', min: 0, max: 90, defaultValue: 0, unit: '°' },
+            { id: 'ring_flexion', label: '无名指', key: 'ring_finger', min: 0, max: 90, defaultValue: 0, unit: '°' },
+            { id: 'pinky_flexion', label: '小指', key: 'pinky_finger', min: 0, max: 90, defaultValue: 0, unit: '°' },
+        ];
+
+        const DEFAULT_DURATION_MS = 500;
+        const THUMB_ROTATION_MIN = -30;
+        const THUMB_ROTATION_MAX = 30;
+
+        let ws = null;
+        let connected = false;
+        let connecting = false;
+        let manualDisconnect = false;
+        let pendingSendTimer = null;
+
+        function mapRange(value, inMin, inMax, outMin, outMax) {
+            if (inMax === inMin) {
+                return outMin;
+            }
+            const normalized = (value - inMin) / (inMax - inMin);
+            return outMin + normalized * (outMax - outMin);
+        }
+
+        function getCompactState() {
+            return COMPACT_CONTROLS.reduce((state, control) => {
+                const slider = document.getElementById(`slider_${control.id}`);
+                state[control.id] = slider ? parseFloat(slider.value) : control.defaultValue;
+                return state;
+            }, {});
+        }
+
+        function expandCompactStateToProtocolJoints(state) {
+            const thumbRotation = mapRange(
+                state.thumb_cmc_abd,
+                0,
+                100,
+                THUMB_ROTATION_MIN,
+                THUMB_ROTATION_MAX,
+            );
+
+            const fingerTriple = (prefix, value) => ([
+                { joint_id: `${prefix}_proximal`, angle: value },
+                { joint_id: `${prefix}_middle`, angle: value },
+                { joint_id: `${prefix}_distal`, angle: value },
+            ]);
+
+            return [
+                { joint_id: 'thumb_proximal', angle: state.thumb_cmc_flex },
+                { joint_id: 'thumb_distal', angle: state.thumb_mcp_ip },
+                ...fingerTriple('index', state.index_flexion),
+                ...fingerTriple('middle', state.middle_flexion),
+                ...fingerTriple('ring', state.ring_flexion),
+                ...fingerTriple('pinky', state.pinky_flexion),
+                { joint_id: 'thumb_rotation', angle: parseFloat(thumbRotation.toFixed(1)) },
+            ];
+        }
+
+        function getExpandedProtocolPayload() {
+            const state = getCompactState();
+            return buildPayloadFromCompactState(state);
+        }
+
+        function buildPayloadFromCompactState(state) {
+            return {
+                type: 'multi_joint_control',
+                timestamp: Date.now(),
+                data: {
+                    joints: expandCompactStateToProtocolJoints(state),
+                    duration_ms: DEFAULT_DURATION_MS,
+                },
+            };
+        }
+
+        function renderControlPanel() {
+            const grid = document.getElementById('sliderGrid');
+            grid.innerHTML = COMPACT_CONTROLS.map(control => `
+                <div class="slider-card">
+                    <div class="slider-title">
+                        <div class="slider-name">${control.label}</div>
+                        <div class="slider-key">${control.key}</div>
+                    </div>
+                    <div class="slider-meta">
+                        <span>Range: ${control.min} ~ ${control.max}${control.unit}</span>
+                        <span id="angle_${control.id}">${control.defaultValue}${control.unit}</span>
+                    </div>
+                    <div class="slider-row">
+                        <input
+                            type="range"
+                            id="slider_${control.id}"
+                            min="${control.min}"
+                            max="${control.max}"
+                            step="1"
+                            value="${control.defaultValue}"
+                            oninput="updateCompactControl('${control.id}'); scheduleSendAllCurrent();"
+                        >
+                        <div class="angle-value" id="value_${control.id}">${control.defaultValue}${control.unit}</div>
+                    </div>
+                </div>
+            `).join('');
+
+            refreshProtocolPreview();
+        }
+
+        function updateCompactControl(controlId) {
+            const slider = document.getElementById(`slider_${controlId}`);
+            const control = COMPACT_CONTROLS.find(item => item.id === controlId);
+            if (!slider || !control) {
+                return;
+            }
+
+            const valueText = `${slider.value}${control.unit}`;
+            document.getElementById(`angle_${controlId}`).textContent = valueText;
+            document.getElementById(`value_${controlId}`).textContent = valueText;
+            refreshProtocolPreview();
+        }
+
+        function refreshProtocolPreview() {
+            const payload = getExpandedProtocolPayload();
+            document.getElementById('protocolPreview').textContent = JSON.stringify(payload.data.joints, null, 2);
+        }
+
+        function setCompactState(values) {
+            COMPACT_CONTROLS.forEach(control => {
+                const slider = document.getElementById(`slider_${control.id}`);
+                if (!slider) {
+                    return;
+                }
+                const nextValue = values[control.id] ?? control.defaultValue;
+                slider.value = nextValue;
+                updateCompactControl(control.id);
+            });
+        }
+
+        function clamp(value, min, max) {
+            return Math.min(max, Math.max(min, value));
+        }
+
+        function protocolJointsToCompactState(joints) {
+            const jointMap = {};
+            joints.forEach(joint => {
+                jointMap[joint.joint_id] = Number(joint.angle ?? 0);
+            });
+
+            return {
+                thumb_cmc_abd: clamp(mapRange(jointMap.thumb_rotation ?? 0, THUMB_ROTATION_MIN, THUMB_ROTATION_MAX, 0, 100), 0, 100),
+                thumb_cmc_flex: clamp(jointMap.thumb_proximal ?? 0, 0, 55),
+                thumb_mcp_ip: clamp(jointMap.thumb_distal ?? 0, 0, 90),
+                index_flexion: clamp(jointMap.index_proximal ?? 0, 0, 90),
+                middle_flexion: clamp(jointMap.middle_proximal ?? 0, 0, 90),
+                ring_flexion: clamp(jointMap.ring_proximal ?? 0, 0, 90),
+                pinky_flexion: clamp(jointMap.pinky_proximal ?? 0, 0, 90),
+            };
+        }
+
+        function toggleConnection() {
+            if (connected || connecting) {
+                disconnect();
+            } else {
+                connect();
+            }
+        }
+
+        function connect() {
+            if (connecting || connected) {
+                return;
+            }
+
+            const host = document.getElementById('hostInput').value;
+            const port = document.getElementById('portInput').value;
+            const url = `ws://${host}:${port}`;
+            let socket;
+
+            try {
+                socket = new WebSocket(url);
+            } catch (error) {
+                log(`Invalid WebSocket URL: ${error.message}`, 'error');
+                return;
+            }
+
+            log(`Connecting to ${url}...`, 'info');
+            manualDisconnect = false;
+            connecting = true;
+            document.getElementById('connectionStatus').textContent = 'Connecting';
+            document.getElementById('connectionStatus').className = 'disconnected';
+            document.getElementById('connectBtn').textContent = 'Cancel';
+            ws = socket;
+
+            socket.onopen = () => {
+                if (ws !== socket) {
+                    return;
+                }
+                connecting = false;
+                connected = true;
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionStatus').className = 'connected';
+                document.getElementById('serverInfo').textContent = `${host}:${port}`;
+                document.getElementById('connectBtn').textContent = 'Disconnect';
+                log('Connected!', 'recv');
+                requestStates();
+            };
+
+            socket.onclose = () => {
+                if (ws === socket) {
+                    ws = null;
+                    connecting = false;
+                    connected = false;
+                    document.getElementById('connectionStatus').textContent = 'Disconnected';
+                    document.getElementById('connectionStatus').className = 'disconnected';
+                    document.getElementById('serverInfo').textContent = '-';
+                    document.getElementById('connectBtn').textContent = 'Connect';
+                    log(manualDisconnect ? 'Disconnected' : 'Connection lost', manualDisconnect ? 'info' : 'error');
+                    manualDisconnect = false;
+                }
+            };
+
+            socket.onerror = () => {
+                if (ws !== socket) {
+                    return;
+                }
+                log('WebSocket error', 'error');
+            };
+
+            socket.onmessage = (event) => {
+                if (ws !== socket) {
+                    return;
+                }
+                log(`Received: ${event.data}`, 'recv');
+                handleServerMessage(event.data);
+            };
+        }
+
+        function handleServerMessage(rawMessage) {
+            let message;
+            try {
+                message = JSON.parse(rawMessage);
+            } catch {
+                return;
+            }
+
+            if (message.type === 'states_response' && Array.isArray(message.data)) {
+                const compactState = protocolJointsToCompactState(message.data);
+                setCompactState(compactState);
+            }
+        }
+
+        function disconnect() {
+            if (pendingSendTimer) {
+                clearTimeout(pendingSendTimer);
+                pendingSendTimer = null;
+            }
+
+            if (ws) {
+                manualDisconnect = true;
+                ws.close();
+            }
+        }
+
+        function canSendCommand({ silent = false } = {}) {
+            const ready = connected && ws && ws.readyState === WebSocket.OPEN;
+            if (!ready && !silent) {
+                log('Not connected!', 'error');
+            }
+            return ready;
+        }
+
+        function sendCommand(command, options = {}) {
+            const { silentIfDisconnected = false } = options;
+            if (!canSendCommand({ silent: silentIfDisconnected })) {
+                return false;
+            }
+
+            const json = JSON.stringify(command);
+            try {
+                ws.send(json);
+                log(`Sent: ${json}`, 'send');
+                return true;
+            } catch (error) {
+                log(`Send failed: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        function sendCompactState(state, options = {}) {
+            const { silentIfDisconnected = false } = options;
+            const payload = buildPayloadFromCompactState(state);
+            return sendCommand(payload, { silentIfDisconnected });
+        }
+
+        function sendAllCurrent() {
+            const state = getCompactState();
+            sendCompactState(state, { silentIfDisconnected: true });
+        }
+
+        function scheduleSendAllCurrent() {
+            if (pendingSendTimer) {
+                clearTimeout(pendingSendTimer);
+            }
+            pendingSendTimer = setTimeout(() => {
+                pendingSendTimer = null;
+                sendAllCurrent();
+            }, 60);
+        }
+
+        function sendHoming() {
+            sendCommand({
+                type: 'homing',
+                timestamp: Date.now(),
+            });
+        }
+
+        function sendAllZeros() {
+            const zeroState = {
+                thumb_cmc_abd: 0,
+                thumb_cmc_flex: 0,
+                thumb_mcp_ip: 0,
+                index_flexion: 0,
+                middle_flexion: 0,
+                ring_flexion: 0,
+                pinky_flexion: 0,
+            };
+            sendCompactState(zeroState);
+        }
+
+        function requestStates() {
+            sendCommand({
+                type: 'get_states',
+                timestamp: Date.now(),
+            });
+        }
+
+        function clearLog() {
+            document.getElementById('logPanel').innerHTML = '';
+        }
+
+        function log(message, type = 'info') {
+            const panel = document.getElementById('logPanel');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            panel.appendChild(entry);
+            panel.scrollTop = panel.scrollHeight;
+        }
+
+        renderControlPanel();
+    </script>
+</body>
+</html>

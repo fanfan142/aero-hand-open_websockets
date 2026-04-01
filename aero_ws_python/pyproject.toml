@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aero-ws-python"
+version = "1.0.0"
+description = "Aero Hand Open WebSocket Communication SDK for Python"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Aero Hand Open Team"}
+]
+keywords = ["robotics", "websocket", "servo", "esp32", "aero-hand"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Robotics",
+]
+
+dependencies = [
+    "websockets>=10.0",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "black>=23.0",
+    "flake8>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tetheria/aero-hand-open"
+Documentation = "https://github.com/tetheria/aero-hand-open#readme"
+Repository = "https://github.com/tetheria/aero-hand-open"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aero_ws_python*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
