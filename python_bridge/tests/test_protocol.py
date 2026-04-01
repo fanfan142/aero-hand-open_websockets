@@ -5,7 +5,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from protocol import (
+from aero_ws_python.protocol import (
     JointCommand, JointData, MultiJointCommand,
     CommandMessage, parse_command, build_response
 )

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aero-ws-python"
 version = "1.0.0"
-description = "Aero Hand Open WebSocket Communication SDK for Python"
+description = "Aero Hand Open Python WebSocket Bridge - Local USB to WebSocket server"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
@@ -47,7 +47,7 @@ Documentation = "https://github.com/fanfan142/aero-hand-open_websockets#readme"
 Repository = "https://github.com/fanfan142/aero-hand-open_websockets"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["aero_ws_python*"]
 
 [tool.black]
