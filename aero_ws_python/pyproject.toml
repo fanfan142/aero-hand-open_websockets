@@ -39,9 +39,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tetheria/aero-hand-open"
-Documentation = "https://github.com/tetheria/aero-hand-open#readme"
-Repository = "https://github.com/tetheria/aero-hand-open"
+Homepage = "https://github.com/fanfan142/aero-hand-open_websockets"
+Documentation = "https://github.com/fanfan142/aero-hand-open_websockets#readme"
+Repository = "https://github.com/fanfan142/aero-hand-open_websockets"
 
 [tool.setuptools.packages.find]
 where = ["."]

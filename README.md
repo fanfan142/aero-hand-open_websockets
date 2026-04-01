@@ -1,7 +1,5 @@
 # Aero Hand Open - WebSocket Communication Suite
 
-![Project Banner](assets/banner.png)
-
 <p align="center">
   <a href="https://github.com/TetherIA/aero-hand-open"><img src="https://img.shields.io/badge/Base%20Project-Aero%20Hand%20Open-blue" alt="Base Project"></a>
   <a href="https://github.com/fanfan142/aero-hand-open_websockets"><img src="https://img.shields.io/badge/GitHub-fanfan142-orange" alt="Fork"></a>
