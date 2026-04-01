@@ -51,8 +51,8 @@ This project provides **3 independent communication solutions**, all based on a 
 | Feature | Sol 1: Python Bridge | Sol 2: ESP32 WiFi | Sol 3: C DLL Library |
 |---------|---------------------|---------------------|----------------------|
 | **Architecture** | Local Python bridge | ESP32 standalone | Compile to DLL |
-| **Firmware** | Original USB firmware | Need ESP32 firmware | No firmware needed |
-| **Connection** | USB to servo board | WiFi wireless | WiFi to ESP32 |
+| **Firmware** | None (use original USB) | Need ESP32 firmware | None (library only) |
+| **Connection** | USB → Servo controller | WiFi hotspot | WiFi → ESP32 server |
 | **Latency** | Low | Medium | Low |
 | **Complexity** | Low | Medium | Medium |
 | **Use Case** | Development, wired | Wireless control | Integrate into apps |
@@ -153,7 +153,7 @@ Modify in `esp32_wifi/firmware/aero_hand_wifi/config.h`:
 
 **Architecture**: Compile to dynamic library, supports C/C++, C#, Python (ctypes), etc.
 
-**Firmware**: Requires ESP32 WiFi solution (Solution 2), as DLL is a WebSocket **client**.
+**Firmware**: The DLL itself needs no firmware, but as a WebSocket **client**, it requires ESP32 WiFi solution (Solution 2) to be deployed first.
 
 **Directory**: `c_dll/`
 
