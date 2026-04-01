@@ -1,149 +1,151 @@
-# Aero Hand Open - WebSocket Communication Suite
+# Aero Hand Open - WebSocket 通信套件
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Base%20Project-Aero%20Hand%20Open-blue" alt="Base Project">
-  <img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="License">
+  <img src="https://img.shields.io/badge/基础项目-Aero%20Hand%20Open-blue" alt="基础项目">
+  <img src="https://img.shields.io/badge/许可证-Apache--2.0-green" alt="许可证">
   <img src="https://img.shields.io/badge/Python-3.8+-orange" alt="Python">
   <img src="https://img.shields.io/badge/ESP32-S3-brightgreen" alt="ESP32">
 </p>
 
 <p align="center">
-  <strong>WebSocket communication solutions for the Aero Hand Open robotic hand</strong>
+  <strong>Aero Hand Open 灵巧机械手的 WebSocket 通信解决方案</strong>
 </p>
 
 ---
 
-## Overview
+## 项目简介
 
-This project extends the [Aero Hand Open](https://github.com/TetherIA/aero-hand-open) robotic hand with comprehensive WebSocket communication capabilities. It enables wireless control, cross-platform integration, and multi-language support through a unified JSON-based protocol.
+本项目是 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open) 的衍生项目，专注于为 Aero Hand Open 机械手提供全面的 **WebSocket 通信解决方案**。
 
-### Key Features
+通过统一的 JSON 通信协议，实现无线控制、跨平台集成和多语言支持。
 
-- **WiFi Wireless Control** - Control your Aero Hand Open over WiFi using ESP32-S3
-- **Python SDK** - Full Python package with WebSocket server and client
-- **C DLL Library** - Cross-language support for C/C++, C#, Python (ctypes)
-- **Browser Control** - HTML-based control panel for quick testing
-- **Unified Protocol** - JSON-based communication for 15 joints
+### 核心功能
+
+- **WiFi 无线控制** - 使用 ESP32-S3 通过 WiFi 控制机械手
+- **Python SDK** - 完整的 Python 包，包含 WebSocket 服务器和客户端
+- **C DLL 库** - 支持 C/C++、C#、Python (ctypes) 的跨语言调用
+- **浏览器控制** - 基于 HTML 的控制面板，快速测试
+- **统一协议** - 基于 JSON 的 15 个关节控制协议
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
 aero-hand-open_websockets/
 ├── aero_ws_python/          # Python WebSocket SDK
-│   ├── __init__.py          # Package entry
-│   ├── client.py            # WebSocket client
-│   ├── server.py            # WebSocket server
-│   ├── protocol.py          # Protocol definitions
-│   ├── examples/            # Usage examples
-│   │   ├── html_client.html # Browser control panel
-│   │   ├── test_client.py  # Basic test
-│   │   ├── interactive_test.py  # Interactive shell
-│   │   └── connection_test.py   # Connection test
-│   └── tests/               # Unit tests
+│   ├── __init__.py          # 包入口
+│   ├── client.py            # WebSocket 客户端
+│   ├── server.py            # WebSocket 服务器
+│   ├── protocol.py          # 协议定义
+│   ├── examples/            # 示例代码
+│   │   ├── html_client.html # 浏览器控制面板
+│   │   ├── test_client.py  # 基础测试
+│   │   ├── interactive_test.py  # 交互式测试
+│   │   └── connection_test.py   # 连接测试
+│   └── tests/               # 单元测试
 │
-├── c_dll/                   # C DLL library
-│   ├── include/             # Header files
-│   │   ├── aero_ws.h       # Public API
+├── c_dll/                   # C DLL 动态库
+│   ├── include/             # 头文件
+│   │   ├── aero_ws.h       # 公共 API
 │   │   └── aero_ws_internal.h
-│   ├── src/                # Source implementation
+│   ├── src/                # 源代码实现
 │   │   └── aero_ws.c
-│   └── examples/           # Usage examples
-│       ├── python_wrapper.py  # Python ctypes example
-│       └── csharp_example.cs # C# P/Invoke example
+│   └── examples/           # 调用示例
+│       ├── python_wrapper.py  # Python ctypes 示例
+│       └── csharp_example.cs # C# P/Invoke 示例
 │
-├── esp32_firmware/          # ESP32 WiFi firmware
-│   └── aero_hand_wifi/     # Arduino project
-│       ├── aero_hand_wifi.ino  # Main sketch
-│       ├── config.h        # WiFi configuration
-│       ├── webSocketServer.* # WebSocket handler
-│       ├── servoControl.*  # Servo control
-│       ├── SCS.*           # Serial communication
-│       ├── Homing.*        # Calibration
-│       └── README.md       # Firmware docs
+├── esp32_firmware/          # ESP32 WiFi 固件
+│   └── aero_hand_wifi/     # Arduino 项目
+│       ├── aero_hand_wifi.ino  # 主程序
+│       ├── config.h        # WiFi 配置
+│       ├── webSocketServer.* # WebSocket 处理器
+│       ├── servoControl.*  # 舵机控制
+│       ├── SCS.*           # 串口通信
+│       ├── Homing.*        # 归零校准
+│       └── README.md       # 固件文档
 │
-├── firmware_bin/            # Pre-built firmware
-│   ├── aero_hand_wifi.ino.merged.bin  # Full firmware (8MB)
-│   ├── aero_hand_wifi.ino.bin         # Application
+├── firmware_bin/            # 预编译固件
+│   ├── aero_hand_wifi.ino.merged.bin  # 完整固件 (8MB)
+│   ├── aero_hand_wifi.ino.bin         # 应用程序
 │   ├── aero_hand_wifi.ino.bootloader.bin
 │   ├── aero_hand_wifi.ino.partitions.bin
 │   └── boot_app0.bin
 │
-└── protocol/               # Communication protocol
-    └── CONTROL_PROTOCOL.md # JSON protocol docs
+└── protocol/               # 通信协议
+    └── CONTROL_PROTOCOL.md # JSON 协议文档
 ```
 
 ---
 
-## Quick Start
+## 快速开始
 
-### Option A: Python WebSocket Bridge (Recommended for Development)
+### 方案 A：Python WebSocket 桥接（推荐开发用）
 
 ```bash
 cd aero_ws_python
 pip install -e .
 
-# Run server (fake mode, no hardware needed)
+# 测试模式（无需硬件）
 python -m aero_ws_python.server --fake
 
-# Or connect to real hardware
+# 连接真实硬件
 python -m aero_ws_python.server --serial COM3 --baudrate 115200
 ```
 
-### Option B: ESP32 Standalone Firmware (Wireless Control)
+### 方案 B：ESP32 独立固件（无线控制）
 
-1. Flash the firmware using esptool:
+1. 使用 esptool 烧录固件：
 ```bash
 esptool.py --chip esp32s3 --port COM3 write_flash 0x0 firmware_bin/boot_app0.bin 0x1000 firmware_bin/aero_hand_wifi.ino.bootloader.bin 0x8000 firmware_bin/aero_hand_wifi.ino.partitions.bin 0x10000 firmware_bin/aero_hand_wifi.ino.merged.bin
 ```
 
-2. Connect to WiFi hotspot `AeroHand_WIFI` (password: `12345678`)
+2. 连接 WiFi 热点 `AeroHand_WIFI`（密码：`12345678`）
 
-3. Open `aero_ws_python/examples/html_client.html` in browser
+3. 在浏览器中打开 `aero_ws_python/examples/html_client.html`
 
-### Option C: C DLL Library
+### 方案 C：C DLL 库（生产环境）
 
 ```bash
-# Build on Linux/macOS
+# Linux/macOS 构建
 mkdir build && cd build
 cmake ..
 make
 
-# Or build on Windows with Visual Studio
+# Windows 构建 (Visual Studio)
 cmake .. -G "Visual Studio 17 2022"
 cmake --build . --config Release
 ```
 
 ---
 
-## Joint Definitions
+## 关节定义
 
-The Aero Hand Open has **15 joints**:
+Aero Hand Open 共有 **15 个关节**：
 
-| Joint ID | Description | Servo ID | Angle Range |
-|----------|-------------|----------|------------|
-| thumb_proximal | Thumb proximal | 0 | 0° ~ 90° |
-| thumb_distal | Thumb distal | 1 | 0° ~ 90° |
-| index_proximal | Index proximal | 2 | 0° ~ 90° |
-| index_middle | Index middle | 3 | 0° ~ 90° |
-| index_distal | Index distal | 4 | 0° ~ 90° |
-| middle_proximal | Middle proximal | 5 | 0° ~ 90° |
-| middle_middle | Middle middle | 6 | 0° ~ 90° |
-| middle_distal | Middle distal | 7 | 0° ~ 90° |
-| ring_proximal | Ring proximal | 8 | 0° ~ 90° |
-| ring_middle | Ring middle | 9 | 0° ~ 90° |
-| ring_distal | Ring distal | 10 | 0° ~ 90° |
-| pinky_proximal | Pinky proximal | 11 | 0° ~ 90° |
-| pinky_middle | Pinky middle | 12 | 0° ~ 90° |
-| pinky_distal | Pinky distal | 13 | 0° ~ 90° |
-| thumb_rotation | Thumb rotation | 14 | -30° ~ 30° |
+| 关节 ID | 描述 | 舵机 ID | 角度范围 |
+|---------|------|---------|----------|
+| thumb_proximal | 拇指近端 | 0 | 0° ~ 90° |
+| thumb_distal | 拇指远端 | 1 | 0° ~ 90° |
+| index_proximal | 食指近端 | 2 | 0° ~ 90° |
+| index_middle | 食指中端 | 3 | 0° ~ 90° |
+| index_distal | 食指远端 | 4 | 0° ~ 90° |
+| middle_proximal | 中指近端 | 5 | 0° ~ 90° |
+| middle_middle | 中指中端 | 6 | 0° ~ 90° |
+| middle_distal | 中指远端 | 7 | 0° ~ 90° |
+| ring_proximal | 无名指近端 | 8 | 0° ~ 90° |
+| ring_middle | 无名指中端 | 9 | 0° ~ 90° |
+| ring_distal | 无名指远端 | 10 | 0° ~ 90° |
+| pinky_proximal | 小指近端 | 11 | 0° ~ 90° |
+| pinky_middle | 小指中端 | 12 | 0° ~ 90° |
+| pinky_distal | 小指远端 | 13 | 0° ~ 90° |
+| thumb_rotation | 拇指旋转 | 14 | -30° ~ 30° |
 
 ---
 
-## Communication Protocol
+## 通信协议
 
-### Control Command Format
+### 控制指令格式
 
 ```json
 {
@@ -160,18 +162,18 @@ The Aero Hand Open has **15 joints**:
 }
 ```
 
-See [`protocol/CONTROL_PROTOCOL.md`](protocol/CONTROL_PROTOCOL.md) for full documentation.
+详细协议文档请参阅 [`protocol/CONTROL_PROTOCOL.md`](protocol/CONTROL_PROTOCOL.md)
 
 ---
 
-## API Reference
+## API 参考
 
 ### Python SDK
 
 ```python
 from aero_ws_python import AeroWebSocketClient, AeroWebSocketServer
 
-# Client usage
+# 客户端用法
 client = AeroWebSocketClient("192.168.4.1", 8765)
 client.connect()
 client.set_multi_joints([
@@ -180,7 +182,7 @@ client.set_multi_joints([
 ], duration_ms=500)
 client.disconnect()
 
-# Server usage
+# 服务器用法
 server = AeroWebSocketServer(port=8765, serial_port="COM3")
 asyncio.run(server.start())
 ```
@@ -199,23 +201,23 @@ aero_ws_destroy(handle);
 
 ---
 
-## Hardware Requirements
+## 硬件要求
 
-### For ESP32 Firmware
+### ESP32 固件
 
-- **Board**: Seeed XIAO ESP32S3 or compatible
-- **Power**: 12V DC input with 5V regulator
-- **Connection**: TX/GPIO43 → RX of servo control board, RX/GPIO44 → TX
+- **开发板**: Seeed XIAO ESP32S3 或兼容板
+- **电源**: 12V DC 输入 + 5V 稳压器
+- **连接**: TX/GPIO43 → 舵机控制板 RX, RX/GPIO44 → TX
 
-### For Python Bridge
+### Python 桥接
 
-- USB connection to servo control board
+- USB 连接舵机控制板
 - Python 3.8+
-- pyserial library
+- pyserial 库
 
 ---
 
-## Testing
+## 测试
 
 ```bash
 cd aero_ws_python
@@ -223,54 +225,54 @@ pip install pytest
 python -m pytest tests/ -v
 ```
 
-Current test status: **7 passed**
+当前测试状态：**7 passed**
 
 ---
 
-## Relationship with Upstream
+## 与上游项目的关系
 
-This project is a **derivative project** of [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open), focused on extending the communication capabilities:
+本项目派生于 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open)，专注于扩展其通信能力：
 
-| Component | Upstream | This Project |
-|-----------|----------|--------------|
-| Mechanical hardware | ✅ Full | - |
-| USB firmware | ✅ Full | - |
-| Python SDK | ✅ Serial | **WebSocket extension** |
-| ESP32 firmware | ❌ None | **✅ WiFi WebSocket** |
-| C DLL | ❌ None | **✅ Cross-language** |
-
----
-
-## License
-
-- **Software code (Python, C, ESP32 firmware)**: [Apache-2.0](LICENSE.md)
-- **Communication protocol documentation**: [Apache-2.0](LICENSE.md)
-
-This project is derived from [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open), whose hardware design files are licensed under **CC BY-NC-SA 4.0**.
-
-See [LICENSE.md](LICENSE.md) for full details.
+| 组件 | 上游项目 | 本项目 |
+|------|---------|--------|
+| 机械硬件 | ✅ 完整 | - |
+| USB 固件 | ✅ 完整 | - |
+| Python SDK | ✅ 串口控制 | **WebSocket 扩展** |
+| ESP32 固件 | ❌ 无 | **✅ WiFi WebSocket** |
+| C DLL | ❌ 无 | **✅ 跨语言调用** |
 
 ---
 
-## Contributing
+## 许可证
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **软件代码（Python、C、ESP32 固件）**: [Apache-2.0](LICENSE.md)
+- **通信协议文档**: [Apache-2.0](LICENSE.md)
 
----
+本项目派生于 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open)，其硬件设计文件采用 **CC BY-NC-SA 4.0** 许可证。
 
-## Acknowledgments
-
-- **TetherIA** - For designing and open-sourcing the Aero Hand Open robotic hand
-- **Project URL**: https://github.com/TetherIA/aero-hand-open
+详见 [LICENSE.md](LICENSE.md)。
 
 ---
 
-## Links
+## 贡献指南
 
-- **This Project**: https://github.com/fanfan142/aero-hand-open_websockets
-- **Base Project**: https://github.com/TetherIA/aero-hand-open
-- **Documentation**: https://docs.tetheria.ai/
+欢迎贡献！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
-© 2026 fanfan142 | Based on [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open)
+## 致谢
+
+- **TetherIA** - 设计和开源了 Aero Hand Open 机械手
+- **上游项目**: https://github.com/TetherIA/aero-hand-open
+
+---
+
+## 相关链接
+
+- **本项目**: https://github.com/fanfan142/aero-hand-open_websockets
+- **上游项目**: https://github.com/TetherIA/aero-hand-open
+- **官方文档**: https://docs.tetheria.ai/
+
+---
+
+© 2026 fanfan142 | 基于 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open)
