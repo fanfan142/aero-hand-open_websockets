@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Dict, Set, Optional
 import websockets
-from websockets.server import WebSocketServerProtocol
+from websockets.legacy.server import WebSocketServerProtocol
 
 from .protocol import (
     CommandType,
