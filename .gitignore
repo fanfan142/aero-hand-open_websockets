@@ -30,6 +30,9 @@ esp32_firmware/aero_hand_wifi/build/
 esp32_firmware/aero_hand_wifi/*.bin
 esp32_firmware/aero_hand_wifi/*.elf
 esp32_firmware/aero_hand_wifi/*.map
+esp32_firmware/aero_hand_wifi/*.bootloader.bin
+esp32_firmware/aero_hand_wifi/*.partitions.bin
+esp32_firmware/aero_hand_wifi/*.merged.bin
 
 # C DLL Build
 c_dll/build/
