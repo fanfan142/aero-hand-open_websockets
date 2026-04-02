@@ -11,67 +11,29 @@
 
 ---
 
-## Architecture Overview
+## Overview
 
-This project provides **3 independent communication solutions**, all based on a unified JSON communication protocol:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Host PC / Controller                        │
-└─────────────────────────────────────────────────────────────────┘
-           │                    │                    │
-           ▼                    ▼                    ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   Solution 1     │  │   Solution 2     │  │   Solution 3     │
-│   Python Bridge  │  │   ESP32 WiFi     │  │   C DLL Library │
-│                  │  │                  │  │                  │
-│ Local Python     │  │ ESP32 standalone │  │ Compile to DLL  │
-│ WebSocket server│  │ WebSocket server │  │ for other langs │
-│                  │  │ + Web client    │  │                  │
-└────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
-         │                     │                     │
-         ▼                     │                     ▼
-┌──────────────────┐          │            ┌──────────────────┐
-│ USB/Serial       │          │            │ ESP32 WebSocket  │
-│ ↓                │          │            │ server           │
-│ Servo Controller │◄─────────┘            └────────┬─────────┘
-└──────────────────┘                               │
-                                                    ▼
-                                           ┌──────────────────┐
-                                           │ USB/Serial       │
-                                           │ ↓                │
-                                           │ Servo Controller │
-                                           └──────────────────┘
-```
+This project is a derivative of [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open), providing **3 independent WebSocket communication solutions**.
 
 ---
 
-## Three Solutions Comparison
+## Three Solutions Overview
 
-| Feature | Sol 1: Python Bridge | Sol 2: ESP32 WiFi | Sol 3: C DLL Library |
-|---------|---------------------|---------------------|----------------------|
-| **Architecture** | Local Python bridge | ESP32 standalone | Compile to DLL |
-| **Firmware** | None (use original USB) | Need ESP32 firmware | None (library only) |
-| **Connection** | USB → Servo controller | WiFi hotspot | WiFi → ESP32 server |
-| **Latency** | Low | Medium | Low |
-| **Complexity** | Low | Medium | Medium |
-| **Use Case** | Development, wired | Wireless control | Integrate into apps |
+| Solution | Description | Firmware | Connection |
+|----------|-------------|----------|------------|
+| **Sol 1** | Python Bridge (Wired) | None (use original USB) | USB → Servo controller |
+| **Sol 2** | ESP32 WiFi (Wireless) | Need flash ESP32 firmware | WiFi hotspot |
+| **Sol 3** | C DLL Library (Cross-lang) | None (library only) | WiFi → ESP32 server |
 
 ---
 
 ## Solution 1: Python Bridge (Wired)
 
-**Architecture**: Run Python WebSocket server locally, connect to servo controller via USB.
+Run Python WebSocket server locally, connect to servo controller via USB.
 
-```
-PC (Python Bridge)
-    │
-    │ USB
-    ▼
-Servo Controller → Robotic Hand
-```
+**Connection**: PC → USB → Servo Controller → Robotic Hand
 
-**Firmware**: Use original USB firmware, **no ESP32 firmware needed**.
+**Firmware**: Use original USB firmware, no ESP32 firmware needed.
 
 **Directory**: `python_bridge/`
 
@@ -86,23 +48,15 @@ python -m aero_ws_python.server --fake
 python -m aero_ws_python.server --serial COM3 --baudrate 115200
 ```
 
+**Features**: Simple, easy to develop and debug, low latency, stable and reliable.
+
 ---
 
 ## Solution 2: ESP32 WiFi (Wireless)
 
-**Architecture**: ESP32 runs WebSocket server independently for wireless control.
+ESP32 runs WebSocket server independently for wireless control.
 
-```
-Phone/PC (Web Browser)
-    │
-    │ WiFi
-    ▼
-ESP32 (WebSocket server)
-    │
-    │ Serial
-    ▼
-Servo Controller → Robotic Hand
-```
+**Connection**: Phone/PC → WiFi → ESP32 → Serial → Servo Controller → Robotic Hand
 
 **Firmware**: ESP32 WiFi firmware needs to be flashed.
 
@@ -130,7 +84,7 @@ esptool.py --chip esp32s3 --port COM3 write_flash \
 
 | File | Description |
 |------|-------------|
-| `aero_hand_wifi.ino.merged.bin` | **Full firmware** (8MB), includes all partitions, recommended |
+| `aero_hand_wifi.ino.merged.bin` | Full firmware (8MB), includes all partitions, recommended |
 | `aero_hand_wifi.ino.bin` | Application only (no bootloader) |
 | `aero_hand_wifi.ino.bootloader.bin` | Bootloader |
 | `aero_hand_wifi.ino.partitions.bin` | Partition table |
@@ -151,7 +105,7 @@ Modify in `esp32_wifi/firmware/aero_hand_wifi/config.h`:
 
 ## Solution 3: C DLL Library (Cross-language)
 
-**Architecture**: Compile to dynamic library, supports C/C++, C#, Python (ctypes), etc.
+Compile to dynamic library, supports C/C++, C#, Python (ctypes), etc.
 
 **Firmware**: The DLL itself needs no firmware, but as a WebSocket **client**, it requires ESP32 WiFi solution (Solution 2) to be deployed first.
 
@@ -237,11 +191,8 @@ aero-hand-open_websockets/
 │   └── examples/          # Usage examples
 │
 ├── firmware_bin/           # Pre-built ESP32 firmware
-│   ├── aero_hand_wifi.ino.merged.bin  # Full firmware (8MB)
-│   └── ...
-│
-└── protocol/              # Unified communication protocol
-    └── CONTROL_PROTOCOL.md
+├── protocol/              # Unified communication protocol
+└── README.md / README_en.md
 ```
 
 ---
