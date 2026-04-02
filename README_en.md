@@ -187,15 +187,15 @@ Original firmware source code from upstream [TetherIA/aero-hand-open](https://gi
 
 ### WebSocket Firmware (`firmware_ws/`)
 
-Original serial firmware converted to WiFi + WebSocket communication, preserving each version's characteristics:
+Original serial firmware converted to WiFi + WebSocket communication, preserving each version's characteristics. Pre-built binaries and source packages are available at [Release 1](https://github.com/fanfan142/aero-hand-open_websockets/releases/tag/1):
 
-| Version | Thermal Protection | Initial Torque | Features |
-|---------|-------------------|----------------|----------|
-| v0.1.0 | None | 1023 | Base version |
-| v0.1.3 | 50°C / 200 | 700 | Added thermal protection |
-| v0.1.4 | 70°C / 500 | 700 | More relaxed thermal protection |
-| v0.1.5 | 70°C / 500 | 700 | Fixed motor configuration |
-| v0.2.0 | 70°C / 500 | 700 | Thumb homing offset optimization |
+| Version | Binary | Source Package | Thermal Protection | Initial Torque | Features |
+|---------|--------|----------------|-------------------|----------------|----------|
+| v0.1.0 | `aero_hand_v0.1.0_websockets.bin` | `v0.1.0_websockets_src.tar.gz` | None | 1023 | Base version |
+| v0.1.3 | `aero_hand_v0.1.3_websockets.bin` | `v0.1.3_websockets_src.tar.gz` | 50°C / 200 | 700 | Added thermal protection |
+| v0.1.4 | `aero_hand_v0.1.4_websockets.bin` | `v0.1.4_websockets_src.tar.gz` | 70°C / 500 | 700 | More relaxed thermal protection |
+| v0.1.5 | `aero_hand_v0.1.5_websockets.bin` | `v0.1.5_websockets_src.tar.gz` | 70°C / 500 | 700 | Fixed motor configuration |
+| v0.2.0 | `aero_hand_v0.2.0_websockets.bin` | `v0.2.0_websockets_src.tar.gz` | 70°C / 500 | 700 | Thumb homing offset optimization |
 
 See [`firmware_ws/README.md`](firmware_ws/README.md) for details.
 

@@ -187,15 +187,15 @@ Aero Hand Open 共有 **15 个关节**：
 
 ### WebSocket 固件 (`firmware_ws/`)
 
-将原始串口固件改造为 WiFi + WebSocket 通信的版本，保留各版本特性：
+将原始串口固件改造为 WiFi + WebSocket 通信的版本，保留各版本特性。编译后的固件和源码包可在 [Release 1](https://github.com/fanfan142/aero-hand-open_websockets/releases/tag/1) 下载：
 
-| 版本 | 热保护 | 初始扭矩 | 特性 |
-|------|--------|----------|------|
-| v0.1.0 | 无 | 1023 | 基础版本 |
-| v0.1.3 | 50°C / 200 | 700 | 添加热保护 |
-| v0.1.4 | 70°C / 500 | 700 | 更宽松的热保护 |
-| v0.1.5 | 70°C / 500 | 700 | 修复电机配置问题 |
-| v0.2.0 | 70°C / 500 | 700 | 拇指归位偏移优化 |
+| 版本 | 二进制固件 | 源文件包 | 热保护 | 初始扭矩 | 特性 |
+|------|-----------|----------|--------|----------|------|
+| v0.1.0 | `aero_hand_v0.1.0_websockets.bin` | `v0.1.0_websockets_src.tar.gz` | 无 | 1023 | 基础版本 |
+| v0.1.3 | `aero_hand_v0.1.3_websockets.bin` | `v0.1.3_websockets_src.tar.gz` | 50°C / 200 | 700 | 添加热保护 |
+| v0.1.4 | `aero_hand_v0.1.4_websockets.bin` | `v0.1.4_websockets_src.tar.gz` | 70°C / 500 | 700 | 更宽松的热保护 |
+| v0.1.5 | `aero_hand_v0.1.5_websockets.bin` | `v0.1.5_websockets_src.tar.gz` | 70°C / 500 | 700 | 修复电机配置问题 |
+| v0.2.0 | `aero_hand_v0.2.0_websockets.bin` | `v0.2.0_websockets_src.tar.gz` | 70°C / 500 | 700 | 拇指归位偏移优化 |
 
 详见 [`firmware_ws/README.md`](firmware_ws/README.md)
 
