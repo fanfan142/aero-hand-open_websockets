@@ -72,3 +72,6 @@ CLAUDE.md
 
 # Compiled firmware binaries
 firmware_bin/
+
+# Android SDK (downloaded for build, not needed in repo)
+android-sdk/

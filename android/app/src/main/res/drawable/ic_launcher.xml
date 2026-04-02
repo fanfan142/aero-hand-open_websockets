@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Hand icon -->
+    <path
+        android:fillColor="#1976D2"
+        android:pathData="M54,20 L54,45 L40,45 L40,70 L50,70 L50,45 L54,45 L54,70 L68,70 L68,45 L58,45 L58,20 Z" />
+    <path
+        android:fillColor="#00ACC1"
+        android:pathData="M35,50 L35,35 L42,35 L42,50 Z" />
+    <path
+        android:fillColor="#00ACC1"
+        android:pathData="M66,50 L66,35 L73,35 L73,50 Z" />
+</vector>

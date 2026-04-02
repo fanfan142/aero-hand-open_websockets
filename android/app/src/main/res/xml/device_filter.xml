@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB Serial Device Filter -->
+    <usb-device vendor-id="1027" /> <!-- FTDI -->
+    <usb-device vendor-id="11913" /> <!-- Silabs -->
+    <usb-device vendor-id="6790" /> <!-- CH340 -->
+    <usb-device vendor-id="10655" /> <!-- CP210x -->
+</resources>

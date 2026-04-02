@@ -1,0 +1,82 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v2
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/*.gradle*', 'android/*/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aero-hand-open-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+
+      - name: Upload APK to Release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          cd android
+          ./gradlew assembleDebug
+          echo "APK_PATH=app/build/outputs/apk/debug/app-debug.apk" >> $GITHUB_ENV
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: android-v1.0.0
+          release_name: Android App v1.0.0
+          files: android/app/build/outputs/apk/debug/*.apk
+          body: |
+            ## Aero Hand Open Android App
+
+            7DoF 控制应用，支持 WiFi 和 USB 连接。
+
+            ### 功能
+            - WiFi WebSocket 连接控制
+            - USB 串口连接支持
+            - 7 通道滑块控制
+            - 快捷动作按钮
+            - 实时日志显示
+
+            ### 安装
+            下载 APK 文件到手机，直接安装即可。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
