@@ -59,3 +59,16 @@ htmlcov/
 # Build artifacts (generated during build process)
 firmware_ws_build/
 release_assets/
+
+# Claude AI Context (auto-generated, do not commit)
+.claude/
+.zcf/
+.spec-workflow/
+
+# Claude documentation (auto-generated)
+CLAUDE.md
+*/CLAUDE.md
+*/*/CLAUDE.md
+
+# Compiled firmware binaries
+firmware_bin/
