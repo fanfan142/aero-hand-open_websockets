@@ -30,6 +30,16 @@
 HLSCL hlscl;
 Preferences prefs;
 
+#include "config.h"
+
+// 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
+static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
+static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
+
+// 前置声明 (热保护函数)
+static inline bool isHot(uint8_t ch);
+static inline uint16_t u16_min(uint16_t a, uint16_t b);
+
 // ============================================
 // WiFi / WebSocket 全局变量 (新增)
 // ============================================
@@ -516,140 +526,9 @@ static bool handleSetTorCmd(const uint8_t* payload)
   return true;
 }
 
-/* \1 was consumed and handled -----
-/* \1  // 已注释，替换为WebSocket命令处理 {
-  // Wait until full frame is buffered: filler + 14 payload
-  while (Serial.available() < 15) { /* wait */ }
-  uint8_t buf[15];
-  for (int i = 0; i < 15; ++i) {
-    int ch = Serial.read(); if (ch < 0) return false;
-    buf[i] = (uint8_t)ch;
-  }
-  const uint8_t* payload = &buf[1]; // buf[0] = filler 0x00 (ignored)
-
-  switch (op) {
-    case CTRL_POS: {
-      int16_t pos[7];
-      for (int i = 0; i < 7; ++i) {
-        uint16_t u16 = (uint16_t)payload[2*i] | ((uint16_t)payload[2*i+1] << 8);
-        uint8_t  ch  = i;
-        pos[i] = mapU16ToRaw(ch, u16);
-      }
-
-      // Torque Servo limit - If motor crosses the TEMP_CUTOFF_C, then keep HOT_TORQUE_LIMIT as the torque
-      uint16_t torque_eff[7];
-      for (int i = 0; i < 7; ++i) {
-        uint16_t base = g_torque[i]; // 0..1023
-        if (isHot((uint8_t)i)) {
-          base = u16_min(base, HOT_TORQUE_LIMIT);
-        }
-        torque_eff[i] = base;
-      }
-
-      if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-      if (g_currentMode != MODE_POS) {
-        for (int i = 0; i < 7; ++i) {
-          uint8_t id = SERVO_IDS[i];
-          hlscl.ServoMode(id);
-        }
-        g_currentMode = MODE_POS;
-      }
-      hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, 7, pos, g_speed, g_accel, torque_eff);
-      if (gBusMux) xSemaphoreGive(gBusMux);
-      return true;
-    }
-
-    case CTRL_TOR: 
-    {   
-      int16_t torque_cmd[7]; 
-      for (int i = 0; i < 7; ++i) 
-      {
-        uint16_t mag = (uint16_t)payload[2*i] | ((uint16_t)payload[2*i + 1] << 8); 
-        if (mag > 1000) mag = 1000; 
-        if (mag < HOLD_MAG) mag = HOLD_MAG;
-        if (isHot((uint8_t)i)) {
-          mag = u16_min(mag, HOT_TORQUE_LIMIT);
-        }
-        int grasp_sign = (sd[i].extend_count > sd[i].grasp_count) ? +1 : -1;
-        torque_cmd[i] = (int16_t)(grasp_sign * (int)mag);
-      } 
-      for (int i = 0; i < 7; ++i) {
-        g_lastTorqueCmd[i] = torque_cmd[i];
-      }
-
-      if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-
-      if (g_currentMode != MODE_TORQUE) 
-      { 
-        for (int i = 0; i < 7; ++i) 
-        { 
-          uint8_t id = SERVO_IDS[i]; 
-          hlscl.EleMode(id); 
-        } 
-        g_currentMode = MODE_TORQUE;
-      } 
-      for (int i = 0; i < 7; ++i) 
-      { 
-        uint8_t id = SERVO_IDS[i]; 
-        hlscl.WriteEle(id, torque_cmd[i]); 
-      } 
-      if (gBusMux) xSemaphoreGive(gBusMux); 
-      return true; 
-    }
-
-    case SET_TOR: {
-      return handleSetTorCmd(payload);
-    }
-
-    case SET_SPE: {
-      return handleSetSpeedCmd(payload);
-    }
-
-    case HOMING: {
-      HOMING_start();   // blocks
-      saveExtendsToNVS();
-      sendAckFrame(HOMING, nullptr, 0);
-      return true;
-    }
-
-    case SET_ID: {
-      return handleSetIdCmd(payload);
-    }
-
-    case TRIM: {
-      return handleTrimCmd(payload);
-    }
-
-    case GET_POS: {
-      sendPositions();
-      return true;
-    }
-
-    case GET_VEL: {
-      sendVelocities();
-      return true;
-    }
-
-    case GET_TEMP: {
-      sendTemps();
-      return true;
-    }
-
-    case GET_CURR: {
-      sendCurrents();
-      return true;
-    }
-
-        default:
-      return true;  // 保持原有行为
-  }
-}
-*/
-
-  // 原handleHostFrame函数结束 — consume frame to preserve alignment
-      return true;
-  }
-}
+// ----- Returns true if a valid 16-byte frame was consumed and handled -----
+// handleHostFrame已删除 - 由WebSocket命令处理替代
+static bool handleHostFrame(uint8_t op) { return true; }
 
 void setup() {
   // USB debug
@@ -749,8 +628,7 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             break;
 
         case WStype_CONNECTED:
-            DEBUG_PRINTF("[WS] Client %u connected from %s\n", num,
-                wsServer.getClientIP(num).toString().c_str());
+            DEBUG_PRINTF("[WS] Client %u connected\n", num);
             g_wsConnected = true;
             blinkLED(2);
             break;
@@ -791,7 +669,7 @@ void blinkLED(int times) {
 // ============================================
 
 void handleWsCommand(const char* payload, size_t length) {
-    JsonDocument doc;
+    DynamicJsonDocument doc(1024);
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
@@ -904,7 +782,7 @@ void processJsonCommand(const JsonDocument& doc) {
 }
 
 void sendWsResponse(bool success, const char* message) {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     response["type"] = "response";
     response["success"] = success;
     response["timestamp"] = millis();
@@ -922,14 +800,14 @@ void sendWsResponse(bool success, const char* message) {
 }
 
 void broadcastJointStates() {
-    JsonDocument response;
+    DynamicJsonDocument response(1024);
     response["type"] = "states_response";
     response["success"] = true;
     response["timestamp"] = millis();
 
     JsonArray jointsData = response["data"].to<JsonArray>();
     for (int i = 0; i < JOINT_COUNT; i++) {
-        JsonObject joint = jointsData.add<JsonObject>();
+        JsonObject joint = jointsData.createNestedObject();
         joint["joint_id"] = JOINT_NAMES[i];
         joint["angle"] = g_jointAngles[i];
         joint["load"] = 0.0;

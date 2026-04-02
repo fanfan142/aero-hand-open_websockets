@@ -150,8 +150,7 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             break;
 
         case WStype_CONNECTED:
-            DEBUG_PRINTF("[WS] Client %u connected from %s\\n", num,
-                wsServer.getClientIP(num).toString().c_str());
+            DEBUG_PRINTF("[WS] Client %u connected\\n", num);
             g_wsConnected = true;
             blinkLED(2);
             break;
@@ -193,7 +192,7 @@ void blinkLED(int times) {
 // ============================================
 
 void handleWsCommand(const char* payload, size_t length) {
-    JsonDocument doc;
+    DynamicJsonDocument doc(1024);
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
@@ -306,7 +305,7 @@ void processJsonCommand(const JsonDocument& doc) {
 }
 
 void sendWsResponse(bool success, const char* message) {
-    JsonDocument response;
+    DynamicJsonDocument response(256);
     response["type"] = "response";
     response["success"] = success;
     response["timestamp"] = millis();
@@ -324,14 +323,14 @@ void sendWsResponse(bool success, const char* message) {
 }
 
 void broadcastJointStates() {
-    JsonDocument response;
+    DynamicJsonDocument response(1024);
     response["type"] = "states_response";
     response["success"] = true;
     response["timestamp"] = millis();
 
     JsonArray jointsData = response["data"].to<JsonArray>();
     for (int i = 0; i < JOINT_COUNT; i++) {
-        JsonObject joint = jointsData.add<JsonObject>();
+        JsonObject joint = jointsData.createNestedObject();
         joint["joint_id"] = JOINT_NAMES[i];
         joint["angle"] = g_jointAngles[i];
         joint["load"] = 0.0;
@@ -371,7 +370,30 @@ def transform_firmware(content, version_config, version_name):
     if 'Preferences prefs;' in content:
         content = content.replace(
             'Preferences prefs;',
-            'Preferences prefs;\n\n' + WS_GLOBALS.strip()
+            'Preferences prefs;\n\n#include "config.h"\n\n' + WS_GLOBALS.strip()
+        )
+
+    # 2.5 添加前置声明 (sendAckFrame和sendU16Frame在原代码中定义较晚)
+    fwd_decls = '''// 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
+static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
+static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
+'''
+    # v0.1.0没有热保护，需要添加stub定义
+    if version_config['temp_cutoff'] is None:
+        stub_defs = '''// 热保护stub (v0.1.0没有热保护)
+#define HOT_TORQUE_LIMIT 1023
+static inline bool isHot(uint8_t ch) { (void)ch; return false; }
+static inline uint16_t u16_min(uint16_t a, uint16_t b) { return (a < b) ? a : b; }
+'''
+    else:
+        stub_defs = '''// 前置声明 (热保护函数)
+static inline bool isHot(uint8_t ch);
+static inline uint16_t u16_min(uint16_t a, uint16_t b);
+'''
+    if 'Preferences prefs;' in content:
+        content = content.replace(
+            'Preferences prefs;\n\n#include "config.h"',
+            'Preferences prefs;\n\n#include "config.h"\n\n' + fwd_decls.strip() + '\n\n' + stub_defs.strip()
         )
 
     # 3. 在setup()之前添加函数声明
@@ -453,21 +475,13 @@ def transform_firmware(content, version_config, version_name):
             flags=re.DOTALL
         )
 
-    # 8. 注释掉handleHostFrame函数
+    # 8. 完全删除handleHostFrame函数 (WebSocket替代了它)
+    # 找到函数开始和结束，删除整个函数体
     content = re.sub(
-        r'(static bool handleHostFrame\(uint8_t op\))',
-        r'/* \\1  // 已注释，替换为WebSocket命令处理',
-        content
-    )
-    content = re.sub(
-        r'(\}\s*// ----- Returns true if a valid 16-byte frame)',
-        r'}\n\n/* \\1',
-        content
-    )
-    content = re.sub(
-        r'(default:\s*//Unknown Control Code)',
-        r'    default:\n      return true;  // 保持原有行为\n  }\n}\n*/\n\n  // 原handleHostFrame函数结束',
-        content
+        r'static bool handleHostFrame\(uint8_t op\).*?^\}',
+        r'// handleHostFrame已删除 - 由WebSocket命令处理替代\nstatic bool handleHostFrame(uint8_t op) { return true; }',
+        content,
+        flags=re.MULTILINE | re.DOTALL
     )
 
     return header + content
