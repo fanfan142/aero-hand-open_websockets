@@ -31,6 +31,12 @@ esp32_wifi/firmware/*/*.bin
 esp32_wifi/firmware/*/*.elf
 esp32_wifi/firmware/*/*.map
 
+# WebSocket Firmware Build
+firmware_ws/*/build/
+firmware_ws/*/*.bin
+firmware_ws/*/*.elf
+firmware_ws/*/*.map
+
 # C DLL Build
 c_dll/build/
 c_dll/lib/

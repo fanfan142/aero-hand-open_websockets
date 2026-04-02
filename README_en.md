@@ -169,6 +169,36 @@ See [`protocol/CONTROL_PROTOCOL.md`](protocol/CONTROL_PROTOCOL.md)
 
 ---
 
+## Firmware Version Notes
+
+### Original Firmware Source (`firmware_src/`)
+
+Original firmware source code from upstream [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open):
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| v0.1.0 | ✅ Available | Initial release |
+| v0.1.1 | ❌ Unavailable | Only binary firmware available |
+| v0.1.2 | ❌ Unavailable | Only binary firmware available |
+| v0.1.3 | ✅ Available | Added thermal protection |
+| v0.1.4 | ✅ Available | Optimized thermal protection |
+| v0.1.5 | ✅ Available | Fixed motor configuration |
+
+### WebSocket Firmware (`firmware_ws/`)
+
+Original serial firmware converted to WiFi + WebSocket communication, preserving each version's characteristics:
+
+| Version | Thermal Protection | Initial Torque | Features |
+|---------|-------------------|----------------|----------|
+| v0.1.0 | None | 1023 | Base version |
+| v0.1.3 | 50°C / 200 | 700 | Added thermal protection |
+| v0.1.4 | 70°C / 500 | 700 | More relaxed thermal protection |
+| v0.1.5 | 70°C / 500 | 700 | Fixed motor configuration |
+
+See [`firmware_ws/README.md`](firmware_ws/README.md) for details.
+
+---
+
 ## Project Structure
 
 ```
@@ -179,7 +209,7 @@ aero-hand-open_websockets/
 │   ├── tests/            # Unit tests
 │   └── README.md
 │
-├── esp32_wifi/            # Solution 2: ESP32 WiFi Control (Wireless)
+├── esp32_wifi/            # Solution 2: ESP32 WiFi Control (Wireless, verified)
 │   ├── firmware/          # ESP32 firmware source
 │   │   └── aero_hand_wifi/
 │   ├── web_client/        # Web client (HTML)
@@ -191,6 +221,8 @@ aero-hand-open_websockets/
 │   └── examples/          # Usage examples
 │
 ├── firmware_bin/           # Pre-built ESP32 firmware
+├── firmware_src/           # Original firmware source (v0.1.0, v0.1.3-v0.1.5)
+├── firmware_ws/           # WebSocket converted firmware (all versions)
 ├── protocol/              # Unified communication protocol
 └── README.md / README_en.md
 ```

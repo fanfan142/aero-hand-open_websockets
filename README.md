@@ -169,6 +169,36 @@ Aero Hand Open 共有 **15 个关节**：
 
 ---
 
+## 固件版本说明
+
+### 原始固件源代码 (`firmware_src/`)
+
+上游 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open) 各版本固件源码：
+
+| 版本 | 状态 | 说明 |
+|------|------|------|
+| v0.1.0 | ✅ 完整 | 初始版本 |
+| v0.1.1 | ❌ 源码不可用 | 仅二进制固件可用 |
+| v0.1.2 | ❌ 源码不可用 | 仅二进制固件可用 |
+| v0.1.3 | ✅ 完整 | 添加热保护 |
+| v0.1.4 | ✅ 完整 | 优化热保护参数 |
+| v0.1.5 | ✅ 完整 | 修复电机配置问题 |
+
+### WebSocket 固件 (`firmware_ws/`)
+
+将原始串口固件改造为 WiFi + WebSocket 通信的版本，保留各版本特性：
+
+| 版本 | 热保护 | 初始扭矩 | 特性 |
+|------|--------|----------|------|
+| v0.1.0 | 无 | 1023 | 基础版本 |
+| v0.1.3 | 50°C / 200 | 700 | 添加热保护 |
+| v0.1.4 | 70°C / 500 | 700 | 更宽松的热保护 |
+| v0.1.5 | 70°C / 500 | 700 | 修复电机配置问题 |
+
+详见 [`firmware_ws/README.md`](firmware_ws/README.md)
+
+---
+
 ## 项目结构
 
 ```
@@ -179,7 +209,7 @@ aero-hand-open_websockets/
 │   ├── tests/            # 单元测试
 │   └── README.md
 │
-├── esp32_wifi/            # 方案二：ESP32 无线控制
+├── esp32_wifi/            # 方案二：ESP32 无线控制（已验证可行）
 │   ├── firmware/          # ESP32 固件源码
 │   │   └── aero_hand_wifi/
 │   ├── web_client/        # Web 客户端（HTML）
@@ -191,6 +221,8 @@ aero-hand-open_websockets/
 │   └── examples/          # 调用示例
 │
 ├── firmware_bin/           # 预编译 ESP32 固件
+├── firmware_src/           # 原始固件源代码（v0.1.0, v0.1.3-v0.1.5）
+├── firmware_ws/           # WebSocket 改造固件（各版本）
 ├── protocol/              # 统一通信协议定义
 └── README.md / README_en.md
 ```
