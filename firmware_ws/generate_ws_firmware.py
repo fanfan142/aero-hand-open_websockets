@@ -37,6 +37,13 @@ VERSIONS = {
         'has_auto_homing': False,
         'has_esp_system': True,
     },
+    'v0.2.0': {
+        'torque': '{700,700,700,700,700,700,700}',
+        'temp_cutoff': '70',
+        'hot_torque': '500',
+        'has_auto_homing': False,
+        'has_esp_system': True,
+    },
 }
 
 WS_HEADER = '''// ============================================

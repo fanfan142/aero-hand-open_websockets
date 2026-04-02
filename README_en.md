@@ -183,6 +183,7 @@ Original firmware source code from upstream [TetherIA/aero-hand-open](https://gi
 | v0.1.3 | ✅ Available | Added thermal protection |
 | v0.1.4 | ✅ Available | Optimized thermal protection |
 | v0.1.5 | ✅ Available | Fixed motor configuration |
+| v0.2.0 | ✅ Available | Thumb homing offset optimization |
 
 ### WebSocket Firmware (`firmware_ws/`)
 
@@ -194,6 +195,7 @@ Original serial firmware converted to WiFi + WebSocket communication, preserving
 | v0.1.3 | 50°C / 200 | 700 | Added thermal protection |
 | v0.1.4 | 70°C / 500 | 700 | More relaxed thermal protection |
 | v0.1.5 | 70°C / 500 | 700 | Fixed motor configuration |
+| v0.2.0 | 70°C / 500 | 700 | Thumb homing offset optimization |
 
 See [`firmware_ws/README.md`](firmware_ws/README.md) for details.
 
@@ -221,8 +223,8 @@ aero-hand-open_websockets/
 │   └── examples/          # Usage examples
 │
 ├── firmware_bin/           # Pre-built ESP32 firmware
-├── firmware_src/           # Original firmware source (v0.1.0, v0.1.3-v0.1.5)
-├── firmware_ws/           # WebSocket converted firmware (all versions)
+├── firmware_src/           # Original firmware source (v0.1.0, v0.1.3-v0.2.0)
+├── firmware_ws/           # WebSocket converted firmware (v0.1.0, v0.1.3-v0.2.0)
 ├── protocol/              # Unified communication protocol
 └── README.md / README_en.md
 ```

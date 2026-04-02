@@ -183,6 +183,7 @@ Aero Hand Open 共有 **15 个关节**：
 | v0.1.3 | ✅ 完整 | 添加热保护 |
 | v0.1.4 | ✅ 完整 | 优化热保护参数 |
 | v0.1.5 | ✅ 完整 | 修复电机配置问题 |
+| v0.2.0 | ✅ 完整 | 拇指归位偏移优化 |
 
 ### WebSocket 固件 (`firmware_ws/`)
 
@@ -194,6 +195,7 @@ Aero Hand Open 共有 **15 个关节**：
 | v0.1.3 | 50°C / 200 | 700 | 添加热保护 |
 | v0.1.4 | 70°C / 500 | 700 | 更宽松的热保护 |
 | v0.1.5 | 70°C / 500 | 700 | 修复电机配置问题 |
+| v0.2.0 | 70°C / 500 | 700 | 拇指归位偏移优化 |
 
 详见 [`firmware_ws/README.md`](firmware_ws/README.md)
 
@@ -221,8 +223,8 @@ aero-hand-open_websockets/
 │   └── examples/          # 调用示例
 │
 ├── firmware_bin/           # 预编译 ESP32 固件
-├── firmware_src/           # 原始固件源代码（v0.1.0, v0.1.3-v0.1.5）
-├── firmware_ws/           # WebSocket 改造固件（各版本）
+├── firmware_src/           # 原始固件源代码（v0.1.0, v0.1.3-v0.2.0）
+├── firmware_ws/           # WebSocket 改造固件（v0.1.0, v0.1.3-v0.2.0）
 ├── protocol/              # 统一通信协议定义
 └── README.md / README_en.md
 ```
