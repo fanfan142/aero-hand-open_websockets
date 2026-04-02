@@ -8,19 +8,24 @@
 firmware_ws/
 ├── README.md              # 本文件
 ├── generate_ws_firmware.py # 生成脚本
-├── config.h               # 通用配置
-├── webSocketServer.h      # WebSocket服务器头文件
-├── webSocketServer.cpp    # WebSocket服务器实现
+├── lib/                   # 共享库文件
+│   ├── config.h           # 通用配置
+│   ├── webSocketServer.h  # WebSocket服务器头文件
+│   └── webSocketServer.cpp # WebSocket服务器实现
 ├── v0.1.0/               # 原始版本 v0.1.0 + WebSocket
 │   ├── firmware.ino       # 主程序
-│   ├── HandConfig.h      # 原始文件
+│   ├── HandConfig.h       # 原始文件
 │   ├── Homing.cpp        # 原始文件
-│   └── Homing.h          # 原始文件
+│   ├── Homing.h          # 原始文件
+│   ├── config.h           # 配置 (同lib/)
+│   └── webSocketServer.*  # 服务器 (同lib/)
 ├── v0.1.3/               # 原始版本 v0.1.3 + WebSocket
 ├── v0.1.4/               # 原始版本 v0.1.4 + WebSocket
 ├── v0.1.5/               # 原始版本 v0.1.5 + WebSocket
 └── v0.2.0/               # 原始版本 v0.2.0 + WebSocket
 ```
+
+**注意**: 每个版本目录包含完整独立的项目文件，可直接使用 PlatformIO 或 Arduino IDE 构建。
 
 ## 版本差异
 

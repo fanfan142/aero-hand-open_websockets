@@ -55,3 +55,7 @@ htmlcov/
 
 # Logs
 *.log
+
+# Build artifacts (generated during build process)
+firmware_ws_build/
+release_assets/
