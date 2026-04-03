@@ -223,7 +223,7 @@ private fun FingerBar(
             )
         }
         LinearProgressIndicator(
-            progress = { ((value - min) / (max - min)).coerceIn(0f, 1f) },
+            progress = ((value - min) / (max - min)).coerceIn(0f, 1f),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)

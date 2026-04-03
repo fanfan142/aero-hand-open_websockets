@@ -118,9 +118,8 @@ class GestureCameraService(
         val avgDelta = frameTimeBuffer.average().toFloat()
         val fps = if (avgDelta > 0) 1000f / avgDelta else 0f
 
-        val mediaImage = imageProxy.image
-        if (mediaImage != null) {
-            val bitmap = imageToBitmap(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        val bitmap = imageProxyToBitmap(imageProxy)
+        if (bitmap != null) {
             val mpImage = BitmapImageBuilder(bitmap).build()
             detectHand(mpImage, fps)
         }
@@ -128,13 +127,20 @@ class GestureCameraService(
         imageProxy.close()
     }
 
-    private fun imageToBitmap(mediaImage: androidx.camera.core.ImageProxy, rotationDegrees: Int): Bitmap {
-        val bitmap = mediaImage.toBitmap()
-        if (rotationDegrees != 0) {
-            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
+        return try {
+            val bitmap = imageProxy.toBitmap()
+            val rotation = imageProxy.imageInfo.rotationDegrees
+            if (rotation != 0) {
+                val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            } else {
+                bitmap
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to convert image to bitmap", e)
+            null
         }
-        return bitmap
     }
 
     private fun detectHand(mpImage: com.google.mediapipe.framework.image.MediaImage, fps: Float) {
@@ -188,7 +194,7 @@ class GestureCameraService(
         handLandmarker = HandLandmarker.createFromOptions(context, options)
     }
 
-    private fun computeFingerAngles(landmarks: List<com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult.NormalizedLandmark>): FingerAngles {
+    private fun computeFingerAngles(landmarks: List<HandLandmarkerResult.Landmark>): FingerAngles {
         // MediaPipe hand landmarks (21 points):
         // 0: WRIST
         // 1-4: THUMB (CMC, MCP, IP, TIP)
@@ -197,9 +203,9 @@ class GestureCameraService(
         // 13-16: RING (MCP, PIP, DIP, TIP)
         // 17-20: PINKY (MCP, PIP, DIP, TIP)
 
-        fun angle(p1: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult.NormalizedLandmark,
-                  p2: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult.NormalizedLandmark,
-                  p3: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult.NormalizedLandmark): Float {
+        fun angle(p1: HandLandmarkerResult.Landmark,
+                  p2: HandLandmarkerResult.Landmark,
+                  p3: HandLandmarkerResult.Landmark): Float {
             val v1x = p1.x() - p2.x()
             val v1y = p1.y() - p2.y()
             val v2x = p3.x() - p2.x()
