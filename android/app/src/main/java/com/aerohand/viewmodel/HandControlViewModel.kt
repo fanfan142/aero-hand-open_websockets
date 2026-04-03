@@ -291,7 +291,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         return mapOf(
             "thumb_cmc_abd" to angles.thumbAbd,
             "thumb_cmc_flex" to angles.thumbFlex,
-            "thumb_mcp_ip" to angles.thumbFlex,
+            "thumb_mcp_ip" to (angles.thumbFlex * (90f / 55f)).coerceIn(0f, 90f),
             "index_flexion" to angles.indexFlex,
             "middle_flexion" to angles.middleFlex,
             "ring_flexion" to angles.ringFlex,
