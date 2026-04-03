@@ -32,22 +32,27 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log || true
-          cat build.log | tail -100
-
-      - name: Check build output
-        run: |
-          if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
-            echo "APK built successfully!"
-            ls -la android/app/build/outputs/apk/debug/
-          else
-            echo "APK not found"
-            ls -la android/app/build/ 2>/dev/null || echo "No build directory"
-          fi
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload artifacts
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: aero-hand-apk
           path: android/app/build/outputs/apk/debug/*.apk
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: android-v1.0.0
+          release_name: Android App v1.0.0
+          files: android/app/build/outputs/apk/debug/*.apk
+          body: |
+            ## Aero Hand Open Android App
+
+            7DoF 控制应用，支持 WiFi 连接。
+
+            ### 安装
+            下载 APK 文件到手机，直接安装即可。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
