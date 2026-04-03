@@ -15,47 +15,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK
+      - name: Setup JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v2
 
-      - name: Show directory contents
+      - name: Show files
         run: |
-          echo "=== Android Directory ==="
+          echo "=== android/ ==="
           ls -la android/
-          echo "=== Gradle Wrapper ==="
-          ls -la android/gradlew*
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-
-      - name: Build with Gradle
+      - name: Build
         run: |
           cd android
-          ./gradlew assembleDebug --no-daemon --info 2>&1 | tail -100
-        shell: bash
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
-        if: success()
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: aero-hand-open-apk
+          name: apk
           path: android/app/build/outputs/apk/debug/*.apk
-
-      - name: Create Release
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: android-v1.0.0
-          release_name: Android App v1.0.0
-          files: android/app/build/outputs/apk/debug/*.apk
-          body: |
-            ## Aero Hand Open Android App
-            7DoF 控制应用，支持 WiFi 连接。
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
