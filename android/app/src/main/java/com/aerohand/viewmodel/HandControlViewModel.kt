@@ -3,7 +3,6 @@ package com.aerohand.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraState
 import com.aerohand.usb.UsbConnectionState
@@ -36,14 +35,12 @@ data class HandControlUiState(
     val presetActions: List<PresetAction> = PresetActions.all,
     val activePresetId: String? = null,
     val isPresetRunning: Boolean = false,
-    val gestureCameraState: GestureCameraState = GestureCameraState(),
-    val gestureEnabled: Boolean = false
+    val gestureCameraState: GestureCameraState = GestureCameraState()
 )
 
 enum class ConnectionMode {
     WIFI,
-    USB,
-    GESTURE
+    USB
 }
 
 class HandControlViewModel(application: Application) : AndroidViewModel(application) {
@@ -130,13 +127,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 logs = when (mode) {
                     ConnectionMode.WIFI -> latestWifiLogs
                     ConnectionMode.USB -> latestUsbLogs
-                    ConnectionMode.GESTURE -> emptyList()
                 },
-                gestureEnabled = mode == ConnectionMode.GESTURE,
                 statusMessage = when (mode) {
                     ConnectionMode.WIFI -> if (wifiConnected) statusMessage else "WiFi 未连接"
                     ConnectionMode.USB -> if (usbConnected) statusMessage else "USB 未连接"
-                    ConnectionMode.GESTURE -> if (gestureCameraState.calibrationState == CalibrationState.CALIBRATED) "手势控制就绪" else "请先校准手势"
                 }
             )
         }
@@ -161,9 +155,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             ConnectionMode.USB -> {
                 usbSerialService.findAndConnect()
             }
-            ConnectionMode.GESTURE -> {
-                mutateState { copy(statusMessage = "手势控制已启用") }
-            }
         }
     }
 
@@ -173,7 +164,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.disconnect()
             ConnectionMode.USB -> usbSerialService.disconnect()
-            ConnectionMode.GESTURE -> { /* gesture camera stopped by composable */ }
         }
     }
 
@@ -194,7 +184,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.sendHoming()
             ConnectionMode.USB -> usbSerialService.sendHoming()
-            ConnectionMode.GESTURE -> { /* gesture mode: homing not supported */ }
         }
     }
 
@@ -208,7 +197,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.requestStates()
             ConnectionMode.USB -> usbSerialService.requestStates()
-            ConnectionMode.GESTURE -> { /* gesture mode: state query not supported */ }
         }
     }
 
@@ -260,11 +248,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     usbSerialService.sendCompactState(values)
                 }
             }
-            ConnectionMode.GESTURE -> {
-                if (state.wifiConnected) {
-                    webSocketService.sendCompactState(values, durationMs)
-                }
-            }
         }
     }
 
@@ -277,7 +260,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             copy(logs = when (connectionMode) {
                 ConnectionMode.WIFI -> latestWifiLogs
                 ConnectionMode.USB -> latestUsbLogs
-                ConnectionMode.GESTURE -> emptyList()
             })
         }
     }
@@ -287,8 +269,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         return when (state.connectionMode) {
             ConnectionMode.WIFI -> state.wifiConnected
             ConnectionMode.USB -> state.usbConnected
-            ConnectionMode.GESTURE -> state.gestureCameraState.handDetected &&
-                state.gestureCameraState.calibrationState == CalibrationState.CALIBRATED
         }
     }
 

@@ -1,5 +1,6 @@
 package com.aerohand.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.rememberHorizontalPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -31,8 +34,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,8 +53,9 @@ import com.aerohand.websocket.CompactControl
 import com.aerohand.websocket.ControlDefinitions
 import com.aerohand.websocket.LogEntry
 import com.aerohand.websocket.PresetAction
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ConnectionPanel(
     mode: ConnectionMode,
@@ -68,6 +75,9 @@ fun ConnectionPanel(
     val gradient = Brush.horizontalGradient(
         listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.secondaryContainer)
     )
+
+    val pagerState = rememberHorizontalPagerState(initialPage = if (mode == ConnectionMode.WIFI) 0 else 1)
+    val coroutineScope = rememberCoroutineScope()
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -94,88 +104,158 @@ fun ConnectionPanel(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // Tab indicators
+            TabRow(
+                selectedTabIndex = pagerState.currentPage,
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                indicator = {},
+                divider = {}
             ) {
-                FilterChip(
-                    selected = mode == ConnectionMode.WIFI,
-                    onClick = { onModeChange(ConnectionMode.WIFI) },
-                    label = { Text("WiFi") },
-                    modifier = Modifier.weight(1f)
+                Tab(
+                    selected = pagerState.currentPage == 0,
+                    onClick = {
+                        coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                        onModeChange(ConnectionMode.WIFI)
+                    },
+                    text = { Text("WiFi") }
                 )
-                FilterChip(
-                    selected = mode == ConnectionMode.USB,
-                    onClick = { onModeChange(ConnectionMode.USB) },
-                    label = { Text("USB OTG") },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = mode == ConnectionMode.GESTURE,
-                    onClick = { onModeChange(ConnectionMode.GESTURE) },
-                    label = { Text("手势") },
-                    modifier = Modifier.weight(1f)
+                Tab(
+                    selected = pagerState.currentPage == 1,
+                    onClick = {
+                        coroutineScope.launch { pagerState.animateScrollToPage(1) }
+                        onModeChange(ConnectionMode.USB)
+                    },
+                    text = { Text("USB OTG") }
                 )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (mode == ConnectionMode.WIFI) {
-                Row(
+            // Swipeable pages
+            HorizontalPager(
+                pageCount = 2,
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { page ->
+                when (page) {
+                    0 -> WifiConnectionContent(
+                        host = host,
+                        port = port,
+                        connected = wifiConnected,
+                        onHostChange = onHostChange,
+                        onPortChange = onPortChange,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                    1 -> UsbConnectionContent(
+                        connected = usbConnected,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WifiConnectionContent(
+    host: String,
+    port: String,
+    connected: Boolean,
+    onHostChange: (String) -> Unit,
+    onPortChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = host,
+                onValueChange = onHostChange,
+                label = { Text("Host") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp)
+            )
+            OutlinedTextField(
+                value = port,
+                onValueChange = onPortChange,
+                label = { Text("Port") },
+                modifier = Modifier.width(110.dp),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (connected) {
+                Button(
+                    onClick = onDisconnect,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = onHostChange,
-                        label = { Text("Host") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        shape = RoundedCornerShape(18.dp)
-                    )
-                    OutlinedTextField(
-                        value = port,
-                        onValueChange = onPortChange,
-                        label = { Text("Port") },
-                        modifier = Modifier.width(110.dp),
-                        singleLine = true,
-                        shape = RoundedCornerShape(18.dp)
-                    )
+                    Text("断开")
                 }
             } else {
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                Button(
+                    onClick = onConnect,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp)
                 ) {
-                    Text(
-                        text = "自动扫描 OTG 串口设备，默认使用 921600 波特率。首次连接会弹出系统 USB 授权。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(12.dp)
-                    )
+                    Text("连接 WiFi")
                 }
             }
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(12.dp))
+@Composable
+private fun UsbConnectionContent(
+    connected: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit
+) {
+    Column {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+        ) {
+            Text(
+                text = "自动扫描 OTG 串口设备，默认使用 921600 波特率。首次连接会弹出系统 USB 授权。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (connected) {
-                    Button(
-                        onClick = onDisconnect,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("断开")
-                    }
-                } else {
-                    Button(
-                        onClick = onConnect,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Text(if (mode == ConnectionMode.WIFI) "连接 WiFi" else "连接 USB")
-                    }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (connected) {
+                Button(
+                    onClick = onDisconnect,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("断开")
+                }
+            } else {
+                Button(
+                    onClick = onConnect,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text("连接 USB")
                 }
             }
         }
