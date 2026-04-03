@@ -206,10 +206,10 @@ class GestureCameraService(
         // 17-20: PINKY (MCP, PIP, DIP, TIP)
 
         fun angle(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
-            val v1x = p1.x - p2.x
-            val v1y = p1.y - p2.y
-            val v2x = p3.x - p2.x
-            val v2y = p3.y - p2.y
+            val v1x = p1.x() - p2.x()
+            val v1y = p1.y() - p2.y()
+            val v2x = p3.x() - p2.x()
+            val v2y = p3.y() - p2.y()
 
             val dot = v1x * v2x + v1y * v2y
             val mag1 = sqrt(v1x * v1x + v1y * v1y)
@@ -231,8 +231,8 @@ class GestureCameraService(
 
         // Thumb: wrist[0] - MCP[2] - IP[3]
         val thumbMcpAngle = angle(landmarks[0], landmarks[2], landmarks[3])
-        val thumbTipX = landmarks[4].x
-        val indexMcpX = landmarks[5].x
+        val thumbTipX = landmarks[4].x()
+        val indexMcpX = landmarks[5].x()
         val thumbAbd = abs(thumbTipX - indexMcpX) * 100f
 
         // Normalize thumb flexion to 0-55 range
