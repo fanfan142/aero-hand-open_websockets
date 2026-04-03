@@ -128,7 +128,7 @@ class GestureCameraService(
             val bitmap = imageProxyToBitmap(imageProxy)
             if (bitmap != null) {
                 val mpImage = BitmapImageBuilder(bitmap).build()
-                detectHand(mpImage, fps)
+                detectHand(mpImage, fps, imageProxy.imageInfo.timestamp / 1_000_000L)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Frame processing failed", e)
@@ -154,7 +154,7 @@ class GestureCameraService(
         }
     }
 
-    private fun detectHand(mpImage: com.google.mediapipe.framework.image.MPImage, fps: Float) {
+    private fun detectHand(mpImage: com.google.mediapipe.framework.image.MPImage, fps: Float, frameTimestampMs: Long) {
         if (handLandmarker == null) {
             initializeHandLandmarker()
             if (handLandmarker == null) {
@@ -164,7 +164,15 @@ class GestureCameraService(
         }
 
         val result = try {
-            handLandmarker?.detectForVideo(mpImage, videoTimestampMs.addAndGet(VIDEO_FRAME_INTERVAL_MS))
+            val ts = if (frameTimestampMs > 0) {
+                val prev = videoTimestampMs.get()
+                val next = if (frameTimestampMs > prev) frameTimestampMs else prev + VIDEO_FRAME_INTERVAL_MS
+                videoTimestampMs.set(next)
+                next
+            } else {
+                videoTimestampMs.addAndGet(VIDEO_FRAME_INTERVAL_MS)
+            }
+            handLandmarker?.detectForVideo(mpImage, ts)
         } catch (e: Exception) {
             Log.e(TAG, "Hand detection failed", e)
             null

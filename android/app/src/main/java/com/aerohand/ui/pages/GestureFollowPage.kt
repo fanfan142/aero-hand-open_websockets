@@ -199,8 +199,9 @@ fun GestureFollowPage(
                     ) {
                         Text("开始校准")
                     }
-                    if (cameraState.calibrationState != CalibrationState.NOT_CALIBRATED &&
-                        cameraState.calibrationState != CalibrationState.CALIBRATED
+                    if (cameraState.calibrationState == CalibrationState.CALIBRATING_OPEN ||
+                        cameraState.calibrationState == CalibrationState.CALIBRATING_FIST ||
+                        cameraState.calibrationState == CalibrationState.CALIBRATING_THUMB_IN
                     ) {
                         Button(
                             onClick = onRecordCalibrationPose,

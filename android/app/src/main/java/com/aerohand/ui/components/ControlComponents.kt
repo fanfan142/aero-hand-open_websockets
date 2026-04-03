@@ -108,55 +108,53 @@ fun ConnectionPanel(
                 }
             }
 
-            if (!expanded) {
-                return@Column
-            }
+            if (expanded) {
+                Spacer(modifier = Modifier.height(14.dp))
 
-            Spacer(modifier = Modifier.height(14.dp))
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    indicator = {},
+                    divider = {}
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = {
+                            selectedTab = 0
+                            onModeChange(ConnectionMode.WIFI)
+                        },
+                        text = { Text("WiFi") }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = {
+                            selectedTab = 1
+                            onModeChange(ConnectionMode.USB)
+                        },
+                        text = { Text("USB OTG") }
+                    )
+                }
 
-            TabRow(
-                selectedTabIndex = selectedTab,
-                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                indicator = {},
-                divider = {}
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = {
-                        selectedTab = 0
-                        onModeChange(ConnectionMode.WIFI)
-                    },
-                    text = { Text("WiFi") }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = {
-                        selectedTab = 1
-                        onModeChange(ConnectionMode.USB)
-                    },
-                    text = { Text("USB OTG") }
-                )
-            }
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            when (selectedTab) {
-                0 -> WifiConnectionContent(
-                    host = host,
-                    port = port,
-                    connected = wifiConnected,
-                    onHostChange = onHostChange,
-                    onPortChange = onPortChange,
-                    onConnect = onConnect,
-                    onDisconnect = onDisconnect
-                )
-                1 -> UsbConnectionContent(
-                    connected = usbConnected,
-                    onConnect = onConnect,
-                    onDisconnect = onDisconnect
-                )
+                when (selectedTab) {
+                    0 -> WifiConnectionContent(
+                        host = host,
+                        port = port,
+                        connected = wifiConnected,
+                        onHostChange = onHostChange,
+                        onPortChange = onPortChange,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                    1 -> UsbConnectionContent(
+                        connected = usbConnected,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                }
             }
         }
     }
