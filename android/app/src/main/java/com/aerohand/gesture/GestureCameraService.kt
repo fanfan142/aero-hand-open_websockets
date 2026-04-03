@@ -157,7 +157,8 @@ class GestureCameraService(
     }
 
     private fun processResult(result: HandLandmarkerResult, fps: Float) {
-        val landmarks = result.landmarks
+        @Suppress("UNCHECKED_CAST")
+        val landmarks = result.landmarks() as List<List<Any>>
         val handDetected = landmarks.isNotEmpty()
         if (handDetected) {
             val angles = computeFingerAngles(landmarks[0])
