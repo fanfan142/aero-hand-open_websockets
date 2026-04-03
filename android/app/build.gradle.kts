@@ -21,11 +21,11 @@ android {
 
     signingConfigs {
         create("release") {
-            // 统一签名：keystore 放在项目目录，CI 和本地共用
-            storeFile = file("debug.keystore")
-            storePassword = "aerohand123"
-            keyAlias = "aerohand"
-            keyPassword = "aerohand123"
+            // CI 自动生成 debug keystore 用于 release 构建
+            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
