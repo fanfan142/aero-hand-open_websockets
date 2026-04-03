@@ -72,8 +72,8 @@ dependencies {
     // WebSocket - OkHttp
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // USB Serial (using direct JAR for stability)
-    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
+    // USB Serial - commented out for initial build, uncomment when JitPack is accessible
+    // implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
