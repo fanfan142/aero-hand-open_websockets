@@ -155,7 +155,7 @@ class GestureCameraService(
         }
 
         val result = try {
-            handLandmarker?.detectForVideo(mpImage, System.nanoTime() / 1_000_000L)
+            handLandmarker?.detectForVideo(mpImage, System.currentTimeMillis())
         } catch (e: Exception) {
             Log.e(TAG, "Hand detection failed", e)
             null
