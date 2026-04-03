@@ -57,21 +57,13 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 - 自动更新预览版 Release `ci-latest`
 - 将 `app-debug.apk` 作为预览资产上传
 
-推送版本号标签（例如 `v1.1.0`）会触发正式发布工作流：
+推送版本号标签（例如 `v1.1.1`）会触发正式发布工作流：
 
-- 强制校验 Android 签名 secrets
-- 构建已签名 `release` APK
+- 构建已签名 `release` APK（使用 debug 签名）
 - 自动创建对应版本 Release
 - 上传 `app-release.apk`
 
-正式签名所需 GitHub Secrets：
-
-- `ANDROID_KEYSTORE_BASE64`
-- `ANDROID_KEYSTORE_PASSWORD`
-- `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
-
-如果缺少上述任一 secret，版本标签发布会直接失败，避免无签名 APK 被误发为正式版本。
+> 正式签名密钥配置后，release 构建会自动切换为正式签名。
 
 ## 安装
 
