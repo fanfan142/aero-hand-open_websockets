@@ -82,12 +82,12 @@ fun GestureFollowPage(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Camera preview - 16:9 aspect ratio
+            // Camera preview - portrait ratio
             if (hasCameraPermission) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .aspectRatio(9f / 16f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.Black)
                 ) {
@@ -131,7 +131,7 @@ fun GestureFollowPage(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .aspectRatio(9f / 16f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.DarkGray),
                     contentAlignment = Alignment.Center
@@ -199,15 +199,23 @@ fun GestureFollowPage(
                     ) {
                         Text("开始校准")
                     }
-                    if (cameraState.calibrationState != CalibrationState.NOT_CALIBRATED &&
-                        cameraState.calibrationState != CalibrationState.CALIBRATING_THUMB_IN
+                    if (cameraState.calibrationState == CalibrationState.CALIBRATING_OPEN ||
+                        cameraState.calibrationState == CalibrationState.CALIBRATING_FIST ||
+                        cameraState.calibrationState == CalibrationState.CALIBRATING_THUMB_IN
                     ) {
                         Button(
                             onClick = onRecordCalibrationPose,
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(16.dp)
                         ) {
-                            Text("记录姿势")
+                            Text(
+                                when (cameraState.calibrationState) {
+                                    CalibrationState.CALIBRATING_OPEN -> "记录张开"
+                                    CalibrationState.CALIBRATING_FIST -> "记录握拳"
+                                    CalibrationState.CALIBRATING_THUMB_IN -> "记录拇指内收"
+                                    else -> "记录姿势"
+                                }
+                            )
                         }
                     }
                 } else if (cameraState.calibrationState == CalibrationState.CALIBRATED) {
@@ -242,6 +250,7 @@ private fun CameraPreview(
     val previewView = remember {
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
 

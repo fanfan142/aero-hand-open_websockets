@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import java.util.Properties
+
 android {
     namespace = "com.aerohand"
     compileSdk = 34
@@ -11,8 +13,8 @@ android {
         applicationId = "com.aerohand"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = (project.findProperty("CI_VERSION_CODE") as String?)?.toIntOrNull() ?: 4
+        versionName = (project.findProperty("CI_VERSION_NAME") as String?) ?: "1.1.2"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -21,15 +23,61 @@ android {
 
     signingConfigs {
         create("release") {
-            // CI 自动生成 debug keystore 用于 release 构建
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            // 优先使用仓库外配置文件，其次使用 CI 环境变量；都不存在时回退 debug 签名
+            val propsFile = rootProject.file("keystore.properties")
+            val props = Properties()
+            val hasProps = propsFile.exists()
+            if (hasProps) {
+                propsFile.inputStream().use { props.load(it) }
+            }
+            val envStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
+            val envStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+            val envKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+            val envKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
+
+            val storePath = if (hasProps) {
+                props.getProperty("storeFile")
+            } else {
+                envStoreFile
+            }
+            val storePwd = if (hasProps) {
+                props.getProperty("storePassword")
+            } else {
+                envStorePassword
+            }
+            val alias = if (hasProps) {
+                props.getProperty("keyAlias")
+            } else {
+                envKeyAlias
+            }
+            val keyPwd = if (hasProps) {
+                props.getProperty("keyPassword")
+            } else {
+                envKeyPassword
+            }
+
+            if (!storePath.isNullOrBlank() &&
+                !storePwd.isNullOrBlank() &&
+                !alias.isNullOrBlank() &&
+                !keyPwd.isNullOrBlank()
+            ) {
+                storeFile = file(storePath)
+                storePassword = storePwd
+                keyAlias = alias
+                keyPassword = keyPwd
+            } else {
+                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
             isDebuggable = false

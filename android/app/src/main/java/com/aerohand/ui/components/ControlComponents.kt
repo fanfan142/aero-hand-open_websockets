@@ -16,6 +16,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -33,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +57,8 @@ fun ConnectionPanel(
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val connected = if (mode == ConnectionMode.WIFI) wifiConnected else usbConnected
@@ -83,54 +88,73 @@ fun ConnectionPanel(
                     Text("连接控制台", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(statusMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
+                    IconButton(
+                        onClick = onToggleExpanded,
+                        modifier = Modifier.semantics {
+                            contentDescription = if (expanded) "收起连接面板" else "展开连接面板"
+                        }
+                    ) {
+                        Text(
+                            text = if (expanded) "▲" else "▼",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            if (expanded) {
+                Spacer(modifier = Modifier.height(14.dp))
 
-            TabRow(
-                selectedTabIndex = selectedTab,
-                modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                indicator = {},
-                divider = {}
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = {
-                        selectedTab = 0
-                        onModeChange(ConnectionMode.WIFI)
-                    },
-                    text = { Text("WiFi") }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = {
-                        selectedTab = 1
-                        onModeChange(ConnectionMode.USB)
-                    },
-                    text = { Text("USB OTG") }
-                )
-            }
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    indicator = {},
+                    divider = {}
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = {
+                            selectedTab = 0
+                            onModeChange(ConnectionMode.WIFI)
+                        },
+                        text = { Text("WiFi") }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = {
+                            selectedTab = 1
+                            onModeChange(ConnectionMode.USB)
+                        },
+                        text = { Text("USB OTG") }
+                    )
+                }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            when (selectedTab) {
-                0 -> WifiConnectionContent(
-                    host = host,
-                    port = port,
-                    connected = wifiConnected,
-                    onHostChange = onHostChange,
-                    onPortChange = onPortChange,
-                    onConnect = onConnect,
-                    onDisconnect = onDisconnect
-                )
-                1 -> UsbConnectionContent(
-                    connected = usbConnected,
-                    onConnect = onConnect,
-                    onDisconnect = onDisconnect
-                )
+                when (selectedTab) {
+                    0 -> WifiConnectionContent(
+                        host = host,
+                        port = port,
+                        connected = wifiConnected,
+                        onHostChange = onHostChange,
+                        onPortChange = onPortChange,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                    1 -> UsbConnectionContent(
+                        connected = usbConnected,
+                        onConnect = onConnect,
+                        onDisconnect = onDisconnect
+                    )
+                }
             }
         }
     }

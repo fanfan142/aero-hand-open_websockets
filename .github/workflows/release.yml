@@ -11,6 +11,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      BASE_VERSION_NAME: 1.1.2
 
     steps:
       - name: Checkout
@@ -30,6 +32,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Generate debug keystore for release build
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 == '' || secrets.ANDROID_SIGNING_STORE_PASSWORD == '' || secrets.ANDROID_SIGNING_KEY_ALIAS == '' || secrets.ANDROID_SIGNING_KEY_PASSWORD == '' }}
         run: |
           mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
@@ -39,11 +42,21 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Prepare signing keystore from secrets
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 != '' && secrets.ANDROID_SIGNING_STORE_PASSWORD != '' && secrets.ANDROID_SIGNING_KEY_ALIAS != '' && secrets.ANDROID_SIGNING_KEY_PASSWORD != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}" | base64 --decode > /tmp/android-signing.jks
+
       - name: Build release APK
+        env:
+          ANDROID_SIGNING_STORE_FILE: /tmp/android-signing.jks
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace --no-daemon 2>&1 | tee release-build.log
+          ./gradlew assembleRelease -PCI_VERSION_NAME="${BASE_VERSION_NAME}" -PCI_VERSION_CODE="${{ github.run_number }}" --stacktrace --no-daemon 2>&1 | tee release-build.log
           tail -100 release-build.log
           test -f app/build/outputs/apk/release/app-release.apk
 

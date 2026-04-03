@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -77,6 +78,18 @@ fun HandControlScreen() {
 
     // Control page selection
     var selectedControlPage by remember { mutableIntStateOf(0) }
+    var connectionPanelExpanded by remember { mutableStateOf(true) }
+
+    val connected = when (uiState.connectionMode) {
+        ConnectionMode.WIFI -> uiState.wifiConnected
+        ConnectionMode.USB -> uiState.usbConnected
+    }
+
+    LaunchedEffect(connected) {
+        if (connected) {
+            connectionPanelExpanded = false
+        }
+    }
 
     // Start/stop camera based on selected page
     LaunchedEffect(selectedControlPage) {
@@ -143,7 +156,9 @@ fun HandControlScreen() {
                 onHostChange = viewModel::setHost,
                 onPortChange = viewModel::setPort,
                 onConnect = viewModel::connect,
-                onDisconnect = viewModel::disconnect
+                onDisconnect = viewModel::disconnect,
+                expanded = connectionPanelExpanded,
+                onToggleExpanded = { connectionPanelExpanded = !connectionPanelExpanded }
             )
 
             // Control section with tabs
