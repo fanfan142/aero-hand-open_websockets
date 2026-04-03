@@ -33,25 +33,12 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
-          ls -la app/build/outputs/apk/debug/ || echo "No APK directory"
 
       - name: Upload artifacts
-        run: |
-          if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
-            echo "APK found, uploading..."
-          else
-            echo "APK not found!"
-            ls -la android/app/build/outputs/ || echo "No outputs directory"
-            ls -la android/app/build/ || echo "No build directory"
-            exit 1
-          fi
-        shell: bash
-
-      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: aero-hand-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create Release
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -59,7 +46,7 @@ jobs:
         with:
           tag_name: android-v1.0.0
           release_name: Android App v1.0.0
-          files: android/app/build/outputs/apk/debug/*.apk
+          files: android/app/build/outputs/apk/debug/app-debug.apk
           body: |
             ## Aero Hand Open Android App
             7DoF 控制应用，支持 WiFi 连接。
