@@ -8,15 +8,17 @@ import com.aerohand.usb.UsbSerialService
 import com.aerohand.websocket.ConnectionState
 import com.aerohand.websocket.ControlDefinitions
 import com.aerohand.websocket.LogEntry
+import com.aerohand.websocket.PresetAction
+import com.aerohand.websocket.PresetActions
 import com.aerohand.websocket.WebSocketService
+import com.aerohand.websocket.buildProtocolPreview
+import com.aerohand.websocket.compactStateFromJointStates
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
 
 data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
@@ -24,10 +26,13 @@ data class HandControlUiState(
     val usbConnected: Boolean = false,
     val host: String = "192.168.4.1",
     val port: String = "8765",
-    val controlValues: Map<String, Float> = ControlDefinitions.COMPACT_CONTROLS.associate { it.id to it.defaultValue },
+    val controlValues: Map<String, Float> = ControlDefinitions.DEFAULT_CONTROL_STATE,
     val logs: List<LogEntry> = emptyList(),
     val protocolPreview: String = "[]",
-    val statusMessage: String = "准备就绪"
+    val statusMessage: String = "准备就绪",
+    val presetActions: List<PresetAction> = PresetActions.all,
+    val activePresetId: String? = null,
+    val isPresetRunning: Boolean = false
 )
 
 enum class ConnectionMode {
@@ -40,15 +45,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private val usbSerialService = UsbSerialService(application)
 
     private val _uiState = MutableStateFlow(
-        HandControlUiState(
-            protocolPreview = buildProtocolPreview(
-                ControlDefinitions.COMPACT_CONTROLS.associate { it.id to it.defaultValue }
-            )
-        )
+        HandControlUiState(protocolPreview = buildProtocolPreview(ControlDefinitions.DEFAULT_CONTROL_STATE))
     )
     val uiState: StateFlow<HandControlUiState> = _uiState
 
     private var sendDebounceJob: Job? = null
+    private var presetJob: Job? = null
+    private var latestWifiLogs: List<LogEntry> = emptyList()
+    private var latestUsbLogs: List<LogEntry> = emptyList()
 
     init {
         viewModelScope.launch {
@@ -57,10 +61,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     copy(
                         wifiConnected = state is ConnectionState.Connected,
                         statusMessage = when (state) {
-                            is ConnectionState.Connected -> "已连接 ${state.server}"
-                            is ConnectionState.Connecting -> "连接中..."
+                            is ConnectionState.Connected -> "WiFi 已连接 ${state.server}"
+                            is ConnectionState.Connecting -> "WiFi 连接中..."
                             is ConnectionState.Error -> state.message
-                            ConnectionState.Disconnected -> if (connectionMode == ConnectionMode.WIFI) "未连接" else statusMessage
+                            ConnectionState.Disconnected -> if (connectionMode == ConnectionMode.WIFI) "WiFi 未连接" else statusMessage
                         }
                     )
                 }
@@ -69,14 +73,15 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
         viewModelScope.launch {
             webSocketService.logs.collectLatest { logs ->
-                mutateState { copy(logs = logs) }
+                latestWifiLogs = logs
+                refreshLogs()
             }
         }
 
         viewModelScope.launch {
             webSocketService.jointStates.collectLatest { states ->
                 if (states.isNotEmpty()) {
-                    updateControlValuesFromStates(states)
+                    updateControlValues(compactStateFromJointStates(states))
                 }
             }
         }
@@ -87,11 +92,26 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     copy(
                         usbConnected = state is UsbConnectionState.Connected,
                         statusMessage = when (state) {
-                            is UsbConnectionState.Connected -> "USB 已连接 ${state.deviceName}"
+                            is UsbConnectionState.Connected -> "USB 已连接 ${state.deviceName} @ 921600"
                             is UsbConnectionState.Error -> state.message
                             UsbConnectionState.Disconnected -> if (connectionMode == ConnectionMode.USB) "USB 未连接" else statusMessage
                         }
                     )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            usbSerialService.logs.collectLatest { logs ->
+                latestUsbLogs = logs
+                refreshLogs()
+            }
+        }
+
+        viewModelScope.launch {
+            usbSerialService.compactState.collectLatest { state ->
+                if (state.isNotEmpty()) {
+                    updateControlValues(state)
                 }
             }
         }
@@ -101,10 +121,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         mutateState {
             copy(
                 connectionMode = mode,
-                statusMessage = if (mode == ConnectionMode.WIFI) {
-                    if (wifiConnected) statusMessage else "未连接"
-                } else {
-                    if (usbConnected) statusMessage else "USB 未连接"
+                logs = if (mode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs,
+                statusMessage = when (mode) {
+                    ConnectionMode.WIFI -> if (wifiConnected) statusMessage else "WiFi 未连接"
+                    ConnectionMode.USB -> if (usbConnected) statusMessage else "USB 未连接"
                 }
             )
         }
@@ -115,7 +135,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun setPort(port: String) {
-        mutateState { copy(port = port) }
+        mutateState { copy(port = port.filter { it.isDigit() }.take(5)) }
     }
 
     fun connect() {
@@ -130,6 +150,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun disconnect() {
+        presetJob?.cancel()
+        mutateState { copy(isPresetRunning = false, activePresetId = null) }
         if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
             webSocketService.disconnect()
         } else {
@@ -151,98 +173,94 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun sendHoming() {
-        if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
-            webSocketService.sendHoming()
+        when (_uiState.value.connectionMode) {
+            ConnectionMode.WIFI -> webSocketService.sendHoming()
+            ConnectionMode.USB -> usbSerialService.sendHoming()
         }
     }
 
     fun sendAllZeros() {
-        val zeros = ControlDefinitions.COMPACT_CONTROLS.associate { it.id to 0f }
+        val zeros = ControlDefinitions.DEFAULT_CONTROL_STATE.mapValues { 0f }
         mutateState { copy(controlValues = zeros) }
-        if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
-            webSocketService.sendCompactState(zeros)
-        }
+        sendCurrentState()
     }
 
     fun requestStates() {
-        if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
-            webSocketService.requestStates()
+        when (_uiState.value.connectionMode) {
+            ConnectionMode.WIFI -> webSocketService.requestStates()
+            ConnectionMode.USB -> usbSerialService.requestStates()
+        }
+    }
+
+    fun runPreset(presetId: String) {
+        val preset = PresetActions.find(presetId) ?: return
+        if (!isConnected()) {
+            mutateState { copy(statusMessage = "请先连接再执行预设动作") }
+            return
+        }
+
+        presetJob?.cancel()
+        presetJob = viewModelScope.launch {
+            mutateState { copy(activePresetId = preset.id, isPresetRunning = true, statusMessage = "执行预设：${preset.label}") }
+            try {
+                preset.steps.forEach { step ->
+                    mutateState { copy(controlValues = step.values) }
+                    sendState(step.values, step.durationMs)
+                    delay(step.durationMs.toLong())
+                }
+                mutateState { copy(statusMessage = "预设完成：${preset.label}") }
+            } finally {
+                mutateState { copy(activePresetId = null, isPresetRunning = false) }
+            }
         }
     }
 
     fun clearLogs() {
         webSocketService.clearLogs()
         usbSerialService.clearLogs()
-        mutateState { copy(logs = emptyList()) }
+        latestWifiLogs = emptyList()
+        latestUsbLogs = emptyList()
+        refreshLogs()
     }
 
     private fun sendCurrentState() {
+        sendState(_uiState.value.controlValues, ControlDefinitions.DEFAULT_DURATION_MS)
+    }
+
+    private fun sendState(values: Map<String, Float>, durationMs: Int) {
         val state = _uiState.value
-        if (state.connectionMode == ConnectionMode.WIFI && state.wifiConnected) {
-            webSocketService.sendCompactState(state.controlValues)
+        when (state.connectionMode) {
+            ConnectionMode.WIFI -> {
+                if (state.wifiConnected) {
+                    webSocketService.sendCompactState(values, durationMs)
+                }
+            }
+            ConnectionMode.USB -> {
+                if (state.usbConnected) {
+                    usbSerialService.sendCompactState(values)
+                }
+            }
         }
     }
 
-    private fun updateControlValuesFromStates(states: Map<String, Float>) {
-        val values = _uiState.value.controlValues.toMutableMap()
-        values["thumb_cmc_flex"] = (states["thumb_proximal"] ?: 0f).coerceIn(0f, 55f)
-        values["thumb_mcp_ip"] = (states["thumb_distal"] ?: 0f).coerceIn(0f, 90f)
-        values["index_flexion"] = (states["index_proximal"] ?: 0f).coerceIn(0f, 90f)
-        values["middle_flexion"] = (states["middle_proximal"] ?: 0f).coerceIn(0f, 90f)
-        values["ring_flexion"] = (states["ring_proximal"] ?: 0f).coerceIn(0f, 90f)
-        values["pinky_flexion"] = (states["pinky_proximal"] ?: 0f).coerceIn(0f, 90f)
-        values["thumb_cmc_abd"] = mapRange(
-            states["thumb_rotation"] ?: 0f,
-            ControlDefinitions.THUMB_ROTATION_MIN,
-            ControlDefinitions.THUMB_ROTATION_MAX,
-            0f,
-            100f
-        ).coerceIn(0f, 100f)
-        mutateState { copy(controlValues = values) }
+    private fun updateControlValues(values: Map<String, Float>) {
+        mutateState { copy(controlValues = ControlDefinitions.DEFAULT_CONTROL_STATE + values) }
+    }
+
+    private fun refreshLogs() {
+        mutateState {
+            copy(logs = if (connectionMode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs)
+        }
+    }
+
+    private fun isConnected(): Boolean {
+        val state = _uiState.value
+        return if (state.connectionMode == ConnectionMode.WIFI) state.wifiConnected else state.usbConnected
     }
 
     private fun mutateState(transform: HandControlUiState.() -> HandControlUiState) {
         val next = _uiState.value.transform()
         _uiState.value = next.copy(protocolPreview = buildProtocolPreview(next.controlValues))
-    }
-
-    private fun buildProtocolPreview(compactState: Map<String, Float>): String {
-        val joints = JSONArray().apply {
-            put(jointJson("thumb_proximal", compactState["thumb_cmc_flex"] ?: 0f))
-            put(jointJson("thumb_distal", compactState["thumb_mcp_ip"] ?: 0f))
-
-            listOf("index", "middle", "ring", "pinky").forEach { finger ->
-                val value = compactState["${finger}_flexion"] ?: 0f
-                put(jointJson("${finger}_proximal", value))
-                put(jointJson("${finger}_middle", value))
-                put(jointJson("${finger}_distal", value))
-            }
-
-            val thumbRotation = mapRange(
-                compactState["thumb_cmc_abd"] ?: 0f,
-                0f,
-                100f,
-                ControlDefinitions.THUMB_ROTATION_MIN,
-                ControlDefinitions.THUMB_ROTATION_MAX
-            )
-            put(jointJson("thumb_rotation", thumbRotation))
-        }
-        return joints.toString(2)
-    }
-
-    private fun jointJson(jointId: String, angle: Float): JSONObject {
-        return JSONObject().apply {
-            put("joint_id", jointId)
-            put("angle", angle)
-        }
-    }
-
-    private fun mapRange(value: Float, inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float {
-        if (inMax == inMin) {
-            return outMin
-        }
-        val normalized = (value - inMin) / (inMax - inMin)
-        return outMin + normalized * (outMax - outMin)
     }
 
     override fun onCleared() {
