@@ -77,5 +77,6 @@ firmware_bin/
 android-sdk/
 android/.gradle/
 android/local.properties
+android/keystore.properties
 *.keystore
 **/*.keystore

@@ -16,6 +16,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -54,6 +55,8 @@ fun ConnectionPanel(
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val connected = if (mode == ConnectionMode.WIFI) wifiConnected else usbConnected
@@ -83,7 +86,23 @@ fun ConnectionPanel(
                     Text("连接控制台", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(statusMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
+                    IconButton(onClick = onToggleExpanded) {
+                        Text(
+                            text = if (expanded) "▲" else "▼",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            if (!expanded) {
+                return@Column
             }
 
             Spacer(modifier = Modifier.height(14.dp))

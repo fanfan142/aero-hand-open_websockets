@@ -26,6 +26,7 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.sqrt
+import java.util.concurrent.atomic.AtomicLong
 
 class GestureCameraService(
     private val context: Context,
@@ -61,6 +62,7 @@ class GestureCameraService(
     private var smoothedValues = FloatArray(6) { 0f }
     private var lastFrameTime = System.nanoTime()
     private var frameTimeBuffer = mutableListOf<Long>()
+    private val videoTimestampMs = AtomicLong(0L)
 
     init {
         loadCalibration()
@@ -161,7 +163,7 @@ class GestureCameraService(
         }
 
         val result = try {
-            handLandmarker?.detectForVideo(mpImage, System.currentTimeMillis())
+            handLandmarker?.detectForVideo(mpImage, videoTimestampMs.addAndGet(33L))
         } catch (e: Exception) {
             Log.e(TAG, "Hand detection failed", e)
             null
@@ -181,9 +183,6 @@ class GestureCameraService(
             val smoothed = applySmoothing(angles)
 
             val calibState = when {
-                _state.value.calibrationState == CalibrationState.CALIBRATING_OPEN -> CalibrationState.CALIBRATING_FIST
-                _state.value.calibrationState == CalibrationState.CALIBRATING_FIST -> CalibrationState.CALIBRATING_THUMB_IN
-                _state.value.calibrationState == CalibrationState.CALIBRATING_THUMB_IN -> CalibrationState.CALIBRATED
                 else -> _state.value.calibrationState
             }
 
@@ -395,6 +394,7 @@ class GestureCameraService(
 
     fun stopCamera() {
         cameraProvider?.unbindAll()
+        videoTimestampMs.set(0L)
         _state.value = _state.value.copy(isRunning = false)
     }
 
