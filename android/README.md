@@ -1,15 +1,16 @@
 # Aero Hand Open - Android App
 
-Android 原生应用，用于通过 WiFi 或 USB 控制 Aero Hand Open 机械手。
+Android 原生应用，用于通过 WiFi 控制 Aero Hand Open 机械手。
 
 ## 功能特性
 
 - **WiFi WebSocket 控制**：通过局域网连接 ESP32 WebSocket 服务器
-- **USB 串口控制**：通过 USB OTG 连接串口控制
 - **7 通道滑块控制**：拇指 3 维 + 四指各 1 维
 - **快捷动作按钮**：Homing、All Zeros、Get States
+- **15 关节展开预览**：实时查看 compact control 到协议 joints 的映射
 - **实时日志显示**：查看发送/接收数据
 - **浅色主题**：Material Design 3 浅色界面
+- **USB 结构预留**：界面保留 USB 模式入口，当前交付版本优先保证 WiFi 版可稳定构建与控制
 
 ## 协议映射
 
@@ -64,10 +65,7 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 
 ### USB 模式
 
-1. 使用 USB OTG 线连接手机和 ESP32
-2. 手机需要支持 USB Host 功能
-3. 打开应用，选择 USB 模式
-4. 点击 Connect 连接
+当前版本仅保留界面与架构预留，尚未重新接入 USB 串口库；如果需要 OTG 串口实装，建议在 WiFi 版稳定后单独补齐。这样做的好处是构建链更稳、交付更快。
 
 ### 控制
 
@@ -82,7 +80,7 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 - **UI**：Jetpack Compose + Material Design 3
 - **架构**：MVVM
 - **WebSocket**：OkHttp 4.12.0
-- **USB 串口**：usb-serial-for-android 3.8.1
+- **USB**：当前版本保留接口层，未接入第三方串口依赖
 
 ## 项目结构
 
@@ -97,7 +95,7 @@ android/
 │       │   │   └── theme/       # 主题
 │       │   ├── viewmodel/       # ViewModel
 │       │   ├── websocket/       # WebSocket 服务
-│       │   └── usb/            # USB 串口服务
+│       │   └── usb/             # USB 预留接口
 │       └── res/                # 资源文件
 ├── .github/workflows/          # GitHub Actions
 ├── build.gradle.kts

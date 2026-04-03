@@ -73,5 +73,7 @@ CLAUDE.md
 # Compiled firmware binaries
 firmware_bin/
 
-# Android SDK (downloaded for build, not needed in repo)
+# Android local build artifacts
 android-sdk/
+android/.gradle/
+android/local.properties
