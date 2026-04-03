@@ -28,12 +28,16 @@ jobs:
         run: |
           echo "=== android/ ==="
           ls -la android/
+          echo "=== app/ ==="
+          ls -la android/app/
+          echo "=== kotlin/ ==="
+          ls -la android/app/src/main/java/com/aerohand/
 
       - name: Build
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace 2>&1
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
