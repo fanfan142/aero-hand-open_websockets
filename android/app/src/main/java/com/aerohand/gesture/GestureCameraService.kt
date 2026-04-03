@@ -208,8 +208,7 @@ class GestureCameraService(
                 .setMinHandPresenceConfidence(MIN_HAND_PRESENCE_CONFIDENCE)
                 .setMinTrackingConfidence(MIN_TRACKING_CONFIDENCE)
             val hasModelAsset = runCatching {
-                context.assets.open(HAND_LANDMARKER_MODEL_ASSET).close()
-                true
+                context.assets.list("")?.contains(HAND_LANDMARKER_MODEL_ASSET) == true
             }.getOrElse { false }
 
             if (hasModelAsset) {
