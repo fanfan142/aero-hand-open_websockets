@@ -24,14 +24,21 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v2
 
+      - name: Show directory contents
+        run: |
+          echo "=== Android Directory ==="
+          ls -la android/
+          echo "=== Gradle Wrapper ==="
+          ls -la android/gradlew*
+
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
       - name: Build with Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: assembleDebug
-          build-root-directory: android
+        run: |
+          cd android
+          ./gradlew assembleDebug --no-daemon --info 2>&1 | tail -100
+        shell: bash
 
       - name: Upload APK
         if: success()
@@ -49,17 +56,6 @@ jobs:
           files: android/app/build/outputs/apk/debug/*.apk
           body: |
             ## Aero Hand Open Android App
-
-            7DoF 控制应用，支持 WiFi 和 USB 连接。
-
-            ### 功能
-            - WiFi WebSocket 连接控制
-            - USB 串口连接支持（需要额外库）
-            - 7 通道滑块控制
-            - 快捷动作按钮
-            - 实时日志显示
-
-            ### 安装
-            下载 APK 文件到手机，直接安装即可。
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            7DoF 控制应用，支持 WiFi 连接。
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
