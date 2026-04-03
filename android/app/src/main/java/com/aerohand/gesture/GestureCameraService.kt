@@ -42,6 +42,7 @@ class GestureCameraService(
         private const val EMA_ALPHA = 0.7f
         private const val DEADBAND = 2f
         private const val FPS_WINDOW = 10
+        private const val VIDEO_FRAME_INTERVAL_MS = 33L
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences("gesture_calib", Context.MODE_PRIVATE)
@@ -163,7 +164,7 @@ class GestureCameraService(
         }
 
         val result = try {
-            handLandmarker?.detectForVideo(mpImage, videoTimestampMs.addAndGet(33L))
+            handLandmarker?.detectForVideo(mpImage, videoTimestampMs.addAndGet(VIDEO_FRAME_INTERVAL_MS))
         } catch (e: Exception) {
             Log.e(TAG, "Hand detection failed", e)
             null
@@ -182,9 +183,7 @@ class GestureCameraService(
             val angles = computeFingerAngles(landmarks[0])
             val smoothed = applySmoothing(angles)
 
-            val calibState = when {
-                else -> _state.value.calibrationState
-            }
+            val calibState = _state.value.calibrationState
 
             _state.value = _state.value.copy(
                 handDetected = true,

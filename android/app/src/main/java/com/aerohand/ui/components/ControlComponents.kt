@@ -34,6 +34,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,7 +93,12 @@ fun ConnectionPanel(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
-                    IconButton(onClick = onToggleExpanded) {
+                    IconButton(
+                        onClick = onToggleExpanded,
+                        modifier = Modifier.semantics {
+                            contentDescription = if (expanded) "收起连接面板" else "展开连接面板"
+                        }
+                    ) {
                         Text(
                             text = if (expanded) "▲" else "▼",
                             style = MaterialTheme.typography.titleSmall,
