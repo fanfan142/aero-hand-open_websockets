@@ -15,6 +15,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
@@ -157,8 +158,7 @@ class GestureCameraService(
     }
 
     private fun processResult(result: HandLandmarkerResult, fps: Float) {
-        @Suppress("UNCHECKED_CAST")
-        val landmarks = result.landmarks() as List<List<Any>>
+        val landmarks = result.landmarks()
         val handDetected = landmarks.isNotEmpty()
         if (handDetected) {
             val angles = computeFingerAngles(landmarks[0])
@@ -195,8 +195,8 @@ class GestureCameraService(
         handLandmarker = HandLandmarker.createFromOptions(context, options)
     }
 
-    // MediaPipe landmarks list - using Any since exact type is unknown at compile time
-    private fun computeFingerAngles(landmarks: List<Any>): FingerAngles {
+    // MediaPipe landmarks list
+    private fun computeFingerAngles(landmarks: List<NormalizedLandmark>): FingerAngles {
         // MediaPipe hand landmarks (21 points):
         // 0: WRIST
         // 1-4: THUMB (CMC, MCP, IP, TIP)
@@ -205,31 +205,11 @@ class GestureCameraService(
         // 13-16: RING (MCP, PIP, DIP, TIP)
         // 17-20: PINKY (MCP, PIP, DIP, TIP)
 
-        fun getX(landmark: Any): Float {
-            return try {
-                val method = landmark.javaClass.getMethod("x")
-                (method.invoke(landmark) as Number).toFloat()
-            } catch (e: Exception) {
-                0f
-            }
-        }
-
-        fun getY(landmark: Any): Float {
-            return try {
-                val method = landmark.javaClass.getMethod("y")
-                (method.invoke(landmark) as Number).toFloat()
-            } catch (e: Exception) {
-                0f
-            }
-        }
-
-        fun angle(p1: Any, p2: Any, p3: Any): Float {
-            val x1 = getX(p1); val y1 = getY(p1)
-            val x2 = getX(p2); val y2 = getY(p2)
-            val x3 = getX(p3); val y3 = getY(p3)
-
-            val v1x = x1 - x2; val v1y = y1 - y2
-            val v2x = x3 - x2; val v2y = y3 - y2
+        fun angle(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
+            val v1x = p1.x - p2.x
+            val v1y = p1.y - p2.y
+            val v2x = p3.x - p2.x
+            val v2y = p3.y - p2.y
 
             val dot = v1x * v2x + v1y * v2y
             val mag1 = sqrt(v1x * v1x + v1y * v1y)
@@ -251,8 +231,8 @@ class GestureCameraService(
 
         // Thumb: wrist[0] - MCP[2] - IP[3]
         val thumbMcpAngle = angle(landmarks[0], landmarks[2], landmarks[3])
-        val thumbTipX = getX(landmarks[4])
-        val indexMcpX = getX(landmarks[5])
+        val thumbTipX = landmarks[4].x
+        val indexMcpX = landmarks[5].x
         val thumbAbd = abs(thumbTipX - indexMcpX) * 100f
 
         // Normalize thumb flexion to 0-55 range
