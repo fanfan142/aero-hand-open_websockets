@@ -30,6 +30,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Generate debug keystore for release build
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 == '' || secrets.ANDROID_SIGNING_STORE_PASSWORD == '' || secrets.ANDROID_SIGNING_KEY_ALIAS == '' || secrets.ANDROID_SIGNING_KEY_PASSWORD == '' }}
         run: |
           mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
@@ -39,7 +40,17 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Prepare signing keystore from secrets
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 != '' && secrets.ANDROID_SIGNING_STORE_PASSWORD != '' && secrets.ANDROID_SIGNING_KEY_ALIAS != '' && secrets.ANDROID_SIGNING_KEY_PASSWORD != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}" | base64 --decode > /tmp/android-signing.jks
+
       - name: Build release APK
+        env:
+          ANDROID_SIGNING_STORE_FILE: /tmp/android-signing.jks
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
