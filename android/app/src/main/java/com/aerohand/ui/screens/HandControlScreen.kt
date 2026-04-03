@@ -1,20 +1,14 @@
 package com.aerohand.ui.screens
 
 import android.app.Application
-import android.view.View
-import androidx.camera.view.PreviewView
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -28,8 +22,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -37,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.View
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -49,7 +45,6 @@ import com.aerohand.ui.pages.JointControlPage
 import com.aerohand.ui.pages.LogPage
 import com.aerohand.viewmodel.ConnectionMode
 import com.aerohand.viewmodel.HandControlViewModel
-import kotlinx.coroutines.launch
 
 private class HandControlViewModelFactory(
     private val application: Application
@@ -65,7 +60,7 @@ private class HandControlViewModelFactory(
 
 private val CONTROL_PAGE_TABS = listOf("主页", "关节", "手势", "日志")
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HandControlScreen() {
     val application = LocalContext.current.applicationContext as Application
@@ -75,26 +70,18 @@ fun HandControlScreen() {
     val uiState by viewModel.uiState.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
 
-    // Gesture camera service - always created, started/stopped based on page
+    // Gesture camera service
     val gestureService = remember {
         GestureCameraService(context, lifecycleOwner)
     }
 
-    // Control pager state
-    val controlPagerState = rememberPagerState(initialPage = 0) {
-        CONTROL_PAGE_TABS.size
-    }
+    // Control page selection
+    var selectedControlPage by remember { mutableIntStateOf(0) }
 
-    // Connection pager state (WiFi=0, USB=1)
-    val connectionPagerState = rememberPagerState(
-        initialPage = if (uiState.connectionMode == ConnectionMode.WIFI) 0 else 1
-    ) { 2 }
-
-    // Start/stop camera based on current page
-    LaunchedEffect(controlPagerState.currentPage) {
-        if (controlPagerState.currentPage == 2) { // Gesture page
+    // Start/stop camera based on selected page
+    LaunchedEffect(selectedControlPage) {
+        if (selectedControlPage == 2) { // Gesture page
             // Camera will be started by GestureFollowPage composable
         } else {
             gestureService.stopCamera()
@@ -106,7 +93,7 @@ fun HandControlScreen() {
         gestureService.state.collect { state ->
             viewModel.updateGestureCameraState(state)
             // Gesture control is always active when on gesture page and calibrated
-            if (controlPagerState.currentPage == 2 &&
+            if (selectedControlPage == 2 &&
                 state.calibrationState == com.aerohand.gesture.CalibrationState.CALIBRATED &&
                 state.handDetected
             ) {
@@ -141,19 +128,11 @@ fun HandControlScreen() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.background,
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
-                        )
-                    )
-                )
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Top section: Connection panel (1/3 height)
+            // Top section: Connection panel
             ConnectionPanel(
                 mode = uiState.connectionMode,
                 host = uiState.host,
@@ -161,29 +140,23 @@ fun HandControlScreen() {
                 wifiConnected = uiState.wifiConnected,
                 usbConnected = uiState.usbConnected,
                 statusMessage = uiState.statusMessage,
-                onModeChange = { mode ->
-                    viewModel.setConnectionMode(mode)
-                    coroutineScope.launch {
-                        connectionPagerState.animateScrollToPage(if (mode == ConnectionMode.WIFI) 0 else 1)
-                    }
-                },
+                onModeChange = viewModel::setConnectionMode,
                 onHostChange = viewModel::setHost,
                 onPortChange = viewModel::setPort,
                 onConnect = viewModel::connect,
                 onDisconnect = viewModel::disconnect
             )
 
-            // Control pages (2/3~3/4 height)
+            // Control section with tabs
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                // Tab indicators for control pages
+                // Tab indicators
                 TabRow(
-                    selectedTabIndex = controlPagerState.currentPage,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp)),
+                    selectedTabIndex = selectedControlPage,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)),
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     indicator = {},
@@ -191,31 +164,32 @@ fun HandControlScreen() {
                 ) {
                     CONTROL_PAGE_TABS.forEachIndexed { index, title ->
                         Tab(
-                            selected = controlPagerState.currentPage == index,
-                            onClick = {
-                                coroutineScope.launch { controlPagerState.animateScrollToPage(index) }
-                            },
+                            selected = selectedControlPage == index,
+                            onClick = { selectedControlPage = index },
                             text = { Text(title) }
                         )
                     }
                 }
 
-                // Pager content
-                HorizontalPager(
-                    state = controlPagerState,
+                // Scrollable content for each page
+                Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                ) { page ->
-                    when (page) {
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 12.dp)
+                ) {
+                    when (selectedControlPage) {
                         0 -> HomePage(
                             presets = uiState.presetActions,
                             activePresetId = uiState.activePresetId,
                             isRunning = uiState.isPresetRunning,
-                            isConnected = uiState.connectionMode != ConnectionMode.GESTURE,
+                            isConnected = when (uiState.connectionMode) {
+                                ConnectionMode.WIFI -> uiState.wifiConnected
+                                ConnectionMode.USB -> uiState.usbConnected
+                            },
                             onHoming = viewModel::sendHoming,
-                            onRunPreset = viewModel::runPreset,
-                            modifier = Modifier.padding(top = 12.dp)
+                            onRunPreset = viewModel::runPreset
                         )
                         1 -> JointControlPage(
                             controlValues = uiState.controlValues,
@@ -226,20 +200,17 @@ fun HandControlScreen() {
                             isConnected = when (uiState.connectionMode) {
                                 ConnectionMode.WIFI -> uiState.wifiConnected
                                 ConnectionMode.USB -> uiState.usbConnected
-                            },
-                            modifier = Modifier.padding(top = 12.dp)
+                            }
                         )
                         2 -> GestureFollowPage(
                             gestureService = gestureService,
                             cameraState = uiState.gestureCameraState,
                             onStartCalibration = { gestureService.startCalibration() },
-                            onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
-                            modifier = Modifier.padding(top = 12.dp)
+                            onRecordCalibrationPose = { gestureService.recordCalibrationPose() }
                         )
                         3 -> LogPage(
                             logs = uiState.logs,
-                            onClearLog = viewModel::clearLogs,
-                            modifier = Modifier.padding(top = 12.dp)
+                            onClearLog = viewModel::clearLogs
                         )
                     }
                 }

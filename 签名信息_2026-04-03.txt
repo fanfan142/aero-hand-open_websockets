@@ -1,0 +1,16 @@
+# Aero Hand Android APK 签名信息
+
+生成时间: 2026-04-03
+
+## Keystore 信息
+- 文件: android/app/debug.keystore
+- Alias: aerohand
+- 密码: aerohand123
+- 密钥算法: RSA 2048
+- 有效期: 10000天
+
+## 用途
+此 keystore 用于 Android APK 签名，CI 构建和本地开发共用同一签名，避免每次安装需要卸载旧版本。
+
+## 注意
+此为开发调试用 keystore，请勿用于生产环境。
