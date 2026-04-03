@@ -110,22 +110,27 @@ class GestureCameraService(
 
     @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun processImage(imageProxy: ImageProxy) {
-        val currentTime = System.nanoTime()
-        val delta = (currentTime - lastFrameTime) / 1_000_000f
-        lastFrameTime = currentTime
+        try {
+            val currentTime = System.nanoTime()
+            val delta = (currentTime - lastFrameTime) / 1_000_000f
+            lastFrameTime = currentTime
 
-        frameTimeBuffer.add(delta.toLong())
-        if (frameTimeBuffer.size > FPS_WINDOW) frameTimeBuffer.removeAt(0)
-        val avgDelta = frameTimeBuffer.average().toFloat()
-        val fps = if (avgDelta > 0) 1000f / avgDelta else 0f
+            frameTimeBuffer.add(delta.toLong())
+            if (frameTimeBuffer.size > FPS_WINDOW) frameTimeBuffer.removeAt(0)
+            val avgDelta = frameTimeBuffer.average().toFloat()
+            val fps = if (avgDelta > 0) 1000f / avgDelta else 0f
 
-        val bitmap = imageProxyToBitmap(imageProxy)
-        if (bitmap != null) {
-            val mpImage = BitmapImageBuilder(bitmap).build()
-            detectHand(mpImage, fps)
+            val bitmap = imageProxyToBitmap(imageProxy)
+            if (bitmap != null) {
+                val mpImage = BitmapImageBuilder(bitmap).build()
+                detectHand(mpImage, fps)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Frame processing failed", e)
+            _state.value = _state.value.copy(handDetected = false)
+        } finally {
+            imageProxy.close()
         }
-
-        imageProxy.close()
     }
 
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
@@ -149,7 +154,12 @@ class GestureCameraService(
             initializeHandLandmarker()
         }
 
-        val result = handLandmarker?.detectForVideo(mpImage, System.currentTimeMillis())
+        val result = try {
+            handLandmarker?.detectForVideo(mpImage, System.currentTimeMillis())
+        } catch (e: Exception) {
+            Log.e(TAG, "Hand detection failed", e)
+            null
+        }
         if (result != null) {
             processResult(result, fps)
         } else {
@@ -184,15 +194,20 @@ class GestureCameraService(
     }
 
     private fun initializeHandLandmarker() {
-        val options = HandLandmarker.HandLandmarkerOptions.builder()
-            .setRunningMode(RunningMode.LIVE_STREAM)
-            .setNumHands(NUM_HANDS)
-            .setMinHandDetectionConfidence(MIN_HAND_DETECTION_CONFIDENCE)
-            .setMinHandPresenceConfidence(MIN_HAND_PRESENCE_CONFIDENCE)
-            .setMinTrackingConfidence(MIN_TRACKING_CONFIDENCE)
-            .build()
+        try {
+            val options = HandLandmarker.HandLandmarkerOptions.builder()
+                .setRunningMode(RunningMode.VIDEO)
+                .setNumHands(NUM_HANDS)
+                .setMinHandDetectionConfidence(MIN_HAND_DETECTION_CONFIDENCE)
+                .setMinHandPresenceConfidence(MIN_HAND_PRESENCE_CONFIDENCE)
+                .setMinTrackingConfidence(MIN_TRACKING_CONFIDENCE)
+                .build()
 
-        handLandmarker = HandLandmarker.createFromOptions(context, options)
+            handLandmarker = HandLandmarker.createFromOptions(context, options)
+        } catch (e: Exception) {
+            Log.e(TAG, "Hand landmarker initialization failed", e)
+            handLandmarker = null
+        }
     }
 
     // MediaPipe landmarks list
