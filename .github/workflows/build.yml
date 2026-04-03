@@ -28,15 +28,26 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Build with Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          arguments: assembleDebug
-          build-root-directory: android
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log || true
+          cat build.log | tail -100
+
+      - name: Check build output
+        run: |
+          if [ -f android/app/build/outputs/apk/debug/app-debug.apk ]; then
+            echo "APK built successfully!"
+            ls -la android/app/build/outputs/apk/debug/
+          else
+            echo "APK not found"
+            ls -la android/app/build/ 2>/dev/null || echo "No build directory"
+          fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
         if: success()
+        uses: actions/upload-artifact@v4
         with:
           name: apk
           path: android/app/build/outputs/apk/debug/*.apk
