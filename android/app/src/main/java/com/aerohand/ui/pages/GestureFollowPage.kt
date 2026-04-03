@@ -82,12 +82,12 @@ fun GestureFollowPage(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Camera preview - 16:9 aspect ratio
+            // Camera preview - portrait ratio
             if (hasCameraPermission) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .aspectRatio(9f / 16f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.Black)
                 ) {
@@ -131,7 +131,7 @@ fun GestureFollowPage(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .aspectRatio(9f / 16f)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.DarkGray),
                     contentAlignment = Alignment.Center
@@ -242,6 +242,7 @@ private fun CameraPreview(
     val previewView = remember {
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
 

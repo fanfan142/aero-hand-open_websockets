@@ -34,9 +34,10 @@ class GestureCameraService(
     companion object {
         private const val TAG = "GestureCameraService"
         private const val NUM_HANDS = 1
-        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.5f
-        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.5f
-        private const val MIN_TRACKING_CONFIDENCE = 0.5f
+        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.3f
+        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.3f
+        private const val MIN_TRACKING_CONFIDENCE = 0.3f
+        private const val HAND_LANDMARKER_MODEL_ASSET = "hand_landmarker.task"
         private const val EMA_ALPHA = 0.7f
         private const val DEADBAND = 2f
         private const val FPS_WINDOW = 10
@@ -85,6 +86,7 @@ class GestureCameraService(
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+            .setTargetRotation(previewView.display.rotation)
             .build()
             .also { analysis ->
                 analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -152,6 +154,10 @@ class GestureCameraService(
     private fun detectHand(mpImage: com.google.mediapipe.framework.image.MPImage, fps: Float) {
         if (handLandmarker == null) {
             initializeHandLandmarker()
+            if (handLandmarker == null) {
+                _state.value = _state.value.copy(handDetected = false, fps = fps)
+                return
+            }
         }
 
         val result = try {
@@ -195,15 +201,26 @@ class GestureCameraService(
 
     private fun initializeHandLandmarker() {
         try {
-            val options = HandLandmarker.HandLandmarkerOptions.builder()
+            val optionsBuilder = HandLandmarker.HandLandmarkerOptions.builder()
                 .setRunningMode(RunningMode.VIDEO)
                 .setNumHands(NUM_HANDS)
                 .setMinHandDetectionConfidence(MIN_HAND_DETECTION_CONFIDENCE)
                 .setMinHandPresenceConfidence(MIN_HAND_PRESENCE_CONFIDENCE)
                 .setMinTrackingConfidence(MIN_TRACKING_CONFIDENCE)
-                .build()
+            val hasModelAsset = runCatching {
+                context.assets.open(HAND_LANDMARKER_MODEL_ASSET).close()
+                true
+            }.getOrElse { false }
 
-            handLandmarker = HandLandmarker.createFromOptions(context, options)
+            if (hasModelAsset) {
+                optionsBuilder.setBaseOptions(
+                    com.google.mediapipe.tasks.core.BaseOptions.builder()
+                        .setModelAssetPath(HAND_LANDMARKER_MODEL_ASSET)
+                        .build()
+                )
+            }
+            handLandmarker = HandLandmarker.createFromOptions(context, optionsBuilder.build())
+            Log.i(TAG, "Hand landmarker initialized (customModel=$hasModelAsset)")
         } catch (e: Exception) {
             Log.e(TAG, "Hand landmarker initialization failed", e)
             handLandmarker = null
