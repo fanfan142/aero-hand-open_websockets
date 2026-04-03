@@ -59,9 +59,8 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 
 推送版本号标签（例如 `v1.1.0`）会触发正式发布工作流：
 
-- 构建 `release` APK
-- 如果配置了签名密钥，则输出签名版本
-- 未配置签名时自动回退为 unsigned release APK 并统一命名上传
+- 强制校验 Android 签名 secrets
+- 构建已签名 `release` APK
 - 自动创建对应版本 Release
 - 上传 `app-release.apk`
 
@@ -72,9 +71,11 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
+如果缺少上述任一 secret，版本标签发布会直接失败，避免无签名 APK 被误发为正式版本。
+
 ## 安装
 
-1. 从 GitHub Release 或 Actions Artifact 下载 APK
+1. 正式安装请优先从版本 Release 下载 `app-release.apk`；`main` 分支的 Actions Artifact / `ci-latest` 更适合预览测试
 2. 将 APK 文件传输到 Android 手机
 3. 在手机设置中允许安装未知来源应用
 4. 直接安装 APK 即可
