@@ -15,6 +15,8 @@
 
 本项目是 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open) 的衍生项目，提供 **3 种独立的 WebSocket 通信方案**。
 
+视频演示：
+https://github.com/fanfan142/aero-hand-open_websockets/blob/main/aero-hand-open_websockets.mp4
 ---
 
 ## 三种方案概览
