@@ -291,6 +291,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         return mapOf(
             "thumb_cmc_abd" to angles.thumbAbd,
             "thumb_cmc_flex" to angles.thumbFlex,
+            // Gesture service outputs thumbFlex in [0,55], while thumb_mcp_ip channel is [0,90].
+            // Scale by target/source range ratio to keep relative motion while filling full tendon range.
             "thumb_mcp_ip" to (angles.thumbFlex * (90f / 55f)).coerceIn(0f, 90f),
             "index_flexion" to angles.indexFlex,
             "middle_flexion" to angles.middleFlex,
