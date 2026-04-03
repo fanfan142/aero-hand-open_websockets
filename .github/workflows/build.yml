@@ -24,24 +24,17 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v2
 
-      - name: Cache Gradle packages
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('android/*.gradle*', 'android/*/*.gradle*') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
 
-      - name: Build Debug APK
-        working-directory: ./android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+      - name: Build with Gradle
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: assembleDebug
+          build-root-directory: android
 
       - name: Upload APK
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: aero-hand-open-apk
@@ -61,7 +54,7 @@ jobs:
 
             ### 功能
             - WiFi WebSocket 连接控制
-            - USB 串口连接支持
+            - USB 串口连接支持（需要额外库）
             - 7 通道滑块控制
             - 快捷动作按钮
             - 实时日志显示
