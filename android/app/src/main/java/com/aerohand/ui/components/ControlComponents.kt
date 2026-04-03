@@ -1,32 +1,22 @@
 package com.aerohand.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -43,15 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.aerohand.viewmodel.ConnectionMode
-import com.aerohand.websocket.CompactControl
-import com.aerohand.websocket.ControlDefinitions
-import com.aerohand.websocket.LogEntry
-import com.aerohand.websocket.PresetAction
+
+// ============== 连接面板 ==============
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,7 +87,6 @@ fun ConnectionPanel(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Tab indicators
             TabRow(
                 selectedTabIndex = selectedTab,
                 modifier = Modifier.clip(RoundedCornerShape(12.dp)),
@@ -130,7 +115,6 @@ fun ConnectionPanel(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Tab content
             when (selectedTab) {
                 0 -> WifiConnectionContent(
                     host = host,
@@ -186,24 +170,22 @@ private fun WifiConnectionContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (connected) {
-                Button(
-                    onClick = onDisconnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("断开")
-                }
-            } else {
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text("连接 WiFi")
-                }
+        if (connected) {
+            Button(
+                onClick = onDisconnect,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("断开")
+            }
+        } else {
+            Button(
+                onClick = onConnect,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Text("连接 WiFi")
             }
         }
     }
@@ -230,248 +212,31 @@ private fun UsbConnectionContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (connected) {
-                Button(
-                    onClick = onDisconnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("断开")
-                }
-            } else {
-                Button(
-                    onClick = onConnect,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text("连接 USB")
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun PresetPanel(
-    presets: List<PresetAction>,
-    activePresetId: String?,
-    isRunning: Boolean,
-    onRunPreset: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    DashboardCard(title = "预设动作", subtitle = "SDK 同源动作库", modifier = modifier) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            maxItemsInEachRow = 3
-        ) {
-            presets.forEach { preset ->
-                val active = activePresetId == preset.id
-                Surface(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(18.dp))
-                        .clickable(enabled = !isRunning || active) { onRunPreset(preset.id) },
-                    shape = RoundedCornerShape(18.dp),
-                    color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        Text(preset.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text(
-                            preset.subtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ControlPanel(
-    controlValues: Map<String, Float>,
-    protocolPreview: String,
-    onControlChange: (String, Float) -> Unit,
-    onHoming: () -> Unit,
-    onAllZeros: () -> Unit,
-    onGetStates: () -> Unit,
-    onClearLog: () -> Unit,
-    isConnected: Boolean,
-    modifier: Modifier = Modifier
-) {
-    DashboardCard(title = "7DoF 控制", subtitle = "实时展开为协议帧", modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            ControlDefinitions.COMPACT_CONTROLS.forEach { control ->
-                SliderCard(
-                    control = control,
-                    value = controlValues[control.id] ?: control.defaultValue,
-                    onValueChange = { onControlChange(control.id, it) },
-                    enabled = isConnected
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            MiniActionButton("Homing", onHoming, isConnected, Modifier.weight(1f), MaterialTheme.colorScheme.tertiary)
-            MiniActionButton("All Zero", onAllZeros, isConnected, Modifier.weight(1f), MaterialTheme.colorScheme.secondary)
-            MiniActionButton("Get States", onGetStates, isConnected, Modifier.weight(1f), MaterialTheme.colorScheme.primary)
-            OutlinedButton(
-                onClick = onClearLog,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Text("Clear", fontSize = 12.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        TelemetryPanel(protocolPreview = protocolPreview)
-    }
-}
-
-@Composable
-private fun TelemetryPanel(protocolPreview: String) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0D1B2A)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text("协议预览", color = Color(0xFF7DD3FC), style = MaterialTheme.typography.labelLarge)
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = protocolPreview,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = Color(0xFFE2E8F0)
-            )
-        }
-    }
-}
-
-@Composable
-fun SliderCard(
-    control: CompactControl,
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    enabled: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Row(
+        if (connected) {
+            Button(
+                onClick = onDisconnect,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
             ) {
-                Text(text = control.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                Text(
-                    text = "${value.toInt()}${control.unit}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text("断开")
             }
-            Row(
+        } else {
+            Button(
+                onClick = onConnect,
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                shape = RoundedCornerShape(18.dp)
             ) {
-                Text(control.min.toInt().toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Slider(
-                    value = value,
-                    onValueChange = onValueChange,
-                    valueRange = control.min..control.max,
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled
-                )
-                Text(control.max.toInt().toString(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("连接 USB")
             }
         }
     }
 }
 
-@Composable
-fun LogPanel(
-    logs: List<LogEntry>,
-    modifier: Modifier = Modifier
-) {
-    DashboardCard(title = "日志", subtitle = "最近 50 条", modifier = modifier) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 220.dp, max = 220.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = Color(0xFF08111F)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(10.dp)
-            ) {
-                if (logs.isEmpty()) {
-                    Text("暂无日志", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = Color(0xFF64748B))
-                } else {
-                    logs.takeLast(50).forEach { entry ->
-                        val color = when (entry) {
-                            is LogEntry.Send -> Color(0xFF38BDF8)
-                            is LogEntry.Receive -> Color(0xFF34D399)
-                            is LogEntry.Error -> Color(0xFFF87171)
-                            is LogEntry.Info -> Color(0xFFCBD5E1)
-                        }
-                        Text(
-                            text = "[${entry.timestamp}] ${entry.message}",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = color,
-                            modifier = Modifier.padding(vertical = 1.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+// ============== 通用组件 ==============
 
 @Composable
-private fun DashboardCard(
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = {
-            Column {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            content()
-        })
-    }
-}
-
-@Composable
-private fun StatusBadge(text: String, active: Boolean) {
+fun StatusBadge(text: String, active: Boolean) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))

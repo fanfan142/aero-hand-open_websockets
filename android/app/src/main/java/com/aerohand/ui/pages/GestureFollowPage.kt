@@ -2,7 +2,6 @@ package com.aerohand.ui.pages
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.view.View
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
@@ -28,7 +27,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,13 +70,6 @@ fun GestureFollowPage(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
-    }
-
-    // Start camera when page is shown
-    LaunchedEffect(Unit) {
-        if (hasCameraPermission) {
-            gestureService.startCamera(PreviewView(context).apply { id = View.generateViewId() })
-        }
     }
 
     Surface(
