@@ -234,6 +234,11 @@ class GestureCameraService(
 
     // MediaPipe landmarks list
     private fun computeFingerAngles(landmarks: List<NormalizedLandmark>): FingerAngles {
+        if (landmarks.size < 21) {
+            Log.w(TAG, "Unexpected landmarks size: ${landmarks.size}")
+            return FingerAngles()
+        }
+
         // MediaPipe hand landmarks (21 points):
         // 0: WRIST
         // 1-4: THUMB (CMC, MCP, IP, TIP)
@@ -389,12 +394,26 @@ class GestureCameraService(
         val openStr = prefs.getString("openAngles", null)
         val fistStr = prefs.getString("fistAngles", null)
         if (openStr != null && fistStr != null) {
-            openAngles = openStr.split(",").map { it.toFloat() }.toFloatArray()
-            fistAngles = fistStr.split(",").map { it.toFloat() }.toFloatArray()
-            thumbInSwing = prefs.getFloat("thumbInSwing", 0f)
-            openThumbSwing = prefs.getFloat("openThumbSwing", 0f)
-            if (openAngles.size == 6 && fistAngles.size == 6) {
-                _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
+            try {
+                openAngles = openStr.split(",").map { it.toFloat() }.toFloatArray()
+                fistAngles = fistStr.split(",").map { it.toFloat() }.toFloatArray()
+                thumbInSwing = prefs.getFloat("thumbInSwing", 0f)
+                openThumbSwing = prefs.getFloat("openThumbSwing", 0f)
+                if (openAngles.size == 6 && fistAngles.size == 6) {
+                    _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
+                } else {
+                    Log.w(TAG, "Invalid calibration data size, reset required")
+                    openAngles = FloatArray(6) { 0f }
+                    fistAngles = FloatArray(6) { 0f }
+                    thumbInSwing = 0f
+                    openThumbSwing = 0f
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse calibration data, reset required", e)
+                openAngles = FloatArray(6) { 0f }
+                fistAngles = FloatArray(6) { 0f }
+                thumbInSwing = 0f
+                openThumbSwing = 0f
             }
         }
     }
