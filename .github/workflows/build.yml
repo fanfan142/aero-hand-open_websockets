@@ -28,19 +28,11 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Download Gradle
-        run: |
-          cd android
-          curl -sL https://services.gradle.org/distributions/gradle-8.2-bin.zip -o gradle.zip
-          unzip -q gradle.zip
-          export PATH=$PWD/gradle-8.2/bin:$PATH
-          gradle wrapper --gradle-version 8.2
-
       - name: Build with Gradle
-        run: |
-          cd android
-          export PATH=$PWD/gradle-8.2/bin:$PATH
-          ./gradlew assembleDebug --no-daemon --stacktrace
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: assembleDebug
+          build-root-directory: android
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
