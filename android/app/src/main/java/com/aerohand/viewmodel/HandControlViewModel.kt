@@ -13,8 +13,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
@@ -212,7 +213,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             )
         )
 
-        return org.json.JSONObject(payload).toString()
+        return JSONObject(payload).toString()
     }
 
     private fun mapRange(value: Float, inMin: Float, inMax: Float, outMin: Float, outMax: Float): Float {
@@ -243,7 +244,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         )
         joints.add(mapOf("joint_id" to "thumb_rotation", "angle" to thumbRotation))
 
-        val preview = org.json.JSONArray(joints).toString(2)
+        val preview = JSONArray(joints).toString(2)
         _uiState.value = _uiState.value.copy(protocolPreview = preview)
     }
 
