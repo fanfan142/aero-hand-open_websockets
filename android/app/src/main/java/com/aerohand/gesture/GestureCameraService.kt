@@ -194,7 +194,7 @@ class GestureCameraService(
         handLandmarker = HandLandmarker.createFromOptions(context, options)
     }
 
-    private fun computeFingerAngles(landmarks: List<HandLandmarkerResult.NormalizedLandmark>): FingerAngles {
+    private fun computeFingerAngles(landmarks: List<HandLandmarkerResult.Landmark>): FingerAngles {
         // MediaPipe hand landmarks (21 points):
         // 0: WRIST
         // 1-4: THUMB (CMC, MCP, IP, TIP)
@@ -203,9 +203,9 @@ class GestureCameraService(
         // 13-16: RING (MCP, PIP, DIP, TIP)
         // 17-20: PINKY (MCP, PIP, DIP, TIP)
 
-        fun angle(p1: HandLandmarkerResult.NormalizedLandmark,
-                  p2: HandLandmarkerResult.NormalizedLandmark,
-                  p3: HandLandmarkerResult.NormalizedLandmark): Float {
+        fun angle(p1: HandLandmarkerResult.Landmark,
+                  p2: HandLandmarkerResult.Landmark,
+                  p3: HandLandmarkerResult.Landmark): Float {
             val v1x = p1.x() - p2.x()
             val v1y = p1.y() - p2.y()
             val v2x = p3.x() - p2.x()
