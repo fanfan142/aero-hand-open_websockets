@@ -166,7 +166,7 @@ class GestureCameraService(
         val result = try {
             val ts = if (frameTimestampMs > 0) {
                 val prev = videoTimestampMs.get()
-                val next = maxOf(prev + VIDEO_FRAME_INTERVAL_MS, frameTimestampMs)
+                val next = if (frameTimestampMs > prev) frameTimestampMs else prev + VIDEO_FRAME_INTERVAL_MS
                 videoTimestampMs.set(next)
                 next
             } else {
@@ -299,7 +299,7 @@ class GestureCameraService(
 
         for (i in raw.indices) {
             val diff = abs(raw[i] - smoothedValues[i])
-            if (diff > DEADBAND) {
+            if (diff >= DEADBAND) {
                 smoothedValues[i] = EMA_ALPHA * raw[i] + (1 - EMA_ALPHA) * smoothedValues[i]
             }
         }
