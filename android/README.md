@@ -53,7 +53,7 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 
 推送到 `main` 分支会自动触发 GitHub Actions：
 
-- 构建 Debug APK
+- 构建 Debug APK（统一签名；版本名自动生成 `1.1.2-t<run_number>`）
 - 上传 Actions Artifact
 - 自动更新预览版 Release `ci-latest`
 - 将 `app-debug.apk` 作为预览资产上传
@@ -64,7 +64,7 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 - 自动创建对应版本 Release
 - 上传 `app-release.apk`
 
-> 正式签名密钥配置后，release 构建会自动切换为正式签名；未配置时回退 debug 签名（仅用于预览/测试）。
+> 正式签名密钥配置后，debug/release 构建都会统一使用该密钥签名；未配置时回退 debug 签名（仅用于预览/测试）。
 
 ### 统一签名（避免每次安装先卸载）
 
@@ -91,6 +91,15 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 `release.yml` 会优先使用这些 Secrets；缺失时自动回退 debug 签名。
 
 > 建议：团队统一维护一套 upload key，至少做离线备份 + 密码托管，避免密钥丢失导致无法升级。
+
+### 测试版版本号规则
+
+CI 预览构建默认使用：
+
+- `versionName = 1.1.2-t<github.run_number>`
+- `versionCode = <github.run_number>`
+
+这样每次测试版都会顺次递增，便于覆盖安装与回溯。
 
 ### MediaPipe 手势识别排障建议
 

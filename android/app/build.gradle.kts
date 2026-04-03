@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import java.util.Properties
+
 android {
     namespace = "com.aerohand"
     compileSdk = 34
@@ -11,8 +13,8 @@ android {
         applicationId = "com.aerohand"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = (project.findProperty("CI_VERSION_CODE") as String?)?.toIntOrNull() ?: 4
+        versionName = (project.findProperty("CI_VERSION_NAME") as String?) ?: "1.1.2"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -23,7 +25,7 @@ android {
         create("release") {
             // 优先使用仓库外配置文件，其次使用 CI 环境变量；都不存在时回退 debug 签名
             val propsFile = rootProject.file("keystore.properties")
-            val props = java.util.Properties()
+            val props = Properties()
             val hasProps = propsFile.exists()
             if (hasProps) {
                 propsFile.inputStream().use { props.load(it) }
@@ -73,6 +75,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
             isDebuggable = false

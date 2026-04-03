@@ -13,6 +13,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      BASE_VERSION_NAME: 1.1.2
 
     steps:
       - name: Checkout
@@ -31,11 +33,37 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
+      - name: Set preview version
+        run: |
+          echo "PREVIEW_VERSION_NAME=${BASE_VERSION_NAME}-t${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "PREVIEW_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - name: Generate debug keystore fallback
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 == '' || secrets.ANDROID_SIGNING_STORE_PASSWORD == '' || secrets.ANDROID_SIGNING_KEY_ALIAS == '' || secrets.ANDROID_SIGNING_KEY_PASSWORD == '' }}
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Prepare signing keystore from secrets
+        if: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 != '' && secrets.ANDROID_SIGNING_STORE_PASSWORD != '' && secrets.ANDROID_SIGNING_KEY_ALIAS != '' && secrets.ANDROID_SIGNING_KEY_PASSWORD != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}" | base64 --decode > /tmp/android-signing.jks
+
       - name: Build APK
+        env:
+          ANDROID_SIGNING_STORE_FILE: /tmp/android-signing.jks
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log || true
+          ./gradlew assembleDebug -PCI_VERSION_NAME="$PREVIEW_VERSION_NAME" -PCI_VERSION_CODE="$PREVIEW_VERSION_CODE" --stacktrace --no-daemon 2>&1 | tee build.log || true
           tail -100 build.log
           test -f app/build/outputs/apk/debug/app-debug.apk
 
