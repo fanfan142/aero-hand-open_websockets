@@ -89,8 +89,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
 
     // MediaPipe Tasks Vision - hand landmark detection
-    implementation("com.google.mediapipe:tasks-vision:0.10.21")
-    implementation("com.google.mediapipe:mediapipe-android:0.10.21")
+    implementation("com.google.mediapipe:tasks-vision:0.9.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
