@@ -50,21 +50,21 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: aero-hand-apk
+          name: aero-hand-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
 
-      - name: Create or update release
+      - name: Create or update preview release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Android Latest Build
+          tag_name: ci-latest
+          name: Android CI Preview
           body: |
-            自动发布的 Android 调试构建。
+            自动发布的 Android 调试预览构建。
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
           files: android/app/build/outputs/apk/debug/app-debug.apk
           overwrite_files: true
           generate_release_notes: true
-          make_latest: true
+          prerelease: true

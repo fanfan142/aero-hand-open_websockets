@@ -3,14 +3,16 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Hand icon -->
     <path
-        android:fillColor="#1976D2"
-        android:pathData="M54,20 L54,45 L40,45 L40,70 L50,70 L50,45 L54,45 L54,70 L68,70 L68,45 L58,45 L58,20 Z" />
+        android:fillColor="#EAF2FF"
+        android:pathData="M54,6A48,48 0 1,1 6,54A48,48 0 0,1 54,6Z" />
     <path
-        android:fillColor="#00ACC1"
-        android:pathData="M35,50 L35,35 L42,35 L42,50 Z" />
+        android:fillColor="#2563EB"
+        android:pathData="M33,28c-4.4,0 -8,3.6 -8,8v24c0,3.3 2.7,6 6,6h6v8c0,3.3 2.7,6 6,6s6,-2.7 6,-6v-8h4v10c0,3.3 2.7,6 6,6s6,-2.7 6,-6v-10h4v8c0,3.3 2.7,6 6,6s6,-2.7 6,-6v-23c0,-3.3 -2.7,-6 -6,-6h-3V24c0,-3.3 -2.7,-6 -6,-6s-6,2.7 -6,6v22h-4V20c0,-3.3 -2.7,-6 -6,-6s-6,2.7 -6,6v26h-4V24c0,-3.3 -2.7,-6 -6,-6s-6,2.7 -6,6v22h-3c-3.3,0 -6,2.7 -6,6v8h-2c-2.2,0 -4,-1.8 -4,-4V36c0,-2.2 1.8,-4 4,-4h2z" />
     <path
-        android:fillColor="#00ACC1"
-        android:pathData="M66,50 L66,35 L73,35 L73,50 Z" />
+        android:fillColor="#7C3AED"
+        android:pathData="M76,24m-8,0a8,8 0 1,1 16,0a8,8 0 1,1 -16,0" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M23,74c7,10 18.5,16 31,16s24,-6 31,-16l-8,-4c-5,6.8 -13.2,11 -23,11s-18,-4.2 -23,-11z" />
 </vector>

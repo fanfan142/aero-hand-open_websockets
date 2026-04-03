@@ -54,8 +54,23 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 
 - 构建 Debug APK
 - 上传 Actions Artifact
-- 自动更新 GitHub Release `latest`
-- 将 APK 作为 Release 资产上传
+- 自动更新预览版 Release `ci-latest`
+- 将 `app-debug.apk` 作为预览资产上传
+
+推送版本号标签（例如 `v1.1.0`）会触发正式发布工作流：
+
+- 构建 `release` APK
+- 如果配置了签名密钥，则输出签名版本
+- 未配置签名时自动回退为 unsigned release APK 并统一命名上传
+- 自动创建对应版本 Release
+- 上传 `app-release.apk`
+
+正式签名所需 GitHub Secrets：
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
 
 ## 安装
 
@@ -130,7 +145,7 @@ android/
 
 - WiFi 模式当前使用明文 `ws://` 连接，适合局域网设备控制场景
 - USB 模式依赖 Android 手机支持 OTG
-- 当前 Release 上传的是 Debug APK，便于快速验证功能
+- `main` 分支预览发布上传的是 Debug APK，版本标签发布上传的是 Release APK
 
 ## License
 

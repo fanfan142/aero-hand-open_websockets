@@ -18,6 +18,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import com.aerohand.BuildConfig
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,8 +63,8 @@ fun HandControlScreen() {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Aero Hand Open")
-                        Text("Mobile Console", style = MaterialTheme.typography.labelSmall)
+                        Text("Aero Hand Console")
+                        Text("v${BuildConfig.VERSION_NAME} · Mobile Console", style = MaterialTheme.typography.labelSmall)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
