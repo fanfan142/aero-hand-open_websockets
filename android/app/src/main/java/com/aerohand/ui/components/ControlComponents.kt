@@ -110,6 +110,12 @@ fun ConnectionPanel(
                     label = { Text("USB OTG") },
                     modifier = Modifier.weight(1f)
                 )
+                FilterChip(
+                    selected = mode == ConnectionMode.GESTURE,
+                    onClick = { onModeChange(ConnectionMode.GESTURE) },
+                    label = { Text("手势") },
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

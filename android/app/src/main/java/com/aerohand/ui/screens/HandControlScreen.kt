@@ -1,6 +1,8 @@
 package com.aerohand.ui.screens
 
 import android.app.Application
+import android.view.View
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,15 +22,22 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import com.aerohand.BuildConfig
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aerohand.gesture.GestureCameraPanel
+import com.aerohand.gesture.GestureCameraService
 import com.aerohand.ui.components.ConnectionPanel
 import com.aerohand.ui.components.ControlPanel
 import com.aerohand.ui.components.LogPanel
@@ -56,7 +65,52 @@ fun HandControlScreen() {
         factory = HandControlViewModelFactory(application)
     )
     val uiState by viewModel.uiState.collectAsState()
-    val connected = if (uiState.connectionMode == ConnectionMode.WIFI) uiState.wifiConnected else uiState.usbConnected
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+
+    val connected = when (uiState.connectionMode) {
+        ConnectionMode.WIFI -> uiState.wifiConnected
+        ConnectionMode.USB -> uiState.usbConnected
+        ConnectionMode.GESTURE -> uiState.gestureCameraState.handDetected &&
+            uiState.gestureCameraState.calibrationState == com.aerohand.gesture.CalibrationState.CALIBRATED
+    }
+
+    // Gesture camera service
+    val gestureService = remember {
+        GestureCameraService(context, lifecycleOwner)
+    }
+
+    // Hidden preview view for camera binding
+    val hiddenPreviewView = remember { PreviewView(context).apply { visibility = View.GONE } }
+
+    // Start camera when in gesture mode
+    LaunchedEffect(uiState.connectionMode) {
+        if (uiState.connectionMode == ConnectionMode.GESTURE) {
+            gestureService.startCamera(hiddenPreviewView)
+        } else {
+            gestureService.stopCamera()
+        }
+    }
+
+    // Collect gesture state and update viewmodel
+    LaunchedEffect(gestureService.state) {
+        gestureService.state.collect { state ->
+            viewModel.updateGestureCameraState(state)
+            if (uiState.connectionMode == ConnectionMode.GESTURE &&
+                state.calibrationState == com.aerohand.gesture.CalibrationState.CALIBRATED &&
+                state.handDetected
+            ) {
+                val calibratedAngles = gestureService.getCalibratedAngles()
+                viewModel.updateControlValuesFromGesture(calibratedAngles)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            gestureService.release()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -107,6 +161,15 @@ fun HandControlScreen() {
                     onConnect = viewModel::connect,
                     onDisconnect = viewModel::disconnect
                 )
+
+                // Gesture camera panel (shown when in GESTURE mode)
+                if (uiState.connectionMode == ConnectionMode.GESTURE) {
+                    GestureCameraPanel(
+                        cameraState = uiState.gestureCameraState,
+                        onStartCalibration = { gestureService.startCalibration() },
+                        onRecordCalibrationPose = { gestureService.recordCalibrationPose() }
+                    )
+                }
 
                 PresetPanel(
                     presets = uiState.presetActions,

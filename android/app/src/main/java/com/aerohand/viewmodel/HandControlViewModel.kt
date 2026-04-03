@@ -3,6 +3,9 @@ package com.aerohand.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.aerohand.gesture.CalibrationState
+import com.aerohand.gesture.FingerAngles
+import com.aerohand.gesture.GestureCameraState
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
 import com.aerohand.websocket.ConnectionState
@@ -32,12 +35,15 @@ data class HandControlUiState(
     val statusMessage: String = "准备就绪",
     val presetActions: List<PresetAction> = PresetActions.all,
     val activePresetId: String? = null,
-    val isPresetRunning: Boolean = false
+    val isPresetRunning: Boolean = false,
+    val gestureCameraState: GestureCameraState = GestureCameraState(),
+    val gestureEnabled: Boolean = false
 )
 
 enum class ConnectionMode {
     WIFI,
-    USB
+    USB,
+    GESTURE
 }
 
 class HandControlViewModel(application: Application) : AndroidViewModel(application) {
@@ -121,10 +127,16 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         mutateState {
             copy(
                 connectionMode = mode,
-                logs = if (mode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs,
+                logs = when (mode) {
+                    ConnectionMode.WIFI -> latestWifiLogs
+                    ConnectionMode.USB -> latestUsbLogs
+                    ConnectionMode.GESTURE -> emptyList()
+                },
+                gestureEnabled = mode == ConnectionMode.GESTURE,
                 statusMessage = when (mode) {
                     ConnectionMode.WIFI -> if (wifiConnected) statusMessage else "WiFi 未连接"
                     ConnectionMode.USB -> if (usbConnected) statusMessage else "USB 未连接"
+                    ConnectionMode.GESTURE -> if (gestureCameraState.calibrationState == CalibrationState.CALIBRATED) "手势控制就绪" else "请先校准手势"
                 }
             )
         }
@@ -140,22 +152,28 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     fun connect() {
         val state = _uiState.value
-        if (state.connectionMode == ConnectionMode.WIFI) {
-            val host = state.host.trim().ifBlank { "192.168.4.1" }
-            val port = state.port.toIntOrNull() ?: 8765
-            webSocketService.connect(host, port)
-        } else {
-            usbSerialService.findAndConnect()
+        when (state.connectionMode) {
+            ConnectionMode.WIFI -> {
+                val host = state.host.trim().ifBlank { "192.168.4.1" }
+                val port = state.port.toIntOrNull() ?: 8765
+                webSocketService.connect(host, port)
+            }
+            ConnectionMode.USB -> {
+                usbSerialService.findAndConnect()
+            }
+            ConnectionMode.GESTURE -> {
+                mutateState { copy(statusMessage = "手势控制已启用") }
+            }
         }
     }
 
     fun disconnect() {
         presetJob?.cancel()
         mutateState { copy(isPresetRunning = false, activePresetId = null) }
-        if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
-            webSocketService.disconnect()
-        } else {
-            usbSerialService.disconnect()
+        when (_uiState.value.connectionMode) {
+            ConnectionMode.WIFI -> webSocketService.disconnect()
+            ConnectionMode.USB -> usbSerialService.disconnect()
+            ConnectionMode.GESTURE -> { /* gesture camera stopped by composable */ }
         }
     }
 
@@ -176,6 +194,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.sendHoming()
             ConnectionMode.USB -> usbSerialService.sendHoming()
+            ConnectionMode.GESTURE -> { /* gesture mode: homing not supported */ }
         }
     }
 
@@ -189,6 +208,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.requestStates()
             ConnectionMode.USB -> usbSerialService.requestStates()
+            ConnectionMode.GESTURE -> { /* gesture mode: state query not supported */ }
         }
     }
 
@@ -240,6 +260,11 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     usbSerialService.sendCompactState(values)
                 }
             }
+            ConnectionMode.GESTURE -> {
+                if (state.wifiConnected) {
+                    webSocketService.sendCompactState(values, durationMs)
+                }
+            }
         }
     }
 
@@ -249,13 +274,22 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun refreshLogs() {
         mutateState {
-            copy(logs = if (connectionMode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs)
+            copy(logs = when (connectionMode) {
+                ConnectionMode.WIFI -> latestWifiLogs
+                ConnectionMode.USB -> latestUsbLogs
+                ConnectionMode.GESTURE -> emptyList()
+            })
         }
     }
 
     private fun isConnected(): Boolean {
         val state = _uiState.value
-        return if (state.connectionMode == ConnectionMode.WIFI) state.wifiConnected else state.usbConnected
+        return when (state.connectionMode) {
+            ConnectionMode.WIFI -> state.wifiConnected
+            ConnectionMode.USB -> state.usbConnected
+            ConnectionMode.GESTURE -> state.gestureCameraState.handDetected &&
+                state.gestureCameraState.calibrationState == CalibrationState.CALIBRATED
+        }
     }
 
     private fun mutateState(transform: HandControlUiState.() -> HandControlUiState) {
@@ -267,5 +301,27 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         super.onCleared()
         webSocketService.disconnect()
         usbSerialService.release()
+    }
+
+    fun updateGestureCameraState(state: GestureCameraState) {
+        mutateState { copy(gestureCameraState = state) }
+    }
+
+    fun fingerAnglesToCompactState(angles: FingerAngles): Map<String, Float> {
+        return mapOf(
+            "thumb_cmc_abd" to angles.thumbAbd,
+            "thumb_cmc_flex" to angles.thumbFlex,
+            "thumb_mcp_ip" to angles.thumbFlex,
+            "index_flexion" to angles.indexFlex,
+            "middle_flexion" to angles.middleFlex,
+            "ring_flexion" to angles.ringFlex,
+            "pinky_flexion" to angles.pinkyFlex
+        )
+    }
+
+    fun updateControlValuesFromGesture(angles: FingerAngles) {
+        val compactState = fingerAnglesToCompactState(angles)
+        updateControlValues(compactState)
+        sendCurrentState()
     }
 }

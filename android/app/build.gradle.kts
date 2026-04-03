@@ -82,6 +82,15 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
 
+    // CameraX for gesture capture
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
+
+    // MediaPipe Tasks Vision - hand landmark detection
+    implementation("com.google.mediapipe:tasks-vision:0.10.21")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
