@@ -164,7 +164,6 @@ fun GestureFollowPage(
                                 Text(
                                     text = "▼",
                                     color = Color.White,
-                                    fontSize = androidx.compose.ui.unit.TextUnit.Unset,
                                     modifier = Modifier.rotate(rotation)
                                 )
                             }
