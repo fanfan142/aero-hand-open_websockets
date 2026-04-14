@@ -61,6 +61,8 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 --decode > /tmp/android-signing.jks
+            ls -la /tmp/android-signing.jks
+            echo "Keystore file size: $(wc -c < /tmp/android-signing.jks) bytes"
           fi
 
       - name: Build APK
