@@ -55,12 +55,12 @@ class GestureCameraService(
     private val _state = MutableStateFlow(GestureCameraState())
     val state: StateFlow<GestureCameraState> = _state
 
-    private var openAngles = FloatArray(6) { 0f }
-    private var fistAngles = FloatArray(6) { 0f }
+    private var openAngles = FloatArray(7) { 0f }
+    private var fistAngles = FloatArray(7) { 0f }
     private var thumbInSwing = 0f
     private var openThumbSwing = 0f
 
-    private var smoothedValues = FloatArray(6) { 0f }
+    private var smoothedValues = FloatArray(7) { 0f }
     private var lastFrameTime = System.nanoTime()
     private var frameTimeBuffer = mutableListOf<Long>()
     private val videoTimestampMs = AtomicLong(0L)
@@ -244,23 +244,29 @@ class GestureCameraService(
         }
     }
 
-    // MediaPipe landmarks list
+    // MediaPipe hand landmarks (21 points):
+    // 0: WRIST
+    // 1-4: THUMB (CMC, MCP, IP, TIP)
+    // 5-8: INDEX (MCP, PIP, DIP, TIP)
+    // 9-12: MIDDLE (MCP, PIP, DIP, TIP)
+    // 13-16: RING (MCP, PIP, DIP, TIP)
+    // 17-20: PINKY (MCP, PIP, DIP, TIP)
+    //
+    // Aero Hand 7 actuation mapping:
+    // 0: thumb_cmc_abd  - thumb abduction (spread from index)
+    // 1: thumb_cmc_flex - thumb CMC flexion (WRIST-CMC-MCP angle)
+    // 2: thumb_tendon   - thumb tendon/movement (MCP-IP-TIP angle)
+    // 3: index_tendon   - index finger tendon (MCP-PIP-DIP angle)
+    // 4: middle_tendon  - middle finger tendon (MCP-PIP-DIP angle)
+    // 5: ring_tendon    - ring finger tendon (MCP-PIP-DIP angle)
+    // 6: pinky_tendon   - pinky finger tendon (MCP-PIP-DIP angle)
+
     private fun computeFingerAngles(landmarks: List<NormalizedLandmark>): FingerAngles {
         if (landmarks.size < 21) {
             Log.w(TAG, "Unexpected landmarks size: ${landmarks.size}")
             return FingerAngles()
         }
 
-        // MediaPipe hand landmarks (21 points):
-        // 0: WRIST
-        // 1-4: THUMB (CMC, MCP, IP, TIP)
-        // 5-8: INDEX (MCP, PIP, DIP, TIP)
-        // 9-12: MIDDLE (MCP, PIP, DIP, TIP)
-        // 13-16: RING (MCP, PIP, DIP, TIP)
-        // 17-20: PINKY (MCP, PIP, DIP, TIP)
-
-        // Use consecutive joints for finger flexion (MCP -> PIP -> DIP)
-        // This better reflects actual finger bending
         fun angle(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
             val v1x = p1.x() - p2.x()
             val v1y = p1.y() - p2.y()
@@ -276,40 +282,38 @@ class GestureCameraService(
             return Math.toDegrees(acos(cosVal.toDouble()).toDouble()).toFloat()
         }
 
-        // Index finger: MCP[5] - PIP[6] - DIP[7] (consecutive joints for flexion)
-        val indexFlex = angle(landmarks[5], landmarks[6], landmarks[7])
-        // Middle finger: MCP[9] - PIP[10] - DIP[11]
-        val middleFlex = angle(landmarks[9], landmarks[10], landmarks[11])
-        // Ring finger: MCP[13] - PIP[14] - DIP[15]
-        val ringFlex = angle(landmarks[13], landmarks[14], landmarks[15])
-        // Pinky: MCP[17] - PIP[18] - DIP[19]
-        val pinkyFlex = angle(landmarks[17], landmarks[18], landmarks[19])
-
-        // Thumb: MCP[2] - IP[3] - TIP[4] (consecutive joints for thumb flexion)
-        val thumbFlexAngle = angle(landmarks[2], landmarks[3], landmarks[4])
-        // Thumb abduction: distance between thumb tip and index MCP (x-axis difference)
+        // 0: thumb_cmc_abd - thumb abduction (x-distance between thumb tip and index MCP)
         val thumbTipX = landmarks[4].x()
         val indexMcpX = landmarks[5].x()
         val thumbAbd = abs(thumbTipX - indexMcpX) * 100f
 
-        // Scale thumb flexion to match control range (0-55 degrees)
-        val thumbFlex = (thumbFlexAngle / 90f * 55f).coerceIn(0f, 55f)
+        // 1: thumb_cmc_flex - thumb CMC flexion (WRIST-CMC-MCP angle)
+        val thumbCmcFlex = angle(landmarks[0], landmarks[1], landmarks[2])
+
+        // 2: thumb_tendon - thumb tendon/movement (MCP-IP-TIP angle)
+        val thumbTendon = angle(landmarks[2], landmarks[3], landmarks[4])
+
+        // 3-6: finger tendons - MCP-PIP-DIP consecutive joint angles
+        val indexTendon = angle(landmarks[5], landmarks[6], landmarks[7])
+        val middleTendon = angle(landmarks[9], landmarks[10], landmarks[11])
+        val ringTendon = angle(landmarks[13], landmarks[14], landmarks[15])
+        val pinkyTendon = angle(landmarks[17], landmarks[18], landmarks[19])
 
         return FingerAngles(
             thumbAbd = thumbAbd.coerceIn(0f, 100f),
-            thumbFlex = thumbFlex,
-            indexFlex = indexFlex.coerceIn(0f, 90f),
-            middleFlex = middleFlex.coerceIn(0f, 90f),
-            ringFlex = ringFlex.coerceIn(0f, 90f),
-            pinkyFlex = pinkyFlex.coerceIn(0f, 90f)
+            thumbCmcFlex = thumbCmcFlex.coerceIn(0f, 90f),
+            thumbTendon = thumbTendon.coerceIn(0f, 90f),
+            indexTendon = indexTendon.coerceIn(0f, 90f),
+            middleTendon = middleTendon.coerceIn(0f, 90f),
+            ringTendon = ringTendon.coerceIn(0f, 90f),
+            pinkyTendon = pinkyTendon.coerceIn(0f, 90f)
         )
     }
 
     private fun applySmoothing(angles: FingerAngles): FingerAngles {
         val raw = floatArrayOf(
-            angles.thumbAbd, angles.thumbFlex,
-            angles.indexFlex, angles.middleFlex,
-            angles.ringFlex, angles.pinkyFlex
+            angles.thumbAbd, angles.thumbCmcFlex, angles.thumbTendon,
+            angles.indexTendon, angles.middleTendon, angles.ringTendon, angles.pinkyTendon
         )
 
         for (i in raw.indices) {
@@ -321,11 +325,12 @@ class GestureCameraService(
 
         return FingerAngles(
             thumbAbd = smoothedValues[0],
-            thumbFlex = smoothedValues[1],
-            indexFlex = smoothedValues[2],
-            middleFlex = smoothedValues[3],
-            ringFlex = smoothedValues[4],
-            pinkyFlex = smoothedValues[5]
+            thumbCmcFlex = smoothedValues[1],
+            thumbTendon = smoothedValues[2],
+            indexTendon = smoothedValues[3],
+            middleTendon = smoothedValues[4],
+            ringTendon = smoothedValues[5],
+            pinkyTendon = smoothedValues[6]
         )
     }
 
@@ -339,17 +344,17 @@ class GestureCameraService(
         when (_state.value.calibrationState) {
             CalibrationState.CALIBRATING_OPEN -> {
                 openAngles = floatArrayOf(
-                    current.thumbAbd, current.thumbFlex,
-                    current.indexFlex, current.middleFlex,
-                    current.ringFlex, current.pinkyFlex
+                    current.thumbAbd, current.thumbCmcFlex, current.thumbTendon,
+                    current.indexTendon, current.middleTendon,
+                    current.ringTendon, current.pinkyTendon
                 )
                 _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_FIST)
             }
             CalibrationState.CALIBRATING_FIST -> {
                 fistAngles = floatArrayOf(
-                    current.thumbAbd, current.thumbFlex,
-                    current.indexFlex, current.middleFlex,
-                    current.ringFlex, current.pinkyFlex
+                    current.thumbAbd, current.thumbCmcFlex, current.thumbTendon,
+                    current.indexTendon, current.middleTendon,
+                    current.ringTendon, current.pinkyTendon
                 )
                 _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_THUMB_IN)
             }
@@ -373,25 +378,32 @@ class GestureCameraService(
             return ((value - min) / (max - min) * 100f).coerceIn(0f, 100f)
         }
 
-        val indexFlex = remap(values[2], openAngles[2], fistAngles[2])
-        val middleFlex = remap(values[3], openAngles[3], fistAngles[3])
-        val ringFlex = remap(values[4], openAngles[4], fistAngles[4])
-        val pinkyFlex = remap(values[5], openAngles[5], fistAngles[5])
+        // Index 3-6: finger tendons (index, middle, ring, pinky)
+        val indexTendon = remap(values[3], openAngles[3], fistAngles[3])
+        val middleTendon = remap(values[4], openAngles[4], fistAngles[4])
+        val ringTendon = remap(values[5], openAngles[5], fistAngles[5])
+        val pinkyTendon = remap(values[6], openAngles[6], fistAngles[6])
 
+        // Thumb abduction (index 0)
         val thumbSwingRange = openThumbSwing - thumbInSwing
         val thumbAbd = if (thumbSwingRange > 0.001f) {
             ((openThumbSwing - values[0]) / thumbSwingRange * 100f).coerceIn(0f, 100f)
         } else 0f
 
-        val thumbFlex = remap(values[1], openAngles[1], fistAngles[1]) * 55f / 100f
+        // Thumb CMC flexion (index 1)
+        val thumbCmcFlex = remap(values[1], openAngles[1], fistAngles[1])
+
+        // Thumb tendon (index 2)
+        val thumbTendon = remap(values[2], openAngles[2], fistAngles[2])
 
         return FingerAngles(
             thumbAbd = thumbAbd,
-            thumbFlex = thumbFlex.coerceIn(0f, 55f),
-            indexFlex = indexFlex,
-            middleFlex = middleFlex,
-            ringFlex = ringFlex,
-            pinkyFlex = pinkyFlex
+            thumbCmcFlex = thumbCmcFlex,
+            thumbTendon = thumbTendon,
+            indexTendon = indexTendon,
+            middleTendon = middleTendon,
+            ringTendon = ringTendon,
+            pinkyTendon = pinkyTendon
         )
     }
 
@@ -414,19 +426,19 @@ class GestureCameraService(
                 fistAngles = fistStr.split(",").map { it.toFloat() }.toFloatArray()
                 thumbInSwing = prefs.getFloat("thumbInSwing", 0f)
                 openThumbSwing = prefs.getFloat("openThumbSwing", 0f)
-                if (openAngles.size == 6 && fistAngles.size == 6) {
+                if (openAngles.size == 7 && fistAngles.size == 7) {
                     _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
                 } else {
                     Log.w(TAG, "Invalid calibration data size, reset required")
-                    openAngles = FloatArray(6) { 0f }
-                    fistAngles = FloatArray(6) { 0f }
+                    openAngles = FloatArray(7) { 0f }
+                    fistAngles = FloatArray(7) { 0f }
                     thumbInSwing = 0f
                     openThumbSwing = 0f
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse calibration data, reset required", e)
-                openAngles = FloatArray(6) { 0f }
-                fistAngles = FloatArray(6) { 0f }
+                openAngles = FloatArray(7) { 0f }
+                fistAngles = FloatArray(7) { 0f }
                 thumbInSwing = 0f
                 openThumbSwing = 0f
             }

@@ -313,11 +313,12 @@ private fun CameraPreview(
 private fun FingerStatusBars(angles: FingerAngles) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         FingerBar("拇指外展", angles.thumbAbd, 0f, 100f, Color(0xFFF59E0B))
-        FingerBar("拇指屈曲", angles.thumbFlex, 0f, 55f, Color(0xFFFB923C))
-        FingerBar("食指", angles.indexFlex, 0f, 90f, Color(0xFF3B82F6))
-        FingerBar("中指", angles.middleFlex, 0f, 90f, Color(0xFF10B981))
-        FingerBar("无名指", angles.ringFlex, 0f, 90f, Color(0xFF8B5CF6))
-        FingerBar("小指", angles.pinkyFlex, 0f, 90f, Color(0xFFEC4899))
+        FingerBar("拇指CMC屈曲", angles.thumbCmcFlex, 0f, 90f, Color(0xFFFB923C))
+        FingerBar("拇指肌腱", angles.thumbTendon, 0f, 90f, Color(0xFFF97316))
+        FingerBar("食指肌腱", angles.indexTendon, 0f, 90f, Color(0xFF3B82F6))
+        FingerBar("中指肌腱", angles.middleTendon, 0f, 90f, Color(0xFF10B981))
+        FingerBar("无名指肌腱", angles.ringTendon, 0f, 90f, Color(0xFF8B5CF6))
+        FingerBar("小指肌腱", angles.pinkyTendon, 0f, 90f, Color(0xFFEC4899))
     }
 }
 
