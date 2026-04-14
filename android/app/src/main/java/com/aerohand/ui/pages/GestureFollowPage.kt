@@ -123,51 +123,50 @@ fun GestureFollowPage(
                             horizontalAlignment = Alignment.End,
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            // Toggle button (triangle)
+                            // Status panel (visible by default)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (cameraState.handDetected) Color(0xFF34D399)
+                                            else Color(0xFFF87171)
+                                        )
+                                )
+                                Text(
+                                    text = if (cameraState.handDetected) " 已检测" else " 未检测",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White
+                                )
+                            }
+
+                            // Toggle button (triangle) - click to hide/show status
                             Box(
                                 modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .size(24.dp)
+                                    .clip(RoundedCornerShape(6.dp))
                                     .background(Color.Black.copy(alpha = 0.5f))
                                     .clickable { showStatusOverlay = !showStatusOverlay },
                                 contentAlignment = Alignment.Center
                             ) {
-                                // Triangle pointing down when collapsed, up when expanded
+                                // Triangle pointing up when status visible (click to hide), down when hidden
                                 val rotation by animateFloatAsState(
-                                    targetValue = if (showStatusOverlay) 180f else 0f,
+                                    targetValue = if (showStatusOverlay) 0f else 180f,
                                     label = "triangle_rotation"
                                 )
                                 Text(
                                     text = "▼",
                                     color = Color.White,
+                                    fontSize = androidx.compose.ui.unit.TextUnit.Unset,
                                     modifier = Modifier.rotate(rotation)
                                 )
-                            }
-
-                            // Status panel (collapsible)
-                            AnimatedVisibility(visible = showStatusOverlay) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(Color.Black.copy(alpha = 0.5f))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (cameraState.handDetected) Color(0xFF34D399)
-                                                else Color(0xFFF87171)
-                                            )
-                                    )
-                                    Text(
-                                        text = if (cameraState.handDetected) " 已检测" else " 未检测",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.White
-                                    )
-                                }
                             }
                         }
                     }
