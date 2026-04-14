@@ -259,6 +259,8 @@ class GestureCameraService(
         // 13-16: RING (MCP, PIP, DIP, TIP)
         // 17-20: PINKY (MCP, PIP, DIP, TIP)
 
+        // Use consecutive joints for finger flexion (MCP -> PIP -> DIP)
+        // This better reflects actual finger bending
         fun angle(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
             val v1x = p1.x() - p2.x()
             val v1y = p1.y() - p2.y()
@@ -274,23 +276,24 @@ class GestureCameraService(
             return Math.toDegrees(acos(cosVal.toDouble()).toDouble()).toFloat()
         }
 
-        // Index finger: wrist[0] - MCP[5] - PIP[6]
-        val indexFlex = angle(landmarks[0], landmarks[5], landmarks[6])
-        // Middle finger: wrist[0] - MCP[9] - PIP[10]
-        val middleFlex = angle(landmarks[0], landmarks[9], landmarks[10])
-        // Ring finger: wrist[0] - MCP[13] - PIP[14]
-        val ringFlex = angle(landmarks[0], landmarks[13], landmarks[14])
-        // Pinky: wrist[0] - MCP[17] - PIP[18]
-        val pinkyFlex = angle(landmarks[0], landmarks[17], landmarks[18])
+        // Index finger: MCP[5] - PIP[6] - DIP[7] (consecutive joints for flexion)
+        val indexFlex = angle(landmarks[5], landmarks[6], landmarks[7])
+        // Middle finger: MCP[9] - PIP[10] - DIP[11]
+        val middleFlex = angle(landmarks[9], landmarks[10], landmarks[11])
+        // Ring finger: MCP[13] - PIP[14] - DIP[15]
+        val ringFlex = angle(landmarks[13], landmarks[14], landmarks[15])
+        // Pinky: MCP[17] - PIP[18] - DIP[19]
+        val pinkyFlex = angle(landmarks[17], landmarks[18], landmarks[19])
 
-        // Thumb: wrist[0] - MCP[2] - IP[3]
-        val thumbMcpAngle = angle(landmarks[0], landmarks[2], landmarks[3])
+        // Thumb: MCP[2] - IP[3] - TIP[4] (consecutive joints for thumb flexion)
+        val thumbFlexAngle = angle(landmarks[2], landmarks[3], landmarks[4])
+        // Thumb abduction: distance between thumb tip and index MCP (x-axis difference)
         val thumbTipX = landmarks[4].x()
         val indexMcpX = landmarks[5].x()
         val thumbAbd = abs(thumbTipX - indexMcpX) * 100f
 
-        // Normalize thumb flexion to 0-55 range
-        val thumbFlex = (thumbMcpAngle / 90f * 55f).coerceIn(0f, 55f)
+        // Scale thumb flexion to match control range (0-55 degrees)
+        val thumbFlex = (thumbFlexAngle / 90f * 55f).coerceIn(0f, 55f)
 
         return FingerAngles(
             thumbAbd = thumbAbd.coerceIn(0f, 100f),
