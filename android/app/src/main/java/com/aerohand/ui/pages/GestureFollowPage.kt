@@ -5,7 +5,10 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,11 +24,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,9 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -73,6 +80,9 @@ fun GestureFollowPage(
         hasCameraPermission = granted
     }
 
+    // Visibility state for status overlay
+    var showStatusOverlay by remember { mutableStateOf(true) }
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -103,33 +113,62 @@ fun GestureFollowPage(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Overlay: hand detection status
+                    // Overlay: hand detection status with toggle button
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(8.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(Color.Black.copy(alpha = 0.5f))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            // Toggle button (triangle)
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (cameraState.handDetected) Color(0xFF34D399)
-                                        else Color(0xFFF87171)
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .clickable { showStatusOverlay = !showStatusOverlay },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                // Triangle pointing down when collapsed, up when expanded
+                                val rotation by animateFloatAsState(
+                                    targetValue = if (showStatusOverlay) 180f else 0f,
+                                    label = "triangle_rotation"
+                                )
+                                Text(
+                                    text = "▼",
+                                    color = Color.White,
+                                    modifier = Modifier.rotate(rotation)
+                                )
+                            }
+
+                            // Status panel (collapsible)
+                            AnimatedVisibility(visible = showStatusOverlay) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(Color.Black.copy(alpha = 0.5f))
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (cameraState.handDetected) Color(0xFF34D399)
+                                                else Color(0xFFF87171)
+                                            )
                                     )
-                            )
-                            Text(
-                                text = if (cameraState.handDetected) " 已检测" else " 未检测",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White
-                            )
+                                    Text(
+                                        text = if (cameraState.handDetected) " 已检测" else " 未检测",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                 }
