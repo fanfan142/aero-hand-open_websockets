@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,7 +25,7 @@ android {
         create("release") {
             // 优先使用仓库外配置文件，其次使用 CI 环境变量；都不存在时回退 debug 签名
             val propsFile = rootProject.file("keystore.properties")
-            val props = java.util.Properties()
+            val props = Properties()
             val hasProps = propsFile.exists()
             if (hasProps) {
                 propsFile.inputStream().use { props.load(it) }
