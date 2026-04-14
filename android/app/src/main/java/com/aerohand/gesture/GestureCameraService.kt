@@ -142,8 +142,19 @@ class GestureCameraService(
         return try {
             val bitmap = imageProxy.toBitmap()
             val rotation = imageProxy.imageInfo.rotationDegrees
+            val isFrontCamera = true // Front camera is used
+
+            val matrix = Matrix()
+            // First handle rotation
             if (rotation != 0) {
-                val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+                matrix.postRotate(rotation.toFloat())
+            }
+            // Mirror horizontally for front camera
+            if (isFrontCamera) {
+                matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
+            }
+
+            if (rotation != 0 || isFrontCamera) {
                 Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
             } else {
                 bitmap

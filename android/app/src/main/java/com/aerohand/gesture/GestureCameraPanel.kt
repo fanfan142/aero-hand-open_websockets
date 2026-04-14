@@ -229,10 +229,11 @@ fun SkeletonOverlay(
         val w = size.width
         val h = size.height
 
-        // Convert landmarks to pixel coordinates (mirrored for front camera)
+        // Convert landmarks to pixel coordinates
+        // Note: image is already mirrored in GestureCameraService, so no additional flip needed
         val points = landmarks.map { lm ->
             Offset(
-                x = (1f - lm.x()) * w,  // Mirror horizontally for front camera
+                x = lm.x() * w,
                 y = lm.y() * h
             )
         }
