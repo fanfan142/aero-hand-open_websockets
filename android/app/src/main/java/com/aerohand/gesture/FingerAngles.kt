@@ -1,5 +1,7 @@
 package com.aerohand.gesture
 
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+
 data class FingerAngles(
     val thumbAbd: Float = 0f,
     val thumbFlex: Float = 0f,
@@ -16,7 +18,8 @@ data class GestureCameraState(
     val rawAngles: FingerAngles = FingerAngles(),
     val smoothedAngles: FingerAngles = FingerAngles(),
     val calibrationState: CalibrationState = CalibrationState.NOT_CALIBRATED,
-    val fps: Float = 0f
+    val fps: Float = 0f,
+    val landmarks: List<NormalizedLandmark> = emptyList()
 )
 
 enum class CalibrationState {

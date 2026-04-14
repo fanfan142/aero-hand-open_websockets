@@ -47,6 +47,7 @@ import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraService
 import com.aerohand.gesture.GestureCameraState
+import com.aerohand.gesture.SkeletonOverlay
 
 @Composable
 fun GestureFollowPage(
@@ -93,6 +94,12 @@ fun GestureFollowPage(
                 ) {
                     CameraPreview(
                         gestureService = gestureService,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Skeleton overlay
+                    SkeletonOverlay(
+                        landmarks = cameraState.landmarks,
                         modifier = Modifier.fillMaxSize()
                     )
 

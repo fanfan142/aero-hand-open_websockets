@@ -198,10 +198,11 @@ class GestureCameraService(
                 rawAngles = angles,
                 smoothedAngles = smoothed,
                 fps = fps,
-                calibrationState = calibState
+                calibrationState = calibState,
+                landmarks = landmarks[0]
             )
         } else {
-            _state.value = _state.value.copy(handDetected = false, fps = fps)
+            _state.value = _state.value.copy(handDetected = false, fps = fps, landmarks = emptyList())
         }
     }
 
