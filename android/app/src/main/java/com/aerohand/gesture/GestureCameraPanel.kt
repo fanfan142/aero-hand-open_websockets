@@ -110,7 +110,10 @@ fun GestureCameraPanel(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        if (cameraState.handDetected) "检测到手部" else "未检测",
+                        if (cameraState.handDetected) {
+                            val hand = if (cameraState.handedness.isNotEmpty()) " ${cameraState.handedness}" else ""
+                            "检测到手部$hand"
+                        } else "未检测",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (cameraState.handDetected) ComposeColor(0xFF166534)
                         else ComposeColor(0xFF991B1B)
@@ -138,8 +141,11 @@ fun GestureCameraPanel(
                 }
             }
 
-            // Finger status bars
-            FingerStatusBars(angles = cameraState.smoothedAngles)
+            // Finger status bars - show calibrated angles when available
+            FingerStatusBars(
+                angles = if (cameraState.calibrationState == CalibrationState.CALIBRATED)
+                    cameraState.calibratedAngles else cameraState.smoothedAngles
+            )
 
             // Calibration buttons
             Row(

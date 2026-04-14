@@ -202,18 +202,33 @@ class GestureCameraService(
             val angles = computeFingerAngles(landmarks[0])
             val smoothed = applySmoothing(angles)
 
+            // Extract handedness from result
+            val handednessList = result.handedness()
+            val handedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
+                handednessList[0][0].categoryName()
+            } else ""
+
             val calibState = _state.value.calibrationState
+
+            // Compute calibrated angles when calibrated
+            val calibrated = if (calibState == CalibrationState.CALIBRATED) {
+                remapByCalibration(smoothedValues)
+            } else {
+                smoothed
+            }
 
             _state.value = _state.value.copy(
                 handDetected = true,
+                handedness = handedness,
                 rawAngles = angles,
                 smoothedAngles = smoothed,
+                calibratedAngles = calibrated,
                 fps = fps,
                 calibrationState = calibState,
                 landmarks = landmarks[0]
             )
         } else {
-            _state.value = _state.value.copy(handDetected = false, fps = fps, landmarks = emptyList())
+            _state.value = _state.value.copy(handDetected = false, handedness = "", fps = fps, landmarks = emptyList())
         }
     }
 

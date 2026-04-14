@@ -141,7 +141,10 @@ fun GestureFollowPage(
                                         )
                                 )
                                 Text(
-                                    text = if (cameraState.handDetected) " 已检测" else " 未检测",
+                                    text = if (cameraState.handDetected) {
+                                        val hand = if (cameraState.handedness.isNotEmpty()) " ${cameraState.handedness}" else ""
+                                        " 已检测$hand"
+                                    } else " 未检测",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White
                                 )
@@ -224,8 +227,11 @@ fun GestureFollowPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Finger status bars
-            FingerStatusBars(angles = cameraState.smoothedAngles)
+            // Finger status bars - show calibrated angles when available
+            FingerStatusBars(
+                angles = if (cameraState.calibrationState == CalibrationState.CALIBRATED)
+                    cameraState.calibratedAngles else cameraState.smoothedAngles
+            )
 
             // Calibration buttons
             Row(

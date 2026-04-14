@@ -24,8 +24,10 @@ data class GestureCameraState(
     val isRunning: Boolean = false,
     val hasPermission: Boolean = false,
     val handDetected: Boolean = false,
+    val handedness: String = "",  // "Left" or "Right"
     val rawAngles: FingerAngles = FingerAngles(),
     val smoothedAngles: FingerAngles = FingerAngles(),
+    val calibratedAngles: FingerAngles = FingerAngles(),  // 显示用：标定后的角度
     val calibrationState: CalibrationState = CalibrationState.NOT_CALIBRATED,
     val fps: Float = 0f,
     val landmarks: List<NormalizedLandmark> = emptyList()
