@@ -61,6 +61,7 @@ class GestureCameraService(
     private var openThumbSwing = 0f
 
     private var smoothedValues = FloatArray(7) { 0f }
+    private var needsInitialUpdate = true  // Skip DEADBAND on first update after calibration reset
     private var lastFrameTime = System.nanoTime()
     private var frameTimeBuffer = mutableListOf<Long>()
     private val videoTimestampMs = AtomicLong(0L)
@@ -202,6 +203,11 @@ class GestureCameraService(
             val angles = computeFingerAngles(landmarks[0])
             val smoothed = applySmoothing(angles)
 
+            // Debug: log thumb angles every 60 frames (~once per second at 60fps)
+            if (System.currentTimeMillis() / 16 % 60 == 0L) {
+                Log.d(TAG, "Thumb angles: abd=${angles.thumbAbd}, cmcFlex=${angles.thumbCmcFlex}, tendon=${angles.thumbTendon}")
+            }
+
             // Extract handedness from result
             val handednessList = result.handedness()
             val handedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
@@ -333,10 +339,12 @@ class GestureCameraService(
 
         for (i in raw.indices) {
             val diff = abs(raw[i] - smoothedValues[i])
-            if (diff >= DEADBAND) {
+            // Skip DEADBAND check on first update after calibration reset
+            if (needsInitialUpdate || diff >= DEADBAND) {
                 smoothedValues[i] = EMA_ALPHA * raw[i] + (1 - EMA_ALPHA) * smoothedValues[i]
             }
         }
+        needsInitialUpdate = false  // Clear after first update
 
         return FingerAngles(
             thumbAbd = smoothedValues[0],
@@ -351,11 +359,27 @@ class GestureCameraService(
 
     fun startCalibration() {
         smoothedValues.fill(0f)
+        needsInitialUpdate = true  // Allow first frame to update without DEADBAND
         _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_OPEN)
     }
 
     fun recordCalibrationPose() {
         val current = _state.value.smoothedAngles
+
+        // Validate hand is detected and angles are non-zero
+        if (!_state.value.handDetected) {
+            Log.w(TAG, "Calibration skipped: hand not detected")
+            return
+        }
+
+        // Check if angles are near zero (hand might not be in proper view)
+        val totalAngle = current.thumbAbd + current.thumbCmcFlex + current.thumbTendon +
+                         current.indexTendon + current.middleTendon + current.ringTendon + current.pinkyTendon
+        if (totalAngle < 5f) {
+            Log.w(TAG, "Calibration skipped: angles too small (hand may not be visible)")
+            return
+        }
+
         when (_state.value.calibrationState) {
             CalibrationState.CALIBRATING_OPEN -> {
                 openAngles = floatArrayOf(
@@ -363,6 +387,7 @@ class GestureCameraService(
                     current.indexTendon, current.middleTendon,
                     current.ringTendon, current.pinkyTendon
                 )
+                Log.i(TAG, "Calibration: open pose recorded - thumbAbd=${current.thumbAbd}, fingers=${current.indexTendon}")
                 _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_FIST)
             }
             CalibrationState.CALIBRATING_FIST -> {
@@ -371,11 +396,13 @@ class GestureCameraService(
                     current.indexTendon, current.middleTendon,
                     current.ringTendon, current.pinkyTendon
                 )
+                Log.i(TAG, "Calibration: fist pose recorded - thumbAbd=${current.thumbAbd}, fingers=${current.indexTendon}")
                 _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_THUMB_IN)
             }
             CalibrationState.CALIBRATING_THUMB_IN -> {
                 thumbInSwing = current.thumbAbd
                 openThumbSwing = openAngles[0]
+                Log.i(TAG, "Calibration: thumb-in recorded - thumbInSwing=$thumbInSwing, openThumbSwing=$openThumbSwing")
                 saveCalibration()
                 _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
             }
