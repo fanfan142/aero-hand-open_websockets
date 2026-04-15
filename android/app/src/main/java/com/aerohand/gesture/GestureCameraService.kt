@@ -303,15 +303,29 @@ class GestureCameraService(
             return Math.toDegrees(acos(cosVal.toDouble()).toDouble()).toFloat()
         }
 
-        // 0: thumb_cmc_abd - thumb abduction (x-distance between thumb tip and index MCP)
-        val thumbTipX = landmarks[4].x()
-        val indexMcpX = landmarks[5].x()
-        val thumbAbd = abs(thumbTipX - indexMcpX) * 100f
+        // MediaPipe thumb landmarks (0= wrist, 1= CMC, 2= MCP, 3= IP, 4= TIP)
+        // MediaPipe finger landmarks: 5= INDEX_MCP, 9= MIDDLE_MCP, 13= RING_MCP, 17= PINKY_MCP
 
-        // 1: thumb_cmc_flex - thumb CMC flexion (WRIST-CMC-MCP angle)
-        val thumbCmcFlex = angle(landmarks[0], landmarks[1], landmarks[2])
+        // For 2D landmarks, compute thumb angles using vector math similar to ROS2:
+        // vec = MCP - CMC (thumb direction vector from root)
+
+        // 0: thumb_cmc_abd - thumb abduction (x-direction of thumb relative to palm)
+        // Use the x-distance between thumb MCP and index MCP, scaled
+        val thumbMcpX = landmarks[2].x()
+        val indexMcpX = landmarks[5].x()
+        val thumbAbd = kotlin.math.abs(thumbMcpX - indexMcpX) * 100f
+
+        // 1: thumb_cmc_flex - thumb CMC flexion (angle at CMC joint)
+        // When thumb bends toward palm, the y-coordinate of MCP changes relative to CMC
+        val thumbMcpY = landmarks[2].y()
+        val thumbCmcY = landmarks[1].y()
+        // Distance from CMC to MCP in y direction (negative = MCP above CMC = bending toward palm)
+        val thumbCmcFlexY = thumbCmcY - thumbMcpY
+        // Scale to degrees (larger y diff = more flexion)
+        val thumbCmcFlex = (thumbCmcFlexY * 180f).coerceIn(0f, 90f)
 
         // 2: thumb_tendon - thumb tendon/movement (MCP-IP-TIP angle)
+        // When thumb bends at second joint, this angle decreases
         val thumbTendon = angle(landmarks[2], landmarks[3], landmarks[4])
 
         // 3-6: finger tendons - MCP-PIP-DIP consecutive joint angles
