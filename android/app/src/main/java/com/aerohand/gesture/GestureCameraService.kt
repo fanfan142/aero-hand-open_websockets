@@ -258,15 +258,13 @@ class GestureCameraService(
                 handednessList[0][0].categoryName()
             } else ""
 
-            // In a front-facing mirrored selfie view:
-            // - User's RIGHT hand appears on the LEFT side of the image (wrist.x < 0.5)
-            // - MediaPipe reports "Left" for this (mirrored coordinate system)
-            // - So wrist.x < 0.5 means actual = "Right"
-            // - User's LEFT hand appears on the RIGHT side of the image (wrist.x > 0.5)
-            // - MediaPipe reports "Right" for this
-            // - So wrist.x > 0.5 means actual = "Left"
+            // Camera preview shows mirrored view:
+            // - User's RIGHT hand appears on the RIGHT side of the preview
+            // - In image coordinates (unmirrored): wrist.x > 0.5 = Right hand
+            // - User's LEFT hand appears on the LEFT side of the preview
+            // - In image coordinates: wrist.x < 0.5 = Left hand
             val wrist = landmarks[0][0]
-            val actualHandedness = if (wrist.x() < 0.5f) "Right" else "Left"
+            val actualHandedness = if (wrist.x() > 0.5f) "Right" else "Left"
 
             val angles = computeFingerAngles(landmarks[0], actualHandedness)
             val smoothed = applySmoothing(angles)
