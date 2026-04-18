@@ -17,8 +17,17 @@
 // 2: STA模式 (ESP32连接已有路由器)
 #define WIFI_MODE 1
 
+// 固件类型：左手或右手（影响热点名称和标识）
+// 0: 左手 (Left Hand) - 热点 AeroHand_Left
+// 1: 右手 (Right Hand) - 热点 AeroHand_Right
+#define HAND_TYPE 1
+
 // AP模式配置 (WIFI_MODE = 1)
-#define AP_SSID "AeroHand_WIFI"
+#if HAND_TYPE == 0
+  #define AP_SSID "AeroHand_Left"
+#else
+  #define AP_SSID "AeroHand_Right"
+#endif
 #define AP_PASSWORD "12345678"
 #define AP_CHANNEL 6
 

@@ -95,6 +95,72 @@ object PresetActions {
                 PresetStep(pose(10f, 10f, 10f, 10f, 10f, 75f, 75f), 220),
                 PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 220)
             )
+        ),
+        PresetAction(
+            "piano",
+            "钢琴",
+            "逐指弹奏",
+            listOf(
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150),
+                PresetStep(pose(15f, 15f, 70f, 15f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 70f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 70f, 15f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150)
+            )
+        ),
+        PresetAction(
+            "wave_meet",
+            "波浪汇聚",
+            "双向波浪交汇",
+            listOf(
+                // t=0: all flat
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                // t=π/4: index/middle up, ring/pinky down
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                // t=π/2: ring/pinky up, index/middle down
+                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
+                // t=3π/4: index/middle up again
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                // t=π: all flat
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                // t=5π/4: ring/pinky up, index/middle down
+                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
+                // t=3π/2: index/middle up, ring/pinky down
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                // t=7π/4: all flat
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                // t=2π: back to flat
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200)
+            )
+        ),
+        PresetAction(
+            "finger_count_10",
+            "数到10",
+            "完整伸展计数",
+            listOf(
+                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 300),
+                PresetStep(pose(80f, 80f, 10f, 80f, 80f, 80f, 80f), 300),
+                PresetStep(pose(80f, 80f, 10f, 10f, 80f, 80f, 80f), 300),
+                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 80f, 80f), 300),
+                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 10f, 80f), 300),
+                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 10f, 10f), 300),
+                PresetStep(pose(80f, 80f, 80f, 10f, 10f, 10f, 10f), 300),
+                PresetStep(pose(80f, 80f, 80f, 80f, 10f, 10f, 10f), 300),
+                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 10f, 10f), 300),
+                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 10f), 300),
+                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 300),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 300)
+            )
         )
     )
 
@@ -104,7 +170,7 @@ object PresetActions {
 sealed class ConnectionState {
     object Disconnected : ConnectionState()
     object Connecting : ConnectionState()
-    data class Connected(val server: String) : ConnectionState()
+    data class Connected(val server: String, val handType: String? = null) : ConnectionState()
     data class Error(val message: String) : ConnectionState()
 }
 
@@ -358,6 +424,19 @@ fun parseStatesResponse(text: String): Map<String, Float>? {
                     }
                 }
             }
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun parseHandInfo(text: String): String? {
+    return try {
+        val json = JSONObject(text)
+        if (json.optString("type") != "hand_info") {
+            null
+        } else {
+            json.optString("hand_type").takeIf { it.isNotBlank() }
         }
     } catch (_: Exception) {
         null

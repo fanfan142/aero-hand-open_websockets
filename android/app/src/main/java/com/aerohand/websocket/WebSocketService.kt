@@ -51,6 +51,13 @@ class WebSocketService {
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 addLog(LogEntry.Receive(text, timestamp()))
+                // 解析 hand_info 消息，更新连接手性
+                parseHandInfo(text)?.let { handType ->
+                    val current = _connectionState.value
+                    if (current is ConnectionState.Connected) {
+                        _connectionState.value = ConnectionState.Connected(current.server, handType)
+                    }
+                }
                 parseStatesResponse(text)?.let { _jointStates.value = it }
             }
 

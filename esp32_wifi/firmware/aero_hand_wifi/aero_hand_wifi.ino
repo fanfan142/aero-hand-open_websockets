@@ -94,6 +94,13 @@ void setup() {
     wsServer.onConnect([](uint8_t num) {
         DEBUG_PRINTF("[WS] Client %u connected\n", num);
         blinkLED(2);
+        // 广播手性标识
+        JsonDocument doc;
+        doc["type"] = "hand_info";
+        doc["hand_type"] = (HAND_TYPE == 0) ? "Left" : "Right";
+        String output;
+        serializeJson(doc, output);
+        wsServer.sendText(num, output);
     });
     wsServer.onDisconnect([](uint8_t num) {
         DEBUG_PRINTF("[WS] Client %u disconnected\n", num);

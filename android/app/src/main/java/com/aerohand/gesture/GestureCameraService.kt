@@ -247,18 +247,28 @@ class GestureCameraService(
         val handDetected = landmarks.isNotEmpty()
         if (handDetected) {
             val handednessList = result.handedness()
-            val detectedHandedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
+            val mpHandedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
                 handednessList[0][0].categoryName()
             } else ""
-            val angles = computeFingerAngles(landmarks[0], detectedHandedness)
+
+            // In a front-facing mirrored selfie view:
+            // - User's LEFT hand appears on the RIGHT side of the image (wrist.x > 0.5)
+            // - MediaPipe reports "Right" for this (mirrored coordinate system)
+            // - User's RIGHT hand appears on the LEFT side of the image (wrist.x < 0.5)
+            // - MediaPipe reports "Left" for this
+            // So wrist.x > 0.5 means actual = "Left", wrist.x < 0.5 means actual = "Right"
+            val wrist = landmarks[0][0]
+            val actualHandedness = if (wrist.x() > 0.5f) "Left" else "Right"
+
+            val angles = computeFingerAngles(landmarks[0], actualHandedness)
             val smoothed = applySmoothing(angles)
 
             if (System.currentTimeMillis() / 16 % 60 == 0L) {
-                Log.d(TAG, "Thumb angles: hand=$detectedHandedness abd=${angles.thumbAbd}, cmcFlex=${angles.thumbCmcFlex}, tendon=${angles.thumbTendon}")
+                Log.d(TAG, "Thumb angles: realHand=$actualHandedness mpHand=$mpHandedness abd=${angles.thumbAbd}, cmcFlex=${angles.thumbCmcFlex}, tendon=${angles.thumbTendon}")
             }
 
             val calibState = _state.value.calibrationState
-            val targetMatched = targetHand.matches(detectedHandedness)
+            val targetMatched = targetHand.matches(actualHandedness)
 
             val calibrated = if (calibState == CalibrationState.CALIBRATED) {
                 remapByCalibration(smoothedValues)
@@ -268,10 +278,10 @@ class GestureCameraService(
 
             _state.value = _state.value.copy(
                 handDetected = true,
-                handedness = detectedHandedness,
+                handedness = actualHandedness,
                 targetHand = targetHand,
                 targetHandMatched = targetMatched,
-                feedbackMessage = if (targetMatched) "" else "当前检测到 ${detectedHandedness}，请切换到${targetHand.label}",
+                feedbackMessage = if (targetMatched) "" else "当前检测到 ${actualHandedness}，请切换到${targetHand.label}",
                 rawAngles = angles,
                 smoothedAngles = smoothed,
                 calibratedAngles = calibrated,
@@ -393,17 +403,24 @@ class GestureCameraService(
         val indexMcp = toPoint(5)
         val ringMcp = toPoint(13)
 
-        // palmAxis: from ring MCP to index MCP, already in real-world coordinates
-        // since the front camera image was mirrored via matrix.postScale(-1f, 1f) in imageProxyToBitmap
+        // In a front camera mirrored selfie view:
+        // - Right hand: index on left of image (small x), pinky on right (large x)
+        // - Left hand: index on right of image (large x), pinky on left (small x)
+        // The mirror flip doesn't change the relative positions, so the cross product
+        // sign in the image is OPPOSITE to real-world (due to reflection).
+        // We must negate the sign for right hands to get the real-world direction.
         val palmAxis = vector(ringMcp, indexMcp)
         val thumbAxis = normalize(vector(thumbCmc, thumbMcp))
         val palmAxisNorm = normalize(palmAxis)
-        val thumbAbdAngle = Math.toDegrees(
+        val imageThumbAngle = Math.toDegrees(
             atan2(
                 (palmAxisNorm.first * thumbAxis.second - palmAxisNorm.second * thumbAxis.first).toDouble(),
                 (palmAxisNorm.first * thumbAxis.first + palmAxisNorm.second * thumbAxis.second).toDouble()
             )
         ).toFloat()
+        // Negate for right hands (mirrored coordinate gives wrong sign)
+        val thumbSign = if (handedness == "Right") -1f else 1f
+        val thumbAbdAngle = imageThumbAngle * thumbSign
         val thumbAbd = ((abs(thumbAbdAngle) / 90f) * 100f).coerceIn(0f, 100f)
 
         val thumbCmcFlex = (flexionDegrees(landmarks[0], landmarks[1], landmarks[2]) * (55f / 90f)).coerceIn(0f, 55f)

@@ -28,6 +28,7 @@ data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
     val wifiConnected: Boolean = false,
     val usbConnected: Boolean = false,
+    val connectedHandType: String? = null,
     val host: String = "192.168.4.1",
     val port: String = "8765",
     val controlValues: Map<String, Float> = ControlDefinitions.DEFAULT_CONTROL_STATE,
@@ -74,6 +75,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 mutateState {
                     copy(
                         wifiConnected = state is ConnectionState.Connected,
+                        connectedHandType = if (state is ConnectionState.Connected) state.handType else null,
                         statusMessage = when (state) {
                             is ConnectionState.Connected -> "WiFi 已连接 ${state.server}"
                             is ConnectionState.Connecting -> "WiFi 连接中..."
