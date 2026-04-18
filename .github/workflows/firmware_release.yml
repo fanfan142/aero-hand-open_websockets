@@ -38,15 +38,8 @@ jobs:
       - name: Create Firmware Package
         run: |
           mkdir -p firmware_release
-          # Copy all lefthand and righthand bins
-          for v in v0.1.0 v0.1.3 v0.1.4 v0.1.5 v0.2.0; do
-            if [ -f "firmware_ws_build/${v}/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin" ]; then
-              cp "firmware_ws_build/${v}/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin" "firmware_release/firmware_${v}_lefthand.bin"
-            fi
-            if [ -f "firmware_ws_build/${v}/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin" ]; then
-              cp "firmware_ws_build/${v}/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin" "firmware_release/firmware_${v}_righthand.bin"
-            fi
-          done
+          # Copy all lefthand and righthand bins from firmware_bin/
+          cp firmware_bin/firmware_v*.bin firmware_release/ 2>/dev/null || true
           echo "=== Firmware package contents ==="
           ls -la firmware_release/
 
