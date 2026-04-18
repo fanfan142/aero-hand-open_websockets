@@ -60,10 +60,11 @@ htmlcov/
 firmware_ws_build/
 release_assets/
 
-# Claude AI Context (auto-generated, do not commit)
+# Claude / AI / local agent context (auto-generated, do not commit)
 .claude/
 .zcf/
 .spec-workflow/
+.serena/
 
 # Claude documentation (auto-generated)
 CLAUDE.md
@@ -78,6 +79,20 @@ android-sdk/
 android/.gradle/
 android/local.properties
 android/keystore.properties
+android/*.jks
+android/*.keystore
+*.jks
+**/*.jks
 *.keystore
 **/*.keystore
+*.apk
+**/*.apk
+*.aab
+**/*.aab
 签名信息_2026-04-03.txt
+
+# Local screenshots / captures
+屏幕截图_*.png
+屏幕截图_*.jpg
+屏幕截图_*.jpeg
+屏幕截图_*.webp

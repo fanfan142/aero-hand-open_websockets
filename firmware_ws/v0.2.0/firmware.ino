@@ -129,9 +129,9 @@ SemaphoreHandle_t gBusMux = nullptr;
 // WebSocket相关函数 (新增)
 void setupWiFi();
 void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length);
-void handleWsCommand(const char* payload, size_t length);
-void processJsonCommand(const JsonDocument& doc);
-void sendWsResponse(bool success, const char* message);
+void handleWsCommand(uint8_t clientNum, const char* payload, size_t length);
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
+void sendWsResponse(uint8_t clientNum, bool success, const char* message);
 void broadcastJointStates();
 void blinkLED(int times);
 
@@ -635,7 +635,7 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
         case WStype_TEXT:
             DEBUG_PRINTF("[WS] Client %u sent: %s\n", num, payload);
-            handleWsCommand((const char*)payload, length);
+            handleWsCommand(num, (const char*)payload, length);
             g_lastWsActivity = millis();
             break;
 
@@ -654,13 +654,21 @@ uint8_t getJointNumber(const char* jointId) {
     return 255; // 无效ID
 }
 
-// LED闪烁
+// LED闪烁 (非阻塞版本)
+static unsigned long _blinkEndTime = 0;
+static int _blinkRemaining = 0;
 void blinkLED(int times) {
-    for (int i = 0; i < times; i++) {
-        digitalWrite(STATUS_LED, LOW);
-        delay(100);
-        digitalWrite(STATUS_LED, HIGH);
-        delay(100);
+    if (times <= 0) return;
+    _blinkRemaining = times * 2;  // 每个闪烁周期2次切换
+    _blinkEndTime = millis() + times * 200 + 50;  // 预留时间
+    digitalWrite(STATUS_LED, LOW);
+}
+void updateLEDBlink() {
+    if (_blinkRemaining <= 0) return;
+    unsigned long now = millis();
+    if (now >= _blinkEndTime - (_blinkRemaining * 100)) {
+        digitalWrite(STATUS_LED, (digitalRead(STATUS_LED) == LOW) ? HIGH : LOW);
+        _blinkRemaining--;
     }
 }
 
@@ -668,23 +676,23 @@ void blinkLED(int times) {
 // WebSocket命令处理 (新增)
 // ============================================
 
-void handleWsCommand(const char* payload, size_t length) {
+void handleWsCommand(uint8_t clientNum, const char* payload, size_t length) {
     DynamicJsonDocument doc(1024);
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
         DEBUG_PRINTF("[CMD] JSON parse error: %s\n", error.c_str());
-        sendWsResponse(false, error.c_str());
+        sendWsResponse(clientNum, false, error.c_str());
         return;
     }
 
-    processJsonCommand(doc);
+    processJsonCommand(clientNum, doc);
 }
 
-void processJsonCommand(const JsonDocument& doc) {
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
     // 检查type字段
     if (!doc["type"].is<const char*>()) {
-        sendWsResponse(false, "Missing type field");
+        sendWsResponse(clientNum, false, "Missing type field");
         return;
     }
 
@@ -693,7 +701,7 @@ void processJsonCommand(const JsonDocument& doc) {
     if (strcmp(type, "joint_control") == 0) {
         // 单关节控制
         if (!doc["data"]["joint_id"].is<const char*>() || !doc["data"]["angle"].is<float>()) {
-            sendWsResponse(false, "Missing required fields in joint_control");
+            sendWsResponse(clientNum, false, "Missing required fields in joint_control");
             return;
         }
 
@@ -703,7 +711,7 @@ void processJsonCommand(const JsonDocument& doc) {
 
         uint8_t jointNum = getJointNumber(jointId);
         if (jointNum >= JOINT_COUNT) {
-            sendWsResponse(false, "Invalid joint_id");
+            sendWsResponse(clientNum, false, "Invalid joint_id");
             return;
         }
 
@@ -741,25 +749,69 @@ void processJsonCommand(const JsonDocument& doc) {
 
         g_jointAngles[jointNum] = clampedAngle;
         DEBUG_PRINTF("[CMD] Joint %s -> %.1f°\n", jointId, clampedAngle);
-        sendWsResponse(true, "Joint controlled");
+        sendWsResponse(clientNum, true, "Joint controlled");
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
         // 多关节控制
         if (!doc["data"]["joints"].is<JsonArrayConst>()) {
-            sendWsResponse(false, "Missing required fields in multi_joint_control");
+            sendWsResponse(clientNum, false, "Missing required fields in multi_joint_control");
             return;
         }
 
         JsonArrayConst joints = doc["data"]["joints"].as<JsonArrayConst>();
         int duration = doc["data"]["duration_ms"].as<int>();
 
-        DEBUG_PRINTF("[CMD] Multi-joint control: %d joints\n", (int)joints.size());
-        sendWsResponse(true, "Multi-joint control received");
-        // TODO: 完整实现多关节控制
+        // 设置位置模式
+        if (g_currentMode != MODE_POS) {
+            if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+            for (int i = 0; i < 7; ++i) {
+                hlscl.ServoMode(SERVO_IDS[i]);
+            }
+            g_currentMode = MODE_POS;
+            if (gBusMux) xSemaphoreGive(gBusMux);
+        }
+
+        int16_t pos[7] = {0};
+        uint16_t torque_eff[7];
+        for (int i = 0; i < 7; ++i) {
+            torque_eff[i] = g_torque[i];
+            if (isHot((uint8_t)i)) {
+                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
+            }
+        }
+
+        int validCount = 0;
+        for (JsonObjectConst joint : joints) {
+            if (!joint["joint_id"].is<const char*>() || !joint["angle"].is<float>()) {
+                continue;
+            }
+
+            const char* jId = joint["joint_id"].as<const char*>();
+            float angle = joint["angle"].as<float>();
+
+            uint8_t jointNum = getJointNumber(jId);
+            if (jointNum >= JOINT_COUNT) continue;
+
+            float minAngle = (jointNum == JOINT_THUMB_ROTATION) ? THUMB_ROT_MIN_ANGLE / 10.0f : SERVO_MIN_ANGLE / 10.0f;
+            float maxAngle = (jointNum == JOINT_THUMB_ROTATION) ? THUMB_ROT_MAX_ANGLE / 10.0f : SERVO_MAX_ANGLE / 10.0f;
+            float clampedAngle = constrain(angle, minAngle, maxAngle);
+
+            g_jointAngles[jointNum] = clampedAngle;
+            pos[0] = mapU16ToRaw(0, (uint16_t)((clampedAngle / 90.0) * 4095));
+            validCount++;
+        }
+
+        if (validCount > 0) {
+            if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+            hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, 7, pos, g_speed, g_accel, torque_eff);
+            if (gBusMux) xSemaphoreGive(gBusMux);
+            DEBUG_PRINTF("[CMD] Multi-joint control: %d joints\n", validCount);
+        }
+        sendWsResponse(clientNum, true, "Multi-joint control received");
 
     } else if (strcmp(type, "get_states") == 0) {
         // 获取状态
-        broadcastJointStates();
+        broadcastJointStatesTo(clientNum);
 
     } else if (strcmp(type, "homing") == 0) {
         // 归零
@@ -770,18 +822,18 @@ void processJsonCommand(const JsonDocument& doc) {
                 g_jointAngles[i] = 0;
             }
             DEBUG_PRINTLN("[CMD] Homing executed");
-            sendWsResponse(true, "Homing executed");
+            sendWsResponse(clientNum, true, "Homing executed");
         } else {
-            sendWsResponse(false, "Homing in progress");
+            sendWsResponse(clientNum, false, "Homing in progress");
         }
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
-        sendWsResponse(false, "Unknown command type");
+        sendWsResponse(clientNum, false, "Unknown command type");
     }
 }
 
-void sendWsResponse(bool success, const char* message) {
+void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
     DynamicJsonDocument response(256);
     response["type"] = "response";
     response["success"] = success;
@@ -796,7 +848,26 @@ void sendWsResponse(bool success, const char* message) {
 
     String output;
     serializeJson(response, output);
-    wsServer.broadcastText(output);
+    wsServer.sendText(clientNum, output);
+}
+
+void broadcastJointStatesTo(uint8_t clientNum) {
+    DynamicJsonDocument response(1024);
+    response["type"] = "states_response";
+    response["success"] = true;
+    response["timestamp"] = millis();
+
+    JsonArray jointsData = response["data"].to<JsonArray>();
+    for (int i = 0; i < JOINT_COUNT; i++) {
+        JsonObject joint = jointsData.createNestedObject();
+        joint["joint_id"] = JOINT_NAMES[i];
+        joint["angle"] = g_jointAngles[i];
+        joint["load"] = 0.0;
+    }
+
+    String output;
+    serializeJson(response, output);
+    wsServer.sendText(clientNum, output);
 }
 
 void broadcastJointStates() {
@@ -821,6 +892,9 @@ void broadcastJointStates() {
 void loop() {
   // 处理WebSocket事件
   wsServer.loop();
+
+  // 更新LED闪烁状态 (非阻塞)
+  updateLEDBlink();
 
   // ------ Soft Limit Check (保留原有功能) -------
   checkAndEnforceSoftLimits();

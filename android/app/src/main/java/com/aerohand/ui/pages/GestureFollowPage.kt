@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,20 +19,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,11 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -54,18 +50,19 @@ import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraService
 import com.aerohand.gesture.GestureCameraState
+import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.gesture.SkeletonOverlay
 
 @Composable
 fun GestureFollowPage(
     gestureService: GestureCameraService,
     cameraState: GestureCameraState,
+    onTargetHandChange: (GestureTargetHand) -> Unit,
     onStartCalibration: () -> Unit,
     onRecordCalibrationPose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -113,7 +110,6 @@ fun GestureFollowPage(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Overlay: hand detection status with toggle button
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -121,53 +117,50 @@ fun GestureFollowPage(
                     ) {
                         Column(
                             horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Status panel (visible by default)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Box(
+                            AnimatedVisibility(visible = showStatusOverlay) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (cameraState.handDetected) Color(0xFF34D399)
-                                            else Color(0xFFF87171)
-                                        )
-                                )
-                                Text(
-                                    text = if (cameraState.handDetected) {
-                                        val hand = if (cameraState.handedness.isNotEmpty()) " ${cameraState.handedness}" else ""
-                                        " 已检测$hand"
-                                    } else " 未检测",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White
-                                )
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (cameraState.handDetected && cameraState.targetHandMatched) Color(0xFF34D399)
+                                                else Color(0xFFF87171)
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = buildString {
+                                            append(if (cameraState.handDetected) "已检测" else "未检测")
+                                            if (cameraState.handedness.isNotEmpty()) append(" ${cameraState.handedness}")
+                                            if (!cameraState.targetHandMatched && cameraState.handDetected) {
+                                                append(" · 请切换到${cameraState.targetHand.label}")
+                                            }
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White
+                                    )
+                                }
                             }
 
-                            // Toggle button (triangle) - click to hide/show status
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .clickable { showStatusOverlay = !showStatusOverlay },
-                                contentAlignment = Alignment.Center
+                            Surface(
+                                modifier = Modifier.clickable { showStatusOverlay = !showStatusOverlay },
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color.Black.copy(alpha = 0.6f)
                             ) {
-                                // Triangle pointing up when status visible (click to hide), down when hidden
-                                val rotation by animateFloatAsState(
-                                    targetValue = if (showStatusOverlay) 0f else 180f,
-                                    label = "triangle_rotation"
-                                )
                                 Text(
-                                    text = "▼",
+                                    text = if (showStatusOverlay) "隐藏状态" else "显示状态",
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
-                                    modifier = Modifier.rotate(rotation)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
                             }
                         }
@@ -196,36 +189,78 @@ fun GestureFollowPage(
                 }
             }
 
-            // Calibration status
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "手势跟随",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        when (cameraState.calibrationState) {
+                            CalibrationState.NOT_CALIBRATED -> "未校准"
+                            CalibrationState.CALIBRATING_OPEN -> "校准中：张开手"
+                            CalibrationState.CALIBRATING_FIST -> "校准中：握拳"
+                            CalibrationState.CALIBRATING_THUMB_IN -> "校准中：拇指内收"
+                            CalibrationState.CALIBRATED -> "已校准"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
-                    "手势跟随",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    when (cameraState.calibrationState) {
-                        CalibrationState.NOT_CALIBRATED -> "未校准"
-                        CalibrationState.CALIBRATING_OPEN -> "校准中：张开手"
-                        CalibrationState.CALIBRATING_FIST -> "校准中：握拳"
-                        CalibrationState.CALIBRATING_THUMB_IN -> "校准中：拇指内收"
-                        CalibrationState.CALIBRATED -> "已校准"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
+                    "FPS: ${"%.1f".format(cameraState.fps)}",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            // FPS indicator
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GestureTargetHand.entries.forEach { target ->
+                    FilterChip(
+                        selected = cameraState.targetHand == target,
+                        onClick = { onTargetHandChange(target) },
+                        label = { Text(target.label) },
+                        colors = FilterChipDefaults.filterChipColors()
+                    )
+                }
+            }
+
             Text(
-                "FPS: ${"%.1f".format(cameraState.fps)}",
+                text = buildString {
+                    append("检测手：")
+                    append(if (cameraState.handedness.isBlank()) "未识别" else cameraState.handedness)
+                    append(" · 控制目标：${cameraState.targetHand.label}")
+                    if (cameraState.handDetected && !cameraState.targetHandMatched) {
+                        append(" · 当前手别不匹配")
+                    }
+                },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (cameraState.handDetected && !cameraState.targetHandMatched) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
+
+            if (cameraState.feedbackMessage.isNotBlank()) {
+                Text(
+                    text = cameraState.feedbackMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (cameraState.feedbackMessage.contains("失败") || cameraState.feedbackMessage.contains("不一致")) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
 
             // Finger status bars - show calibrated angles when available
             FingerStatusBars(
@@ -294,7 +329,6 @@ private fun CameraPreview(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     // Create a visible PreviewView
     val previewView = remember {
@@ -319,7 +353,7 @@ private fun CameraPreview(
 private fun FingerStatusBars(angles: FingerAngles) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         FingerBar("拇指外展", angles.thumbAbd, 0f, 100f, Color(0xFFF59E0B))
-        FingerBar("拇指CMC屈曲", angles.thumbCmcFlex, 0f, 90f, Color(0xFFFB923C))
+        FingerBar("拇指CMC屈曲", angles.thumbCmcFlex, 0f, 55f, Color(0xFFFB923C))
         FingerBar("拇指肌腱", angles.thumbTendon, 0f, 90f, Color(0xFFF97316))
         FingerBar("食指肌腱", angles.indexTendon, 0f, 90f, Color(0xFF3B82F6))
         FingerBar("中指肌腱", angles.middleTendon, 0f, 90f, Color(0xFF10B981))

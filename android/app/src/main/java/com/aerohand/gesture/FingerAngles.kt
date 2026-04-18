@@ -22,12 +22,14 @@ data class FingerAngles(
 
 data class GestureCameraState(
     val isRunning: Boolean = false,
-    val hasPermission: Boolean = false,
     val handDetected: Boolean = false,
-    val handedness: String = "",  // "Left" or "Right"
+    val handedness: String = "",  // normalized detected hand: "Left" or "Right"
+    val targetHand: GestureTargetHand = GestureTargetHand.AUTO,
+    val targetHandMatched: Boolean = true,
+    val feedbackMessage: String = "",
     val rawAngles: FingerAngles = FingerAngles(),
     val smoothedAngles: FingerAngles = FingerAngles(),
-    val calibratedAngles: FingerAngles = FingerAngles(),  // 显示用：标定后的角度
+    val calibratedAngles: FingerAngles = FingerAngles(),  // display + control range after calibration
     val calibrationState: CalibrationState = CalibrationState.NOT_CALIBRATED,
     val fps: Float = 0f,
     val landmarks: List<NormalizedLandmark> = emptyList()
@@ -39,4 +41,18 @@ enum class CalibrationState {
     CALIBRATING_FIST,
     CALIBRATING_THUMB_IN,
     CALIBRATED
+}
+
+enum class GestureTargetHand(val label: String) {
+    AUTO("自动"),
+    LEFT("左手"),
+    RIGHT("右手");
+
+    fun matches(detectedHand: String): Boolean {
+        return when (this) {
+            AUTO -> true
+            LEFT -> detectedHand.equals("Left", ignoreCase = true)
+            RIGHT -> detectedHand.equals("Right", ignoreCase = true)
+        }
+    }
 }

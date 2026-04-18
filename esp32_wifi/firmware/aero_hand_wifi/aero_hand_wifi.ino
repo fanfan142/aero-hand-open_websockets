@@ -59,9 +59,9 @@ float g_jointAngles[JOINT_COUNT] = {0};
 // ============================================
 
 uint8_t getJointNumber(const char* jointId);
-void handleCommand(const char* payload, size_t length);
-void processJsonCommand(const JsonDocument& doc);
-void sendResponse(bool success, const char* message);
+void handleCommand(uint8_t clientNum, const char* payload, size_t length);
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
+void sendResponse(uint8_t clientNum, bool success, const char* message);
 void setupWiFi();
 void blinkLED(int times);
 
@@ -163,25 +163,25 @@ void setupWiFi() {
 // WebSocket消息处理
 // ============================================
 
-void handleCommand(const char* payload, size_t length) {
+void handleCommand(uint8_t clientNum, const char* payload, size_t length) {
     // 解析JSON
     JsonDocument doc;
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
         DEBUG_PRINTF("[CMD] JSON parse error: %s\n", error.c_str());
-        sendResponse(false, error.c_str());
+        sendResponse(clientNum, false, error.c_str());
         return;
     }
 
-    processJsonCommand(doc);
+    processJsonCommand(clientNum, doc);
 }
 
-void processJsonCommand(const JsonDocument& doc) {
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
     // 检查type字段是否存在 - ArduinoJson 7.x 用 is<T>() 检查类型
     // JsonDocumentoperator[]返回JsonVariantConst，用is<T>()检查类型
     if (!doc["type"].is<const char*>()) {
-        sendResponse(false, "Missing type field");
+        sendResponse(clientNum, false,"Missing type field");
         return;
     }
 
@@ -190,7 +190,7 @@ void processJsonCommand(const JsonDocument& doc) {
     if (strcmp(type, "joint_control") == 0) {
         // 单关节控制 - 检查必要字段存在且类型正确
         if (!doc["data"]["joint_id"].is<const char*>() || !doc["data"]["angle"].is<float>()) {
-            sendResponse(false, "Missing required fields in joint_control");
+            sendResponse(clientNum, false,"Missing required fields in joint_control");
             return;
         }
 
@@ -208,18 +208,18 @@ void processJsonCommand(const JsonDocument& doc) {
             if (executed) {
                 g_jointAngles[jointNum] = clampedAngle;
                 DEBUG_PRINTF("[CMD] Joint %s -> %.1f°\n", jointId, clampedAngle);
-                sendResponse(true, "Joint controlled");
+                sendResponse(clientNum, true,"Joint controlled");
             } else {
-                sendResponse(false, "Joint control failed");
+                sendResponse(clientNum, false,"Joint control failed");
             }
         } else {
-            sendResponse(false, "Invalid joint_id");
+            sendResponse(clientNum, false,"Invalid joint_id");
         }
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
         // 多关节控制 - const JsonDocument 只能读取 JsonArrayConst
         if (!doc["data"]["joints"].is<JsonArrayConst>()) {
-            sendResponse(false, "Missing required fields in multi_joint_control");
+            sendResponse(clientNum, false,"Missing required fields in multi_joint_control");
             return;
         }
 
@@ -262,12 +262,12 @@ void processJsonCommand(const JsonDocument& doc) {
                     g_jointAngles[angleList[i].joint_id] = appliedAngles[angleList[i].joint_id];
                 }
                 DEBUG_PRINTF("[CMD] Multi-joint: %d joints controlled\n", count);
-                sendResponse(true, "Multi-joint controlled");
+                sendResponse(clientNum, true,"Multi-joint controlled");
             } else {
-                sendResponse(false, "Multi-joint control failed");
+                sendResponse(clientNum, false,"Multi-joint control failed");
             }
         } else {
-            sendResponse(false, "No valid joints");
+            sendResponse(clientNum, false,"No valid joints");
         }
 
     } else if (strcmp(type, "get_states") == 0) {
@@ -287,7 +287,7 @@ void processJsonCommand(const JsonDocument& doc) {
 
         String output;
         serializeJson(response, output);
-        wsServer.broadcastText(output);
+        wsServer.sendText(clientNum, output);
 
     } else if (strcmp(type, "homing") == 0) {
         // 归零
@@ -297,18 +297,18 @@ void processJsonCommand(const JsonDocument& doc) {
                 g_jointAngles[i] = 0;
             }
             DEBUG_PRINTLN("[CMD] Homing executed");
-            sendResponse(true, "Homing executed");
+            sendResponse(clientNum, true,"Homing executed");
         } else {
-            sendResponse(false, "Homing unavailable");
+            sendResponse(clientNum, false,"Homing unavailable");
         }
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
-        sendResponse(false, "Unknown command type");
+        sendResponse(clientNum, false,"Unknown command type");
     }
 }
 
-void sendResponse(bool success, const char* message) {
+void sendResponse(uint8_t clientNum, bool success, const char* message) {
     JsonDocument response;
     response["type"] = "response";
     response["success"] = success;
@@ -323,7 +323,7 @@ void sendResponse(bool success, const char* message) {
 
     String output;
     serializeJson(response, output);
-    wsServer.broadcastText(output);
+    wsServer.sendText(clientNum, output);
 }
 
 // ============================================

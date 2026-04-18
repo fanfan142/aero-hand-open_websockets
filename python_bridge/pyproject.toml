@@ -29,7 +29,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "websockets>=10.0",
+    "websockets>=10.0,<16",
     "pyserial>=3.5",
 ]
 
@@ -47,7 +47,7 @@ Documentation = "https://github.com/fanfan142/aero-hand-open_websockets#readme"
 Repository = "https://github.com/fanfan142/aero-hand-open_websockets"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include = ["aero_ws_python*"]
 
 [tool.black]

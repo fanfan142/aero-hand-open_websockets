@@ -23,22 +23,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aerohand.BuildConfig
 import com.aerohand.gesture.GestureCameraService
-import com.aerohand.ui.components.ConnectionPanel
 import com.aerohand.ui.pages.GestureFollowPage
 import com.aerohand.ui.pages.HomePage
 import com.aerohand.ui.pages.JointControlPage
@@ -77,19 +73,7 @@ fun HandControlScreen() {
     }
 
     // Control page selection
-    var selectedControlPage by remember { mutableIntStateOf(0) }
-    var connectionPanelExpanded by remember { mutableStateOf(true) }
-
-    val connected = when (uiState.connectionMode) {
-        ConnectionMode.WIFI -> uiState.wifiConnected
-        ConnectionMode.USB -> uiState.usbConnected
-    }
-
-    LaunchedEffect(connected) {
-        if (connected) {
-            connectionPanelExpanded = false
-        }
-    }
+    var selectedControlPage by remember { mutableIntStateOf(2) }
 
     // Start/stop camera based on selected page
     LaunchedEffect(selectedControlPage) {
@@ -104,13 +88,16 @@ fun HandControlScreen() {
     LaunchedEffect(gestureService.state) {
         gestureService.state.collect { state ->
             viewModel.updateGestureCameraState(state)
-            // Gesture control is always active when on gesture page and calibrated
             if (selectedControlPage == 2 &&
                 state.calibrationState == com.aerohand.gesture.CalibrationState.CALIBRATED &&
-                state.handDetected
+                state.handDetected &&
+                state.targetHandMatched
             ) {
+                viewModel.markGestureControlReady()
                 val calibratedAngles = gestureService.getCalibratedAngles()
                 viewModel.updateControlValuesFromGesture(calibratedAngles)
+            } else {
+                viewModel.resetGestureSendState()
             }
         }
     }
@@ -144,23 +131,6 @@ fun HandControlScreen() {
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Top section: Connection panel
-            ConnectionPanel(
-                mode = uiState.connectionMode,
-                host = uiState.host,
-                port = uiState.port,
-                wifiConnected = uiState.wifiConnected,
-                usbConnected = uiState.usbConnected,
-                statusMessage = uiState.statusMessage,
-                onModeChange = viewModel::setConnectionMode,
-                onHostChange = viewModel::setHost,
-                onPortChange = viewModel::setPort,
-                onConnect = viewModel::connect,
-                onDisconnect = viewModel::disconnect,
-                expanded = connectionPanelExpanded,
-                onToggleExpanded = { connectionPanelExpanded = !connectionPanelExpanded }
-            )
-
             // Control section with tabs
             Column(
                 modifier = Modifier
@@ -219,6 +189,10 @@ fun HandControlScreen() {
                         2 -> GestureFollowPage(
                             gestureService = gestureService,
                             cameraState = uiState.gestureCameraState,
+                            onTargetHandChange = {
+                                gestureService.setTargetHand(it)
+                                viewModel.setGestureTargetHand(it)
+                            },
                             onStartCalibration = { gestureService.startCalibration() },
                             onRecordCalibrationPose = { gestureService.recordCalibrationPose() }
                         )

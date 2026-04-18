@@ -11,7 +11,7 @@
 #include <ArduinoJson.h>
 
 // WebSocket事件回调类型
-typedef void (*WSMessageCallback)(const char* payload, size_t length);
+typedef void (*WSMessageCallback)(uint8_t num, const char* payload, size_t length);
 typedef void (*WSConnectCallback)(uint8_t num);
 typedef void (*WSDisconnectCallback)(uint8_t num);
 

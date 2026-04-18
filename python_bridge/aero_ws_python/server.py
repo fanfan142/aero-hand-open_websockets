@@ -10,23 +10,23 @@ WebSocket服务端实现
 """
 
 import asyncio
-import json
 import logging
-import time
-from typing import Dict, Set, Optional
+from typing import Any, Dict, Optional, Set
+
 import websockets
-from websockets.legacy.server import WebSocketServerProtocol
 
 from .protocol import (
+    CommandMessage,
     CommandType,
+    ErrorCode,
     JointCommand,
-    MultiJointCommand,
     JointState,
-    parse_command,
+    MultiJointCommand,
+    JOINT_TO_SERVO_ID,
+    build_error,
     build_response,
     build_states_response,
-    build_error,
-    JOINT_TO_SERVO_ID,
+    parse_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,12 +63,12 @@ class AeroWebSocketServer:
         self.serial_baudrate = serial_baudrate
         self.use_fake_servo = use_fake_servo
 
-        self.clients: Set[WebSocketServerProtocol] = set()
+        self.clients: Set[Any] = set()
         self.server = None
         self.serial = None
         self._running = False
+        self._stop_event = asyncio.Event()
 
-        # 模拟舵机状态（用于测试）
         self._fake_joint_states: Dict[str, float] = {
             joint_id: 0.0 for joint_id in JOINT_TO_SERVO_ID.keys()
         }
@@ -79,21 +79,22 @@ class AeroWebSocketServer:
             logger.warning("Server already running")
             return
 
-        # 初始化串口
         if not self.use_fake_servo:
             self._init_serial()
 
         self._running = True
-        logger.info(f"Starting AeroWebSocketServer on {self.host}:{self.port}")
+        self._stop_event = asyncio.Event()
+        logger.info("Starting AeroWebSocketServer on %s:%s", self.host, self.port)
 
         try:
-            async with websockets.serve(self._handle_client, self.host, self.port):
-                logger.info(f"Server started, waiting for connections...")
-                await asyncio.Future()  # 永远运行
+            self.server = await websockets.serve(self._handle_client, self.host, self.port)
+            logger.info("Server started, waiting for connections...")
+            await self._stop_event.wait()
         except asyncio.CancelledError:
             logger.info("Server cancelled")
+            raise
         finally:
-            self._running = False
+            await self._shutdown()
 
     def _init_serial(self):
         """初始化串口连接"""
@@ -109,89 +110,94 @@ class AeroWebSocketServer:
                 baudrate=self.serial_baudrate,
                 timeout=1.0,
             )
-            logger.info(f"Serial port {self.serial_port} opened")
+            logger.info("Serial port %s opened", self.serial_port)
         except Exception as e:
-            logger.error(f"Failed to open serial port: {e}")
+            logger.error("Failed to open serial port: %s", e)
             logger.warning("Falling back to fake servo mode")
             self.use_fake_servo = True
 
-    async def _handle_client(self, websocket: WebSocketServerProtocol, path: str):
+    async def _handle_client(self, websocket):
         """处理客户端连接"""
         self.clients.add(websocket)
         client_addr = websocket.remote_address
-        logger.info(f"Client connected: {client_addr}")
+        logger.info("Client connected: %s", client_addr)
 
         try:
             async for message in websocket:
                 await self._process_message(websocket, message)
         except websockets.exceptions.ConnectionClosed:
-            logger.info(f"Client disconnected: {client_addr}")
+            logger.info("Client disconnected: %s", client_addr)
         except Exception as e:
-            logger.error(f"Error handling client {client_addr}: {e}")
+            logger.error("Error handling client %s: %s", client_addr, e)
         finally:
             self.clients.discard(websocket)
 
-    async def _process_message(self, websocket: WebSocketServerProtocol, message: str):
+    async def _process_message(self, websocket: Any, message: str):
         """处理接收到的消息"""
-        logger.debug(f"Received: {message}")
+        logger.debug("Received: %s", message)
 
         cmd, error = parse_command(message)
         if error:
-            response = build_error("PARSE_ERROR", error)
-            await websocket.send(response)
+            await websocket.send(build_error(ErrorCode.PARSE_ERROR, error))
             return
 
         if isinstance(cmd, JointCommand):
             await self._handle_joint_command(websocket, cmd)
-        elif isinstance(cmd, MultiJointCommand):
+            return
+
+        if isinstance(cmd, MultiJointCommand):
             await self._handle_multi_joint_command(websocket, cmd)
-        elif hasattr(cmd, 'type'):
-            # 处理CommandMessage类型（get_states, homing等）
+            return
+
+        if isinstance(cmd, CommandMessage):
             if cmd.type == CommandType.GET_STATES.value:
                 await self._handle_get_states(websocket)
             elif cmd.type == CommandType.HOMING.value:
                 await self._handle_homing(websocket)
+            else:
+                await websocket.send(build_error(ErrorCode.INVALID_COMMAND, f"Unsupported command type: {cmd.type}"))
 
-    async def _handle_joint_command(self, websocket: WebSocketServerProtocol, cmd: JointCommand):
+    async def _handle_joint_command(self, websocket: Any, cmd: JointCommand):
         """处理单关节控制指令"""
-        is_valid, err = cmd.validate()
+        is_valid, err, err_code = cmd.validate()
         if not is_valid:
-            response = build_error("INVALID_ANGLE", err)
-            await websocket.send(response)
+            await websocket.send(build_error(err_code or ErrorCode.INVALID_COMMAND, err))
             return
 
-        # 发送到舵机
         success = self._send_to_servo(cmd.joint_id, cmd.angle, cmd.duration_ms)
         if success:
-            # 更新模拟状态
             if self.use_fake_servo:
                 self._fake_joint_states[cmd.joint_id] = cmd.angle
             response = build_response(True, CommandType.JOINT_CONTROL.value)
         else:
-            response = build_error("SERVO_ERROR", "Failed to send command to servo")
+            response = build_error(ErrorCode.SERVO_ERROR, "Failed to send command to servo")
 
         await websocket.send(response)
 
-    async def _handle_multi_joint_command(self, websocket: WebSocketServerProtocol, cmd: MultiJointCommand):
+    async def _handle_multi_joint_command(self, websocket: Any, cmd: MultiJointCommand):
         """处理多关节同步控制指令"""
-        is_valid, err = cmd.validate()
+        is_valid, err, err_code = cmd.validate()
         if not is_valid:
-            response = build_error("INVALID_COMMAND", err)
-            await websocket.send(response)
+            await websocket.send(build_error(err_code or ErrorCode.INVALID_COMMAND, err))
             return
 
-        # 依次发送到舵机
+        sent_count = 0
         for joint in cmd.joints:
-            self._send_to_servo(joint.joint_id, joint.angle, cmd.duration_ms)
+            if not self._send_to_servo(joint.joint_id, joint.angle, cmd.duration_ms):
+                await websocket.send(build_error(ErrorCode.SERVO_ERROR, f"Failed to send command for joint {joint.joint_id}"))
+                return
+            sent_count += 1
             if self.use_fake_servo:
                 self._fake_joint_states[joint.joint_id] = joint.angle
 
-        response = build_response(True, CommandType.MULTI_JOINT_CONTROL.value, {
-            "joints_count": len(cmd.joints)
-        })
+        response = build_response(
+            True,
+            CommandType.MULTI_JOINT_CONTROL.value,
+            {"joints_count": sent_count},
+        )
         await websocket.send(response)
 
-    async def _handle_get_states(self, websocket: WebSocketServerProtocol):
+    async def _handle_get_states(self, websocket: Any):
         """处理获取状态指令"""
         states = []
         for joint_id in JOINT_TO_SERVO_ID.keys():
@@ -200,23 +206,43 @@ class AeroWebSocketServer:
                 load = 0.0
             else:
                 angle = self._read_servo_angle(joint_id)
-                load = 0.0  # 简化版，实际可读取负载值
+                load = 0.0
 
             states.append(JointState(joint_id, angle, load))
 
-        response = build_states_response(states)
-        await websocket.send(response)
+        await websocket.send(build_states_response(states))
 
-    async def _handle_homing(self, websocket: WebSocketServerProtocol):
+    async def _handle_homing(self, websocket: Any):
         """处理归零指令"""
-        if self.use_fake_servo:
-            for joint_id in self._fake_joint_states:
-                self._fake_joint_states[joint_id] = 0.0
-        else:
-            self._send_homing_command()
+        # 归零是长时间操作，在后台执行，不阻塞客户端响应
+        async def run_homing():
+            try:
+                if self.use_fake_servo:
+                    for joint_id in self._fake_joint_states:
+                        self._fake_joint_states[joint_id] = 0.0
+                else:
+                    # 分步执行，每个关节间隔发送，避免总线冲突
+                    for joint_id in JOINT_TO_SERVO_ID.keys():
+                        self._send_to_servo(joint_id, 0.0, 1000)
+                        await asyncio.sleep(0.05)  # 50ms 间隔
 
-        response = build_response(True, CommandType.HOMING.value)
-        await websocket.send(response)
+                # 归零完成后广播状态更新
+                if self.clients:
+                    states = []
+                    for joint_id in JOINT_TO_SERVO_ID.keys():
+                        states.append(JointState(joint_id, 0.0, 0.0))
+                    response = build_states_response(states)
+                    for client in list(self.clients):
+                        try:
+                            await client.send(response)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.error("Homing error: %s", e)
+
+        # 立即响应客户端，归零在后台异步执行
+        asyncio.create_task(run_homing())
+        await websocket.send(build_response(True, CommandType.HOMING.value))
 
     def _send_to_servo(self, joint_id: str, angle: float, duration_ms: int) -> bool:
         """发送指令到舵机"""
@@ -228,41 +254,90 @@ class AeroWebSocketServer:
             return False
 
         try:
-            # 构建二进制指令
-            # 协议: [0x55, 0x01, servo_id, angle_low, angle_high, checksum]
-            angle_int = int(angle * 10)  # 角度放大10倍
+            angle_int = int(angle * 10)
+            duration_int = max(0, min(int(duration_ms), 5000))
             data = bytes([
-                0x55,                   # 包头
-                0x01,                   # 版本
-                servo_id,               # 舵机ID
-                angle_int & 0xFF,       # 角度低8位
-                (angle_int >> 8) & 0xFF, # 角度高8位
-                0x55 ^ 0x01 ^ servo_id ^ (angle_int & 0xFF) ^ ((angle_int >> 8) & 0xFF)  # 校验和
+                0x55,
+                0x01,
+                servo_id,
+                angle_int & 0xFF,
+                (angle_int >> 8) & 0xFF,
+                duration_int & 0xFF,
+                (duration_int >> 8) & 0xFF,
+                0x55 ^ 0x01 ^ servo_id ^ (angle_int & 0xFF) ^ ((angle_int >> 8) & 0xFF) ^ (duration_int & 0xFF) ^ ((duration_int >> 8) & 0xFF),
             ])
             self.serial.write(data)
             return True
         except Exception as e:
-            logger.error(f"Serial write error: {e}")
+            logger.error("Serial write error: %s", e)
             return False
 
     def _read_servo_angle(self, joint_id: str) -> float:
         """读取舵机当前角度"""
-        return self._fake_joint_states.get(joint_id, 0.0)
+        if self.use_fake_servo:
+            return self._fake_joint_states.get(joint_id, 0.0)
+
+        servo_id = JOINT_TO_SERVO_ID.get(joint_id)
+        if servo_id is None:
+            return 0.0
+
+        try:
+            # 发送读取位置指令 (0x55 0x02 + servo_id + 校验)
+            data = bytes([
+                0x55,
+                0x02,
+                servo_id,
+                0x55 ^ 0x02 ^ servo_id,
+            ])
+            self.serial.write(data)
+
+            # 读取响应 (7 bytes: 0x55 0x02 servo_id angle_low angle_high temp checksum)
+            import time
+            time.sleep(0.01)  # 等待舵机响应
+
+            if self.serial.in_waiting >= 7:
+                response = self.serial.read(7)
+                if response[0] == 0x55 and response[1] == 0x02:
+                    angle_raw = response[3] | (response[4] << 8)
+                    # 舵机角度范围 0-1000 对应 0-90度
+                    return round((angle_raw / 1000.0) * 90.0, 1)
+
+            return self._fake_joint_states.get(joint_id, 0.0)
+        except Exception as e:
+            logger.error("Serial read error for joint %s: %s", joint_id, e)
+            return self._fake_joint_states.get(joint_id, 0.0)
 
     def _send_homing_command(self):
         """发送归零指令"""
-        # 所有关节归零
         for joint_id in JOINT_TO_SERVO_ID.keys():
             self._send_to_servo(joint_id, 0.0, 1000)
+
+    async def _shutdown(self):
+        """关闭服务与资源"""
+        if self.server is not None:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+
+        clients = list(self.clients)
+        self.clients.clear()
+        for client in clients:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+        if self.serial and self.serial.is_open:
+            self.serial.close()
+        self.serial = None
+        self._running = False
+        logger.info("Server stopped")
 
     def stop(self):
         """停止服务"""
         self._running = False
-        if self.server:
-            self.server.close()
-        if self.serial and self.serial.is_open:
-            self.serial.close()
-        logger.info("Server stopped")
+        if not self._stop_event.is_set():
+            self._stop_event.set()
 
 
 async def main():
@@ -279,7 +354,7 @@ async def main():
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     server = AeroWebSocketServer(

@@ -23,54 +23,26 @@ android {
 
     signingConfigs {
         create("release") {
-            // 优先使用仓库外配置文件，其次使用 CI 环境变量；都不存在时回退 debug 签名
             val propsFile = rootProject.file("keystore.properties")
             val props = Properties()
-            val hasProps = propsFile.exists()
-            if (hasProps) {
+            if (propsFile.exists()) {
                 propsFile.inputStream().use { props.load(it) }
             }
-            val envStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
-            val envStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
-            val envKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
-            val envKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
 
-            val storePath = if (hasProps) {
-                props.getProperty("storeFile")
-            } else {
-                envStoreFile
-            }
-            val storePwd = if (hasProps) {
-                props.getProperty("storePassword")
-            } else {
-                envStorePassword
-            }
-            val alias = if (hasProps) {
-                props.getProperty("keyAlias")
-            } else {
-                envKeyAlias
-            }
-            val keyPwd = if (hasProps) {
-                props.getProperty("keyPassword")
-            } else {
-                envKeyPassword
-            }
+            val storePath = props.getProperty("storeFile") ?: System.getenv("ANDROID_SIGNING_STORE_FILE")
+            val storePwd = props.getProperty("storePassword") ?: System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+            val alias = props.getProperty("keyAlias") ?: System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+            val keyPwd = props.getProperty("keyPassword") ?: System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
 
-            if (!storePath.isNullOrBlank() &&
-                !storePwd.isNullOrBlank() &&
-                !alias.isNullOrBlank() &&
-                !keyPwd.isNullOrBlank()
-            ) {
-                storeFile = file(storePath)
-                storePassword = storePwd
-                keyAlias = alias
-                keyPassword = keyPwd
-            } else {
-                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-            }
+            require(!storePath.isNullOrBlank()) { "Missing signing store file. Configure android/keystore.properties or ANDROID_SIGNING_STORE_FILE." }
+            require(!storePwd.isNullOrBlank()) { "Missing signing store password." }
+            require(!alias.isNullOrBlank()) { "Missing signing key alias." }
+            require(!keyPwd.isNullOrBlank()) { "Missing signing key password." }
+
+            storeFile = file(storePath)
+            storePassword = storePwd
+            keyAlias = alias
+            keyPassword = keyPwd
         }
     }
 

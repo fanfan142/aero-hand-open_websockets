@@ -3,7 +3,11 @@ package com.aerohand.gesture
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
@@ -21,10 +25,12 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.atan2
 import kotlin.math.sqrt
 import java.util.concurrent.atomic.AtomicLong
 
@@ -65,6 +71,7 @@ class GestureCameraService(
     private var lastFrameTime = System.nanoTime()
     private var frameTimeBuffer = mutableListOf<Long>()
     private val videoTimestampMs = AtomicLong(0L)
+    private var targetHand: GestureTargetHand = GestureTargetHand.AUTO
 
     init {
         loadCalibration()
@@ -141,16 +148,19 @@ class GestureCameraService(
 
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
         return try {
-            val bitmap = imageProxy.toBitmap()
+            val nv21Buffer = yuv420888ToNv21(imageProxy)
+            val yuvImage = YuvImage(nv21Buffer, ImageFormat.NV21, imageProxy.width, imageProxy.height, null)
+            val outputStream = ByteArrayOutputStream()
+            yuvImage.compressToJpeg(Rect(0, 0, imageProxy.width, imageProxy.height), 95, outputStream)
+            val jpegBytes = outputStream.toByteArray()
+            val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return null
             val rotation = imageProxy.imageInfo.rotationDegrees
-            val isFrontCamera = true // Front camera is used
+            val isFrontCamera = true
 
             val matrix = Matrix()
-            // First handle rotation
             if (rotation != 0) {
                 matrix.postRotate(rotation.toFloat())
             }
-            // Mirror horizontally for front camera
             if (isFrontCamera) {
                 matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
             }
@@ -164,6 +174,42 @@ class GestureCameraService(
             Log.e(TAG, "Failed to convert image to bitmap", e)
             null
         }
+    }
+
+    private fun yuv420888ToNv21(imageProxy: ImageProxy): ByteArray {
+        val yPlane = imageProxy.planes[0].buffer
+        val uPlane = imageProxy.planes[1].buffer
+        val vPlane = imageProxy.planes[2].buffer
+
+        val ySize = yPlane.remaining()
+        val uSize = uPlane.remaining()
+        val vSize = vPlane.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yPlane.get(nv21, 0, ySize)
+
+        val chromaRowStride = imageProxy.planes[1].rowStride
+        val chromaPixelStride = imageProxy.planes[1].pixelStride
+        val width = imageProxy.width
+        val height = imageProxy.height
+        var offset = ySize
+
+        val uBytes = ByteArray(uSize)
+        val vBytes = ByteArray(vSize)
+        uPlane.get(uBytes)
+        vPlane.get(vBytes)
+
+        for (row in 0 until height / 2) {
+            for (col in 0 until width / 2) {
+                val index = row * chromaRowStride + col * chromaPixelStride
+                if (index < vBytes.size && index < uBytes.size) {
+                    nv21[offset++] = vBytes[index]
+                    nv21[offset++] = uBytes[index]
+                }
+            }
+        }
+
+        return nv21
     }
 
     private fun detectHand(mpImage: com.google.mediapipe.framework.image.MPImage, fps: Float, frameTimestampMs: Long) {
@@ -200,23 +246,20 @@ class GestureCameraService(
         val landmarks = result.landmarks()
         val handDetected = landmarks.isNotEmpty()
         if (handDetected) {
-            val angles = computeFingerAngles(landmarks[0])
-            val smoothed = applySmoothing(angles)
-
-            // Debug: log thumb angles every 60 frames (~once per second at 60fps)
-            if (System.currentTimeMillis() / 16 % 60 == 0L) {
-                Log.d(TAG, "Thumb angles: abd=${angles.thumbAbd}, cmcFlex=${angles.thumbCmcFlex}, tendon=${angles.thumbTendon}")
-            }
-
-            // Extract handedness from result
             val handednessList = result.handedness()
-            val handedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
+            val detectedHandedness = if (handednessList.isNotEmpty() && handednessList[0].isNotEmpty()) {
                 handednessList[0][0].categoryName()
             } else ""
+            val angles = computeFingerAngles(landmarks[0], detectedHandedness)
+            val smoothed = applySmoothing(angles)
+
+            if (System.currentTimeMillis() / 16 % 60 == 0L) {
+                Log.d(TAG, "Thumb angles: hand=$detectedHandedness abd=${angles.thumbAbd}, cmcFlex=${angles.thumbCmcFlex}, tendon=${angles.thumbTendon}")
+            }
 
             val calibState = _state.value.calibrationState
+            val targetMatched = targetHand.matches(detectedHandedness)
 
-            // Compute calibrated angles when calibrated
             val calibrated = if (calibState == CalibrationState.CALIBRATED) {
                 remapByCalibration(smoothedValues)
             } else {
@@ -225,7 +268,10 @@ class GestureCameraService(
 
             _state.value = _state.value.copy(
                 handDetected = true,
-                handedness = handedness,
+                handedness = detectedHandedness,
+                targetHand = targetHand,
+                targetHandMatched = targetMatched,
+                feedbackMessage = if (targetMatched) "" else "当前检测到 ${detectedHandedness}，请切换到${targetHand.label}",
                 rawAngles = angles,
                 smoothedAngles = smoothed,
                 calibratedAngles = calibrated,
@@ -234,7 +280,15 @@ class GestureCameraService(
                 landmarks = landmarks[0]
             )
         } else {
-            _state.value = _state.value.copy(handDetected = false, handedness = "", fps = fps, landmarks = emptyList())
+            _state.value = _state.value.copy(
+                handDetected = false,
+                handedness = "",
+                targetHand = targetHand,
+                targetHandMatched = targetHand == GestureTargetHand.AUTO,
+                feedbackMessage = "未检测到手，请将目标手完整放入画面",
+                fps = fps,
+                landmarks = emptyList()
+            )
         }
     }
 
@@ -265,6 +319,20 @@ class GestureCameraService(
         }
     }
 
+    fun setTargetHand(targetHand: GestureTargetHand) {
+        this.targetHand = targetHand
+        val matched = targetHand.matches(_state.value.handedness)
+        _state.value = _state.value.copy(
+            targetHand = targetHand,
+            targetHandMatched = matched,
+            feedbackMessage = when {
+                _state.value.handedness.isBlank() -> "未检测到手，请将目标手完整放入画面"
+                matched -> ""
+                else -> "当前检测到 ${_state.value.handedness}，请切换到${targetHand.label}"
+            }
+        )
+    }
+
     // MediaPipe hand landmarks (21 points):
     // 0: WRIST
     // 1-4: THUMB (CMC, MCP, IP, TIP)
@@ -282,13 +350,13 @@ class GestureCameraService(
     // 5: ring_tendon    - ring finger tendon (MCP-PIP-DIP angle)
     // 6: pinky_tendon   - pinky finger tendon (MCP-PIP-DIP angle)
 
-    private fun computeFingerAngles(landmarks: List<NormalizedLandmark>): FingerAngles {
+    private fun computeFingerAngles(landmarks: List<NormalizedLandmark>, handedness: String): FingerAngles {
         if (landmarks.size < 21) {
             Log.w(TAG, "Unexpected landmarks size: ${landmarks.size}")
             return FingerAngles()
         }
 
-        fun angle(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
+        fun angleDegrees(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
             val v1x = p1.x() - p2.x()
             val v1y = p1.y() - p2.y()
             val v2x = p3.x() - p2.x()
@@ -303,40 +371,52 @@ class GestureCameraService(
             return Math.toDegrees(acos(cosVal.toDouble()).toDouble()).toFloat()
         }
 
-        // MediaPipe thumb landmarks (0= wrist, 1= CMC, 2= MCP, 3= IP, 4= TIP)
-        // MediaPipe finger landmarks: 5= INDEX_MCP, 9= MIDDLE_MCP, 13= RING_MCP, 17= PINKY_MCP
+        fun flexionDegrees(p1: NormalizedLandmark, p2: NormalizedLandmark, p3: NormalizedLandmark): Float {
+            val raw = angleDegrees(p1, p2, p3)
+            return (180f - raw).coerceIn(0f, 90f)
+        }
 
-        // For 2D landmarks, compute thumb angles using vector math similar to ROS2:
-        // vec = MCP - CMC (thumb direction vector from root)
+        fun toPoint(index: Int): Pair<Float, Float> = landmarks[index].x() to landmarks[index].y()
 
-        // 0: thumb_cmc_abd - thumb abduction (x-direction of thumb relative to palm)
-        // Use the x-distance between thumb MCP and index MCP, scaled
-        val thumbMcpX = landmarks[2].x()
-        val indexMcpX = landmarks[5].x()
-        val thumbAbd = kotlin.math.abs(thumbMcpX - indexMcpX) * 100f
+        fun vector(from: Pair<Float, Float>, to: Pair<Float, Float>): Pair<Float, Float> {
+            return (to.first - from.first) to (to.second - from.second)
+        }
 
-        // 1: thumb_cmc_flex - thumb CMC flexion (angle at CMC joint)
-        // When thumb bends toward palm, the y-coordinate of MCP changes relative to CMC
-        val thumbMcpY = landmarks[2].y()
-        val thumbCmcY = landmarks[1].y()
-        // Distance from CMC to MCP in y direction (negative = MCP above CMC = bending toward palm)
-        val thumbCmcFlexY = thumbCmcY - thumbMcpY
-        // Scale to degrees (larger y diff = more flexion)
-        val thumbCmcFlex = (thumbCmcFlexY * 180f).coerceIn(0f, 90f)
+        fun normalize(vec: Pair<Float, Float>): Pair<Float, Float> {
+            val mag = sqrt(vec.first * vec.first + vec.second * vec.second)
+            if (mag < 0.0001f) return 0f to 0f
+            return (vec.first / mag) to (vec.second / mag)
+        }
 
-        // 2: thumb_tendon - thumb tendon/movement (MCP-IP-TIP angle)
-        // When thumb bends at second joint, this angle decreases
-        val thumbTendon = angle(landmarks[2], landmarks[3], landmarks[4])
+        val thumbCmc = toPoint(1)
+        val thumbMcp = toPoint(2)
+        val indexMcp = toPoint(5)
+        val ringMcp = toPoint(13)
 
-        // 3-6: finger tendons - MCP-PIP-DIP consecutive joint angles
-        val indexTendon = angle(landmarks[5], landmarks[6], landmarks[7])
-        val middleTendon = angle(landmarks[9], landmarks[10], landmarks[11])
-        val ringTendon = angle(landmarks[13], landmarks[14], landmarks[15])
-        val pinkyTendon = angle(landmarks[17], landmarks[18], landmarks[19])
+        var palmAxis = vector(ringMcp, indexMcp)
+        if (handedness.equals("Left", ignoreCase = true)) {
+            palmAxis = (-palmAxis.first) to (-palmAxis.second)
+        }
+        val thumbAxis = normalize(vector(thumbCmc, thumbMcp))
+        val palmAxisNorm = normalize(palmAxis)
+        val thumbAbdAngle = Math.toDegrees(
+            atan2(
+                (palmAxisNorm.first * thumbAxis.second - palmAxisNorm.second * thumbAxis.first).toDouble(),
+                (palmAxisNorm.first * thumbAxis.first + palmAxisNorm.second * thumbAxis.second).toDouble()
+            )
+        ).toFloat()
+        val thumbAbd = ((abs(thumbAbdAngle) / 90f) * 100f).coerceIn(0f, 100f)
+
+        val thumbCmcFlex = (flexionDegrees(landmarks[0], landmarks[1], landmarks[2]) * (55f / 90f)).coerceIn(0f, 55f)
+        val thumbTendon = flexionDegrees(landmarks[2], landmarks[3], landmarks[4])
+        val indexTendon = flexionDegrees(landmarks[5], landmarks[6], landmarks[7])
+        val middleTendon = flexionDegrees(landmarks[9], landmarks[10], landmarks[11])
+        val ringTendon = flexionDegrees(landmarks[13], landmarks[14], landmarks[15])
+        val pinkyTendon = flexionDegrees(landmarks[17], landmarks[18], landmarks[19])
 
         return FingerAngles(
-            thumbAbd = thumbAbd.coerceIn(0f, 100f),
-            thumbCmcFlex = thumbCmcFlex.coerceIn(0f, 90f),
+            thumbAbd = thumbAbd,
+            thumbCmcFlex = thumbCmcFlex,
             thumbTendon = thumbTendon.coerceIn(0f, 90f),
             indexTendon = indexTendon.coerceIn(0f, 90f),
             middleTendon = middleTendon.coerceIn(0f, 90f),
@@ -374,15 +454,24 @@ class GestureCameraService(
     fun startCalibration() {
         smoothedValues.fill(0f)
         needsInitialUpdate = true  // Allow first frame to update without DEADBAND
-        _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_OPEN)
+        _state.value = _state.value.copy(
+            calibrationState = CalibrationState.CALIBRATING_OPEN,
+            feedbackMessage = "请先张开目标手，然后点击记录张开"
+        )
     }
 
     fun recordCalibrationPose() {
         val current = _state.value.smoothedAngles
 
-        // Validate hand is detected and angles are non-zero
+        // Validate hand is detected and target hand matches
         if (!_state.value.handDetected) {
             Log.w(TAG, "Calibration skipped: hand not detected")
+            _state.value = _state.value.copy(feedbackMessage = "校准失败：未检测到手")
+            return
+        }
+        if (!_state.value.targetHandMatched) {
+            Log.w(TAG, "Calibration skipped: detected hand does not match target hand")
+            _state.value = _state.value.copy(feedbackMessage = "校准失败：检测手与目标手不一致")
             return
         }
 
@@ -391,6 +480,7 @@ class GestureCameraService(
                          current.indexTendon + current.middleTendon + current.ringTendon + current.pinkyTendon
         if (totalAngle < 5f) {
             Log.w(TAG, "Calibration skipped: angles too small (hand may not be visible)")
+            _state.value = _state.value.copy(feedbackMessage = "校准失败：手势特征太弱，请调整手的位置")
             return
         }
 
@@ -402,7 +492,10 @@ class GestureCameraService(
                     current.ringTendon, current.pinkyTendon
                 )
                 Log.i(TAG, "Calibration: open pose recorded - thumbAbd=${current.thumbAbd}, fingers=${current.indexTendon}")
-                _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_FIST)
+                _state.value = _state.value.copy(
+                    calibrationState = CalibrationState.CALIBRATING_FIST,
+                    feedbackMessage = "已记录张开手，请保持同一只手并记录握拳"
+                )
             }
             CalibrationState.CALIBRATING_FIST -> {
                 fistAngles = floatArrayOf(
@@ -411,14 +504,20 @@ class GestureCameraService(
                     current.ringTendon, current.pinkyTendon
                 )
                 Log.i(TAG, "Calibration: fist pose recorded - thumbAbd=${current.thumbAbd}, fingers=${current.indexTendon}")
-                _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATING_THUMB_IN)
+                _state.value = _state.value.copy(
+                    calibrationState = CalibrationState.CALIBRATING_THUMB_IN,
+                    feedbackMessage = "已记录握拳，请继续记录拇指内收"
+                )
             }
             CalibrationState.CALIBRATING_THUMB_IN -> {
                 thumbInSwing = current.thumbAbd
                 openThumbSwing = openAngles[0]
                 Log.i(TAG, "Calibration: thumb-in recorded - thumbInSwing=$thumbInSwing, openThumbSwing=$openThumbSwing")
                 saveCalibration()
-                _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
+                _state.value = _state.value.copy(
+                    calibrationState = CalibrationState.CALIBRATED,
+                    feedbackMessage = "校准完成，实时手势控制已启用"
+                )
             }
             else -> {}
         }
@@ -429,28 +528,23 @@ class GestureCameraService(
     }
 
     private fun remapByCalibration(values: FloatArray): FingerAngles {
-        fun remap(value: Float, min: Float, max: Float): Float {
+        fun remap(value: Float, min: Float, max: Float, targetMax: Float = 100f): Float {
             if (max - min < 0.001f) return 0f
-            return ((value - min) / (max - min) * 100f).coerceIn(0f, 100f)
+            return ((value - min) / (max - min) * targetMax).coerceIn(0f, targetMax)
         }
 
-        // Index 3-6: finger tendons (index, middle, ring, pinky)
-        val indexTendon = remap(values[3], openAngles[3], fistAngles[3])
-        val middleTendon = remap(values[4], openAngles[4], fistAngles[4])
-        val ringTendon = remap(values[5], openAngles[5], fistAngles[5])
-        val pinkyTendon = remap(values[6], openAngles[6], fistAngles[6])
+        val indexTendon = remap(values[3], openAngles[3], fistAngles[3], 90f)
+        val middleTendon = remap(values[4], openAngles[4], fistAngles[4], 90f)
+        val ringTendon = remap(values[5], openAngles[5], fistAngles[5], 90f)
+        val pinkyTendon = remap(values[6], openAngles[6], fistAngles[6], 90f)
 
-        // Thumb abduction (index 0)
         val thumbSwingRange = openThumbSwing - thumbInSwing
         val thumbAbd = if (thumbSwingRange > 0.001f) {
             ((openThumbSwing - values[0]) / thumbSwingRange * 100f).coerceIn(0f, 100f)
         } else 0f
 
-        // Thumb CMC flexion (index 1)
-        val thumbCmcFlex = remap(values[1], openAngles[1], fistAngles[1])
-
-        // Thumb tendon (index 2)
-        val thumbTendon = remap(values[2], openAngles[2], fistAngles[2])
+        val thumbCmcFlex = remap(values[1], openAngles[1], fistAngles[1], 55f)
+        val thumbTendon = remap(values[2], openAngles[2], fistAngles[2], 90f)
 
         return FingerAngles(
             thumbAbd = thumbAbd,
@@ -483,7 +577,10 @@ class GestureCameraService(
                 thumbInSwing = prefs.getFloat("thumbInSwing", 0f)
                 openThumbSwing = prefs.getFloat("openThumbSwing", 0f)
                 if (openAngles.size == 7 && fistAngles.size == 7) {
-                    _state.value = _state.value.copy(calibrationState = CalibrationState.CALIBRATED)
+                    _state.value = _state.value.copy(
+                        calibrationState = CalibrationState.CALIBRATED,
+                        feedbackMessage = "已加载历史校准，可直接开始手势控制"
+                    )
                 } else {
                     Log.w(TAG, "Invalid calibration data size, reset required")
                     openAngles = FloatArray(7) { 0f }

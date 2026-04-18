@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraState
+import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
 import com.aerohand.websocket.ConnectionState
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
@@ -35,6 +37,7 @@ data class HandControlUiState(
     val presetActions: List<PresetAction> = PresetActions.all,
     val activePresetId: String? = null,
     val isPresetRunning: Boolean = false,
+    val gestureTargetHand: GestureTargetHand = GestureTargetHand.AUTO,
     val gestureCameraState: GestureCameraState = GestureCameraState()
 )
 
@@ -56,6 +59,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private var presetJob: Job? = null
     private var latestWifiLogs: List<LogEntry> = emptyList()
     private var latestUsbLogs: List<LogEntry> = emptyList()
+    private var lastGestureCompactState: Map<String, Float>? = null
+    private var lastGestureSendTimeMs: Long = 0L
+    private var gestureControlReady = false
+
+    companion object {
+        private const val GESTURE_SEND_INTERVAL_MS = 80L
+        private const val GESTURE_MIN_DELTA = 1.5f
+    }
 
     init {
         viewModelScope.launch {
@@ -145,6 +156,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun connect() {
+        resetGestureSendState()
         val state = _uiState.value
         when (state.connectionMode) {
             ConnectionMode.WIFI -> {
@@ -160,6 +172,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     fun disconnect() {
         presetJob?.cancel()
+        resetGestureSendState()
         mutateState { copy(isPresetRunning = false, activePresetId = null) }
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.disconnect()
@@ -283,24 +296,80 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         usbSerialService.release()
     }
 
+    fun setGestureTargetHand(targetHand: GestureTargetHand) {
+        resetGestureSendState()
+        mutateState {
+            copy(
+                gestureTargetHand = targetHand,
+                gestureCameraState = gestureCameraState.copy(
+                    targetHand = targetHand,
+                    targetHandMatched = targetHand.matches(gestureCameraState.handedness)
+                )
+            )
+        }
+    }
+
     fun updateGestureCameraState(state: GestureCameraState) {
-        mutateState { copy(gestureCameraState = state) }
+        val targetHand = _uiState.value.gestureTargetHand
+        mutateState {
+            copy(
+                gestureCameraState = state.copy(
+                    targetHand = targetHand,
+                    targetHandMatched = targetHand.matches(state.handedness)
+                )
+            )
+        }
     }
 
     fun fingerAnglesToCompactState(angles: FingerAngles): Map<String, Float> {
         return mapOf(
-            "thumb_cmc_abd" to angles.thumbAbd,
-            "thumb_cmc_flex" to angles.thumbCmcFlex,
-            "thumb_mcp_ip" to angles.thumbTendon,
-            "index_flexion" to angles.indexTendon,
-            "middle_flexion" to angles.middleTendon,
-            "ring_flexion" to angles.ringTendon,
-            "pinky_flexion" to angles.pinkyTendon
+            "thumb_cmc_abd" to angles.thumbAbd.coerceIn(0f, 100f),
+            "thumb_cmc_flex" to angles.thumbCmcFlex.coerceIn(0f, 55f),
+            "thumb_mcp_ip" to angles.thumbTendon.coerceIn(0f, 90f),
+            "index_flexion" to angles.indexTendon.coerceIn(0f, 90f),
+            "middle_flexion" to angles.middleTendon.coerceIn(0f, 90f),
+            "ring_flexion" to angles.ringTendon.coerceIn(0f, 90f),
+            "pinky_flexion" to angles.pinkyTendon.coerceIn(0f, 90f)
         )
+    }
+
+    fun resetGestureSendState() {
+        lastGestureCompactState = null
+        lastGestureSendTimeMs = 0L
+        gestureControlReady = false
+    }
+
+    fun markGestureControlReady() {
+        if (!gestureControlReady) {
+            gestureControlReady = true
+            lastGestureCompactState = null
+            lastGestureSendTimeMs = 0L
+        }
     }
 
     fun updateControlValuesFromGesture(angles: FingerAngles) {
         val compactState = fingerAnglesToCompactState(angles)
+        val now = System.currentTimeMillis()
+        val previous = lastGestureCompactState
+        val changedEnough = previous == null || compactState.any { (key, value) ->
+            abs((previous[key] ?: value) - value) >= GESTURE_MIN_DELTA
+        }
+        val intervalReached = now - lastGestureSendTimeMs >= GESTURE_SEND_INTERVAL_MS
+        val shouldSend = if (!gestureControlReady) {
+            false
+        } else if (previous == null) {
+            true
+        } else {
+            changedEnough && intervalReached
+        }
+
+        if (!shouldSend) {
+            return
+        }
+
+        gestureControlReady = true
+        lastGestureCompactState = compactState
+        lastGestureSendTimeMs = now
         updateControlValues(compactState)
         sendCurrentState()
     }

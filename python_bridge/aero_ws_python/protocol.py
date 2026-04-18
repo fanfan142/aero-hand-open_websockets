@@ -7,9 +7,9 @@ Aero WebSocket Protocol Definition
 
 import json
 import time
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Any
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class CommandType(Enum):
@@ -22,7 +22,6 @@ class CommandType(Enum):
     STATES_RESPONSE = "states_response"
 
 
-# 关节ID到舵机ID的映射
 JOINT_TO_SERVO_ID = {
     "thumb_proximal": 0,
     "thumb_distal": 1,
@@ -41,7 +40,6 @@ JOINT_TO_SERVO_ID = {
     "thumb_rotation": 14,
 }
 
-# 关节角度范围限制
 JOINT_ANGLE_LIMITS = {
     "proximal": (0, 90),
     "middle": (0, 90),
@@ -49,8 +47,18 @@ JOINT_ANGLE_LIMITS = {
     "rotation": (-30, 30),
 }
 
-# 所有有效的关节ID
 VALID_JOINT_IDS = set(JOINT_TO_SERVO_ID.keys())
+
+
+class ErrorCode:
+    """协议错误码常量"""
+    INVALID_ANGLE = "INVALID_ANGLE"
+    INVALID_JOINT_ID = "INVALID_JOINT_ID"
+    INVALID_COMMAND = "INVALID_COMMAND"
+    PARSE_ERROR = "PARSE_ERROR"
+    SERVO_ERROR = "SERVO_ERROR"
+    SERIAL_ERROR = "SERIAL_ERROR"
+    TIMEOUT = "TIMEOUT"
 
 
 def get_joint_type(joint_id: str) -> str:
@@ -69,6 +77,26 @@ def get_angle_limits(joint_id: str) -> tuple:
     return JOINT_ANGLE_LIMITS.get(joint_type, (0, 90))
 
 
+def _coerce_number(value: Any, field_name: str) -> Tuple[Optional[float], Optional[str]]:
+    """将输入安全转换为 float"""
+    if isinstance(value, bool):
+        return None, f"Field '{field_name}' must be a number"
+    try:
+        return float(value), None
+    except (TypeError, ValueError):
+        return None, f"Field '{field_name}' must be a number"
+
+
+def _coerce_int(value: Any, field_name: str) -> Tuple[Optional[int], Optional[str]]:
+    """将输入安全转换为 int"""
+    if isinstance(value, bool):
+        return None, f"Field '{field_name}' must be an integer"
+    try:
+        return int(value), None
+    except (TypeError, ValueError):
+        return None, f"Field '{field_name}' must be an integer"
+
+
 @dataclass
 class JointCommand:
     """单关节控制指令"""
@@ -77,18 +105,18 @@ class JointCommand:
     duration_ms: int = 500
 
     def validate(self) -> tuple:
-        """验证指令合法性，返回(is_valid, error_message)"""
+        """验证指令合法性，返回(is_valid, error_message, error_code)"""
         if self.joint_id not in VALID_JOINT_IDS:
-            return False, f"Invalid joint_id: {self.joint_id}"
+            return False, f"Invalid joint_id: {self.joint_id}", ErrorCode.INVALID_JOINT_ID
 
         min_angle, max_angle = get_angle_limits(self.joint_id)
         if not (min_angle <= self.angle <= max_angle):
-            return False, f"Angle {self.angle} out of range [{min_angle}, {max_angle}]"
+            return False, f"Angle {self.angle} out of range [{min_angle}, {max_angle}]", ErrorCode.INVALID_ANGLE
 
         if self.duration_ms < 0 or self.duration_ms > 5000:
-            return False, f"Duration {self.duration_ms} out of range [0, 5000]"
+            return False, f"Duration {self.duration_ms} out of range [0, 5000]", ErrorCode.INVALID_COMMAND
 
-        return True, None
+        return True, None, None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -111,18 +139,17 @@ class MultiJointCommand:
     def validate(self) -> tuple:
         """验证指令合法性"""
         if not self.joints:
-            return False, "No joints specified"
-
-        for joint in self.joints:
-            cmd = JointCommand(joint.joint_id, joint.angle, self.duration_ms)
-            is_valid, err = cmd.validate()
-            if not is_valid:
-                return False, err
+            return False, "No joints specified", ErrorCode.INVALID_COMMAND
 
         if self.duration_ms < 0 or self.duration_ms > 5000:
-            return False, f"Duration {self.duration_ms} out of range [0, 5000]"
+            return False, f"Duration {self.duration_ms} out of range [0, 5000]", ErrorCode.INVALID_COMMAND
 
-        return True, None
+        for joint in self.joints:
+            is_valid, err, err_code = JointCommand(joint.joint_id, joint.angle, self.duration_ms).validate()
+            if not is_valid:
+                return False, err, err_code
+
+        return True, None, None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -139,7 +166,7 @@ class JointState:
         return {
             "joint_id": self.joint_id,
             "angle": self.angle,
-            "load": self.load
+            "load": self.load,
         }
 
 
@@ -151,13 +178,13 @@ class CommandMessage:
     data: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def from_json(cls, json_str: str) -> 'CommandMessage':
+    def from_json(cls, json_str: str) -> "CommandMessage":
         """从JSON字符串解析"""
         obj = json.loads(json_str)
         return cls(
             type=obj.get("type", ""),
             timestamp=obj.get("timestamp", int(time.time() * 1000)),
-            data=obj.get("data")
+            data=obj.get("data"),
         )
 
     def to_json(self) -> str:
@@ -173,48 +200,77 @@ class CommandMessage:
 def parse_command(json_str: str) -> tuple:
     """
     解析JSON指令，返回 (command_obj, error)
-    command_obj 可能是 JointCommand 或 MultiJointCommand
+    command_obj 可能是 JointCommand 或 MultiJointCommand 或 CommandMessage
     """
     try:
         obj = json.loads(json_str)
     except json.JSONDecodeError as e:
         return None, f"JSON parse error: {e}"
 
+    if not isinstance(obj, dict):
+        return None, "Command payload must be a JSON object"
+
     cmd_type = obj.get("type", "")
     timestamp = obj.get("timestamp", int(time.time() * 1000))
-    data = obj.get("data", {})
+    data = obj.get("data")
+
+    if not isinstance(cmd_type, str) or not cmd_type:
+        return None, "Missing or invalid command type"
 
     if cmd_type == CommandType.JOINT_CONTROL.value:
-        if not data:
+        if not isinstance(data, dict):
             return None, "Missing data field"
-        joint_id = data.get("joint_id", "")
-        angle = data.get("angle", 0)
-        duration = data.get("duration_ms", 500)
-        cmd = JointCommand(joint_id, angle, duration)
-        return cmd, None
 
-    elif cmd_type == CommandType.MULTI_JOINT_CONTROL.value:
-        if not data or "joints" not in data:
+        joint_id = data.get("joint_id")
+        if not isinstance(joint_id, str) or not joint_id:
+            return None, "Field 'joint_id' must be a non-empty string"
+
+        angle, angle_error = _coerce_number(data.get("angle"), "angle")
+        if angle_error:
+            return None, angle_error
+
+        duration, duration_error = _coerce_int(data.get("duration_ms", 500), "duration_ms")
+        if duration_error:
+            return None, duration_error
+
+        return JointCommand(joint_id, angle, duration), None
+
+    if cmd_type == CommandType.MULTI_JOINT_CONTROL.value:
+        if not isinstance(data, dict):
             return None, "Missing joints data"
-        joints_data = data.get("joints", [])
-        duration = data.get("duration_ms", 500)
-        joints = []
-        for j in joints_data:
-            angle_val = j.get("angle")
-            if angle_val is None:
-                angle_val = 0
-            joints.append(JointData(j.get("joint_id", ""), float(angle_val)))
-        cmd = MultiJointCommand(joints, duration)
-        return cmd, None
 
-    elif cmd_type == CommandType.GET_STATES.value:
+        joints_data = data.get("joints")
+        if not isinstance(joints_data, list):
+            return None, "Field 'joints' must be a list"
+
+        duration, duration_error = _coerce_int(data.get("duration_ms", 500), "duration_ms")
+        if duration_error:
+            return None, duration_error
+
+        joints: List[JointData] = []
+        for index, joint in enumerate(joints_data):
+            if not isinstance(joint, dict):
+                return None, f"Joint item at index {index} must be an object"
+
+            joint_id = joint.get("joint_id")
+            if not isinstance(joint_id, str) or not joint_id:
+                return None, f"Joint item at index {index} has invalid joint_id"
+
+            angle, angle_error = _coerce_number(joint.get("angle"), f"joints[{index}].angle")
+            if angle_error:
+                return None, angle_error
+
+            joints.append(JointData(joint_id, angle))
+
+        return MultiJointCommand(joints, duration), None
+
+    if cmd_type == CommandType.GET_STATES.value:
         return CommandMessage(type=cmd_type, timestamp=timestamp), None
 
-    elif cmd_type == CommandType.HOMING.value:
+    if cmd_type == CommandType.HOMING.value:
         return CommandMessage(type=cmd_type, timestamp=timestamp), None
 
-    else:
-        return None, f"Unknown command type: {cmd_type}"
+    return None, f"Unknown command type: {cmd_type}"
 
 
 def build_response(success: bool, command_type: str, data: Dict = None, error_msg: str = None) -> str:
@@ -225,19 +281,19 @@ def build_response(success: bool, command_type: str, data: Dict = None, error_ms
             "success": False,
             "timestamp": int(time.time() * 1000),
             "error": {
-                "code": "UNKNOWN_ERROR",
-                "message": error_msg
-            }
+                "code": ErrorCode.INVALID_COMMAND,
+                "message": error_msg,
+            },
         }
     else:
         response = {
             "type": "response",
-            "success": True,
+            "success": success,
             "timestamp": int(time.time() * 1000),
             "data": {
                 "command_type": command_type,
-                "executed": True
-            }
+                "executed": success,
+            },
         }
         if data:
             response["data"].update(data)
@@ -252,8 +308,8 @@ def build_states_response(states: List[JointState]) -> str:
         "success": True,
         "timestamp": int(time.time() * 1000),
         "data": {
-            "joints": [s.to_dict() for s in states]
-        }
+            "joints": [s.to_dict() for s in states],
+        },
     }
     return json.dumps(response, ensure_ascii=False)
 
@@ -266,7 +322,7 @@ def build_error(code: str, message: str) -> str:
         "timestamp": int(time.time() * 1000),
         "error": {
             "code": code,
-            "message": message
-        }
+            "message": message,
+        },
     }
     return json.dumps(response, ensure_ascii=False)

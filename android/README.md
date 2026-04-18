@@ -42,12 +42,17 @@ USB 模式下会进一步把 7 通道控制映射为 Aero Hand SDK 同源的 16 
 
 ### 命令行构建
 
+在执行构建前，必须先配置统一签名（`android/keystore.properties` 或对应环境变量），否则 `assembleDebug` 和 `assembleRelease` 都会失败。
+
 ```bash
 cd android
 ./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
-APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
+APK 输出位置：
+- Debug：`app/build/outputs/apk/debug/app-debug.apk`
+- Release：`app/build/outputs/apk/release/app-release.apk`
 
 ### CI/CD 构建与发布
 
@@ -60,11 +65,11 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 
 推送版本号标签（例如 `v1.1.1`）会触发正式发布工作流：
 
-- 构建已签名 `release` APK（使用 debug 签名）
+- 构建已签名 `release` APK（使用统一发布密钥）
 - 自动创建对应版本 Release
 - 上传 `app-release.apk`
 
-> 正式签名密钥配置后，debug/release 构建都会统一使用该密钥签名；未配置时回退 debug 签名（仅用于预览/测试）。
+> 现在要求 debug/release 始终使用同一套发布密钥签名，保证互相可覆盖安装；未配置密钥时，CI 与 release 构建会直接失败，而不是回退到 debug 签名。
 
 ### 统一签名（避免每次安装先卸载）
 
@@ -88,7 +93,7 @@ APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`
 - `ANDROID_SIGNING_KEY_ALIAS`
 - `ANDROID_SIGNING_KEY_PASSWORD`
 
-`release.yml` 会优先使用这些 Secrets；缺失时自动回退 debug 签名。
+`build.yml` 与 `release.yml` 都强依赖这些 Secrets；缺失时直接失败，避免生成无法覆盖安装的不同签名 APK。
 
 > 建议：团队统一维护一套 upload key，至少做离线备份 + 密码托管，避免密钥丢失导致无法升级。
 
