@@ -26,7 +26,7 @@ jobs:
 
       - name: Build firmware
         run: |
-          cd firmware_ws_build
+          cd scripts
           python build_versions.py
 
       - name: List built firmware
