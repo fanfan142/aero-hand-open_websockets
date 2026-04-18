@@ -258,7 +258,8 @@ fun HandControlScreen() {
                                 viewModel.setGestureTargetHand(it)
                             },
                             onStartCalibration = { gestureService.startCalibration() },
-                            onRecordCalibrationPose = { gestureService.recordCalibrationPose() }
+                            onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
+                            onCameraFlip = {}
                         )
                         3 -> LogPage(
                             logs = uiState.logs,

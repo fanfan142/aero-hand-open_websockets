@@ -8,6 +8,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +61,7 @@ fun GestureFollowPage(
     onTargetHandChange: (GestureTargetHand) -> Unit,
     onStartCalibration: () -> Unit,
     onRecordCalibrationPose: () -> Unit,
+    onCameraFlip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -79,6 +81,7 @@ fun GestureFollowPage(
 
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
+    var isFrontCamera by remember { mutableStateOf(true) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -158,6 +161,22 @@ fun GestureFollowPage(
                             ) {
                                 Text(
                                     text = if (showStatusOverlay) "隐藏状态" else "显示状态",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+
+                            Surface(
+                                modifier = Modifier.clickable {
+                                    isFrontCamera = gestureService.toggleCamera()
+                                    onCameraFlip()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color.Black.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = if (isFrontCamera) "📷 前" else "📷 后",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)

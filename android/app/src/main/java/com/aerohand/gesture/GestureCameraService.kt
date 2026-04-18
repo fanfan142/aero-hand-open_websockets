@@ -41,12 +41,12 @@ class GestureCameraService(
     companion object {
         private const val TAG = "GestureCameraService"
         private const val NUM_HANDS = 1
-        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.3f
-        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.3f
-        private const val MIN_TRACKING_CONFIDENCE = 0.3f
+        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.5f
+        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.5f
+        private const val MIN_TRACKING_CONFIDENCE = 0.5f
         private const val HAND_LANDMARKER_MODEL_ASSET = "hand_landmarker.task"
-        private const val EMA_ALPHA = 0.7f
-        private const val DEADBAND = 2f
+        private const val EMA_ALPHA = 0.5f
+        private const val DEADBAND = 5f
         private const val FPS_WINDOW = 10
         private const val VIDEO_FRAME_INTERVAL_MS = 33L
     }
@@ -72,6 +72,8 @@ class GestureCameraService(
     private var frameTimeBuffer = mutableListOf<Long>()
     private val videoTimestampMs = AtomicLong(0L)
     private var targetHand: GestureTargetHand = GestureTargetHand.AUTO
+    private var useFrontCamera: Boolean = true
+    private var cameraPreviewView: PreviewView? = null
 
     init {
         loadCalibration()
@@ -79,6 +81,7 @@ class GestureCameraService(
 
     @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     fun startCamera(previewView: PreviewView) {
+        cameraPreviewView = previewView
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
@@ -105,7 +108,11 @@ class GestureCameraService(
                 }
             }
 
-        val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+        val cameraSelector = if (useFrontCamera) {
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        } else {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        }
 
         try {
             cameraProvider.unbindAll()
@@ -155,7 +162,7 @@ class GestureCameraService(
             val jpegBytes = outputStream.toByteArray()
             val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return null
             val rotation = imageProxy.imageInfo.rotationDegrees
-            val isFrontCamera = true
+            val isFrontCamera = useFrontCamera
 
             val matrix = Matrix()
             if (rotation != 0) {
@@ -252,13 +259,14 @@ class GestureCameraService(
             } else ""
 
             // In a front-facing mirrored selfie view:
-            // - User's LEFT hand appears on the RIGHT side of the image (wrist.x > 0.5)
-            // - MediaPipe reports "Right" for this (mirrored coordinate system)
             // - User's RIGHT hand appears on the LEFT side of the image (wrist.x < 0.5)
-            // - MediaPipe reports "Left" for this
-            // So wrist.x > 0.5 means actual = "Left", wrist.x < 0.5 means actual = "Right"
+            // - MediaPipe reports "Left" for this (mirrored coordinate system)
+            // - So wrist.x < 0.5 means actual = "Right"
+            // - User's LEFT hand appears on the RIGHT side of the image (wrist.x > 0.5)
+            // - MediaPipe reports "Right" for this
+            // - So wrist.x > 0.5 means actual = "Left"
             val wrist = landmarks[0][0]
-            val actualHandedness = if (wrist.x() > 0.5f) "Left" else "Right"
+            val actualHandedness = if (wrist.x() < 0.5f) "Right" else "Left"
 
             val angles = computeFingerAngles(landmarks[0], actualHandedness)
             val smoothed = applySmoothing(angles)
@@ -328,6 +336,15 @@ class GestureCameraService(
             handLandmarker = null
         }
     }
+
+    fun toggleCamera(): Boolean {
+        useFrontCamera = !useFrontCamera
+        cameraProvider?.unbindAll()
+        cameraPreviewView?.let { setupImageAnalysis(it) }
+        return useFrontCamera
+    }
+
+    fun isFrontCamera(): Boolean = useFrontCamera
 
     fun setTargetHand(targetHand: GestureTargetHand) {
         this.targetHand = targetHand

@@ -161,6 +161,100 @@ object PresetActions {
                 PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 300),
                 PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 300)
             )
+        ),
+        PresetAction(
+            "typing",
+            "打字",
+            "模拟打字节奏",
+            listOf(
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 70f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 70f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
+                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
+                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150)
+            )
+        ),
+        PresetAction(
+            "conducting",
+            "指挥家",
+            "模拟指挥动作",
+            listOf(
+                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 500),
+                PresetStep(pose(50f, 25f, 50f, 60f, 60f, 60f, 60f), 300),
+                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
+                PresetStep(pose(20f, 10f, 20f, 30f, 50f, 50f, 50f), 300),
+                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
+                PresetStep(pose(20f, 10f, 20f, 50f, 30f, 50f, 50f), 300),
+                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
+                PresetStep(pose(20f, 10f, 20f, 20f, 20f, 20f, 20f), 300),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 800)
+            )
+        ),
+        PresetAction(
+            "rps",
+            "猜拳",
+            "石头剪刀布循环",
+            listOf(
+                // Rock
+                PresetStep(pose(85f, 50f, 85f, 85f, 85f, 85f, 85f), 1500),
+                // Scissors
+                PresetStep(pose(20f, 10f, 85f, 10f, 10f, 10f, 10f), 800),
+                // Paper
+                PresetStep(pose(15f, 10f, 10f, 10f, 10f, 10f, 10f), 1500),
+                // Scissors
+                PresetStep(pose(20f, 10f, 85f, 10f, 10f, 10f, 10f), 800),
+                // Back to neutral
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 500)
+            )
+        ),
+        PresetAction(
+            "spiral",
+            "螺旋",
+            "手指螺旋收放",
+            listOf(
+                PresetStep(pose(75f, 45f, 75f, 75f, 75f, 75f, 90f), 150),
+                PresetStep(pose(45f, 30f, 45f, 55f, 60f, 70f, 90f), 150),
+                PresetStep(pose(20f, 15f, 20f, 35f, 45f, 60f, 85f), 150),
+                PresetStep(pose(15f, 10f, 15f, 20f, 30f, 50f, 75f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 15f, 35f, 60f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 20f, 45f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 30f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200),
+                PresetStep(pose(20f, 15f, 20f, 20f, 15f, 20f, 15f), 150),
+                PresetStep(pose(35f, 25f, 35f, 35f, 30f, 35f, 30f), 150),
+                PresetStep(pose(55f, 35f, 55f, 55f, 50f, 55f, 50f), 150),
+                PresetStep(pose(75f, 45f, 75f, 75f, 70f, 75f, 70f), 150),
+                PresetStep(pose(85f, 50f, 85f, 85f, 85f, 85f, 85f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 300)
+            )
+        ),
+        PresetAction(
+            "finger_dance",
+            "手指舞",
+            "波浪组合动作",
+            listOf(
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
+                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
+                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200),
+                PresetStep(pose(60f, 40f, 60f, 60f, 60f, 60f, 60f), 150),
+                PresetStep(pose(30f, 20f, 30f, 30f, 30f, 30f, 30f), 150),
+                PresetStep(pose(60f, 40f, 60f, 60f, 60f, 60f, 60f), 150),
+                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200)
+            )
         )
     )
 
