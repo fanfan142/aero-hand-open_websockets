@@ -86,7 +86,9 @@ jobs:
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
-          files: android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
-          overwrite_files: true
           generate_release_notes: true
           make_latest: true
+
+      - name: Upload APK to release
+        if: success()
+        run: gh release upload ${{ github.ref_name }} "android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" --clobber
