@@ -59,7 +59,9 @@ jobs:
 
       - name: Rename APK to versioned name
         run: |
+          mkdir -p android/app/build/outputs/apk/release/
           cp android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk"
+          ls -la android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
 
       - name: Upload release build log
         if: always()
@@ -91,4 +93,4 @@ jobs:
 
       - name: Upload APK to release
         if: success()
-        run: gh release upload ${{ github.ref_name }} "android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" --clobber
+        run: gh release upload ${{ github.ref_name }} "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" --clobber
