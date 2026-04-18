@@ -13,8 +13,11 @@ android {
         applicationId = "com.aerohand"
         minSdk = 26
         targetSdk = 34
-        versionCode = (project.findProperty("CI_VERSION_CODE") as String?)?.toIntOrNull() ?: 4
-        versionName = (project.findProperty("CI_VERSION_NAME") as String?) ?: "1.1.2"
+
+        // CI_VERSION_CODE / CI_VERSION_NAME 由 workflow 通过 -P 传入
+        // fallback 与 CI workflow 保持一致，保证 debug/release 版本号一致可互相覆盖
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 4
+        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.1.2"
 
         vectorDrawables {
             useSupportLibrary = true
