@@ -393,10 +393,9 @@ class GestureCameraService(
         val indexMcp = toPoint(5)
         val ringMcp = toPoint(13)
 
-        var palmAxis = vector(ringMcp, indexMcp)
-        if (handedness.equals("Left", ignoreCase = true)) {
-            palmAxis = (-palmAxis.first) to (-palmAxis.second)
-        }
+        // palmAxis: from ring MCP to index MCP, already in real-world coordinates
+        // since the front camera image was mirrored via matrix.postScale(-1f, 1f) in imageProxyToBitmap
+        val palmAxis = vector(ringMcp, indexMcp)
         val thumbAxis = normalize(vector(thumbCmc, thumbMcp))
         val palmAxisNorm = normalize(palmAxis)
         val thumbAbdAngle = Math.toDegrees(

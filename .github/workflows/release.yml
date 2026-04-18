@@ -11,12 +11,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      BASE_VERSION_NAME: 1.2.4
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set version from tag
+        run: echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -53,9 +53,13 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease -PCI_VERSION_NAME="${BASE_VERSION_NAME}" -PCI_VERSION_CODE="${{ github.run_number }}" --stacktrace --no-daemon 2>&1 | tee release-build.log
+          ./gradlew assembleRelease -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${{ github.run_number }}" --stacktrace --no-daemon 2>&1 | tee release-build.log
           tail -100 release-build.log
           test -f app/build/outputs/apk/release/app-release.apk
+
+      - name: Rename APK to versioned name
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk"
 
       - name: Upload release build log
         if: always()
@@ -69,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aero-hand-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
 
       - name: Create GitHub release
         if: success()
@@ -82,7 +86,7 @@ jobs:
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
-          files: android/app/build/outputs/apk/release/app-release.apk
+          files: android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
           overwrite_files: true
           generate_release_notes: true
           make_latest: true
