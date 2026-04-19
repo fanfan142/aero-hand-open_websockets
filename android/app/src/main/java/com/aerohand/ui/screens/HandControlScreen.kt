@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -28,7 +29,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,6 +51,7 @@ import com.aerohand.ui.pages.HomePage
 import com.aerohand.ui.pages.JointControlPage
 import com.aerohand.ui.pages.LogPage
 import com.aerohand.viewmodel.ConnectionMode
+import com.aerohand.viewmodel.ConnectionPanelVisibility
 import com.aerohand.viewmodel.HandControlViewModel
 
 private class HandControlViewModelFactory(
@@ -83,16 +84,13 @@ fun HandControlScreen() {
         GestureCameraService(context, lifecycleOwner)
     }
 
-    // Control page selection
     var selectedControlPage by remember { mutableIntStateOf(2) }
 
-    // Connection panel expanded state - default expanded, collapse after connecting
-    var connectionPanelExpanded by remember { mutableStateOf(true) }
-
-    // Auto-collapse connection panel when connected
     LaunchedEffect(uiState.wifiConnected, uiState.usbConnected) {
-        if (uiState.wifiConnected || uiState.usbConnected) {
-            connectionPanelExpanded = false
+        if ((uiState.wifiConnected || uiState.usbConnected) &&
+            uiState.connectionPanelVisibility == ConnectionPanelVisibility.EXPANDED
+        ) {
+            viewModel.setConnectionPanelVisibility(ConnectionPanelVisibility.COLLAPSED)
         }
     }
 
@@ -135,10 +133,38 @@ fun HandControlScreen() {
                 title = {
                     Column {
                         Text("Aero Hand Console")
-                        Text("v${BuildConfig.VERSION_NAME} · Mobile Console", style = MaterialTheme.typography.labelSmall)
+                        val connectionLabel = when (uiState.connectionMode) {
+                            ConnectionMode.WIFI -> if (uiState.wifiConnected) {
+                                "WiFi · ${uiState.connectedServer ?: "${uiState.host}:${uiState.port}"}"
+                            } else {
+                                "WiFi · 未连接"
+                            }
+                            ConnectionMode.USB -> if (uiState.usbConnected) {
+                                "USB · 921600"
+                            } else {
+                                "USB · 未连接"
+                            }
+                        }
+                        Text(
+                            "v${BuildConfig.VERSION_NAME} · $connectionLabel",
+                            style = MaterialTheme.typography.labelSmall
+                        )
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = viewModel::cycleConnectionPanelVisibility
+                    ) {
+                        Text(
+                            text = when (uiState.connectionPanelVisibility) {
+                                ConnectionPanelVisibility.EXPANDED -> "收"
+                                ConnectionPanelVisibility.COLLAPSED -> "展"
+                                ConnectionPanelVisibility.HIDDEN -> "显"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     val isConnected = uiState.wifiConnected || uiState.usbConnected
                     val handType = uiState.connectedHandType
                     if (isConnected && handType != null) {
@@ -182,24 +208,31 @@ fun HandControlScreen() {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                // Connection panel - collapsible, auto-collapse when connected
-                ConnectionPanel(
-                    mode = uiState.connectionMode,
-                    host = uiState.host,
-                    port = uiState.port,
-                    wifiConnected = uiState.wifiConnected,
-                    usbConnected = uiState.usbConnected,
-                    statusMessage = uiState.statusMessage,
-                    onModeChange = viewModel::setConnectionMode,
-                    onHostChange = viewModel::setHost,
-                    onPortChange = viewModel::setPort,
-                    onConnect = viewModel::connect,
-                    onDisconnect = viewModel::disconnect,
-                    expanded = connectionPanelExpanded,
-                    onToggleExpanded = { connectionPanelExpanded = !connectionPanelExpanded }
-                )
+                if (uiState.connectionPanelVisibility != ConnectionPanelVisibility.HIDDEN) {
+                    ConnectionPanel(
+                        mode = uiState.connectionMode,
+                        host = uiState.host,
+                        port = uiState.port,
+                        wifiConnected = uiState.wifiConnected,
+                        usbConnected = uiState.usbConnected,
+                        statusMessage = uiState.statusMessage,
+                        connectedServer = uiState.connectedServer,
+                        wifiConfig = uiState.wifiConfig,
+                        onModeChange = viewModel::setConnectionMode,
+                        onHostChange = viewModel::setHost,
+                        onPortChange = viewModel::setPort,
+                        onConnect = viewModel::connect,
+                        onDisconnect = viewModel::disconnect,
+                        onStaSsidChange = viewModel::setStaSsid,
+                        onStaPasswordChange = viewModel::setStaPassword,
+                        onApplyStaConfig = viewModel::applyStaConfig,
+                        onSwitchToAp = viewModel::switchDeviceToAp,
+                        onClearStaConfig = viewModel::clearStaConfig,
+                        expanded = uiState.connectionPanelVisibility == ConnectionPanelVisibility.EXPANDED
+                    )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
 
                 // Tab indicators
                 TabRow(
@@ -259,7 +292,7 @@ fun HandControlScreen() {
                             },
                             onStartCalibration = { gestureService.startCalibration() },
                             onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
-                            onCameraFlip = {}
+                            onCameraFlip = { viewModel.resetGestureSendState() }
                         )
                         3 -> LogPage(
                             logs = uiState.logs,

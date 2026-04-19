@@ -15,6 +15,7 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <string.h>
 
 #include "config.h"
@@ -24,6 +25,10 @@
 // 全局对象
 AeroWebSocketServer wsServer;
 ServoControl servoControl;
+Preferences prefs;
+String g_staSsid = STA_SSID;
+String g_staPassword = STA_PASSWORD;
+uint8_t g_wifiModeSetting = WIFI_MODE;
 
 // 关节名称定义
 const char* const JOINT_NAMES[JOINT_COUNT] = {
@@ -62,6 +67,14 @@ uint8_t getJointNumber(const char* jointId);
 void handleCommand(uint8_t clientNum, const char* payload, size_t length);
 void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
 void sendResponse(uint8_t clientNum, bool success, const char* message);
+void sendWifiStatus(uint8_t clientNum);
+void loadWiFiConfig();
+void saveWiFiConfig();
+void clearWiFiConfig();
+void startApMode();
+bool connectToSta(bool fallbackToAp);
+const char* getWifiModeName();
+String getCurrentIp();
 void setupWiFi();
 void blinkLED(int times);
 
@@ -86,6 +99,7 @@ void setup() {
     DEBUG_PRINTLN("[SETUP] Servo control initialized");
 
     // 连接WiFi
+    loadWiFiConfig();
     setupWiFi();
 
     // 初始化WebSocket服务
@@ -94,10 +108,14 @@ void setup() {
     wsServer.onConnect([](uint8_t num) {
         DEBUG_PRINTF("[WS] Client %u connected\n", num);
         blinkLED(2);
-        // 广播手性标识
         JsonDocument doc;
         doc["type"] = "hand_info";
         doc["hand_type"] = (HAND_TYPE == 0) ? "Left" : "Right";
+        doc["wifi_mode"] = getWifiModeName();
+        doc["configured_wifi_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
+        doc["ip"] = getCurrentIp();
+        doc["firmware_type"] = "esp32_wifi";
+        doc["firmware_version"] = "v1.0";
         String output;
         serializeJson(doc, output);
         wsServer.sendText(num, output);
@@ -126,25 +144,55 @@ void loop() {
 // WiFi设置
 // ============================================
 
-void setupWiFi() {
-#if WIFI_MODE == 1
-    // AP模式 - ESP32开热点
-    DEBUG_PRINTF("[WIFI] Starting AP mode: %s\n", AP_SSID);
+void loadWiFiConfig() {
+    prefs.begin("wifi", true);
+    g_wifiModeSetting = prefs.getUChar("mode", WIFI_MODE);
+    g_staSsid = prefs.getString("sta_ssid", STA_SSID);
+    g_staPassword = prefs.getString("sta_pass", STA_PASSWORD);
+    prefs.end();
+}
 
+void saveWiFiConfig() {
+    prefs.begin("wifi", false);
+    prefs.putUChar("mode", g_wifiModeSetting);
+    prefs.putString("sta_ssid", g_staSsid);
+    prefs.putString("sta_pass", g_staPassword);
+    prefs.end();
+}
+
+void clearWiFiConfig() {
+    g_staSsid = "";
+    g_staPassword = "";
+    g_wifiModeSetting = AH_WIFI_MODE_AP;
+    prefs.begin("wifi", false);
+    prefs.remove("sta_ssid");
+    prefs.remove("sta_pass");
+    prefs.putUChar("mode", g_wifiModeSetting);
+    prefs.end();
+}
+
+void startApMode() {
+    WiFi.disconnect(true, true);
+    delay(100);
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
-
-    IPAddress IP = WiFi.softAPIP();
     DEBUG_PRINT("[WIFI] AP IP address: ");
-    DEBUG_PRINTLN(IP.toString());
+    DEBUG_PRINTLN(WiFi.softAPIP().toString());
+}
 
-#elif WIFI_MODE == 2
-    // STA模式 - 连接路由器
-    DEBUG_PRINTF("[WIFI] Connecting to: %s\n", STA_SSID);
+bool connectToSta(bool fallbackToAp) {
+    if (g_staSsid.isEmpty()) {
+        DEBUG_PRINTLN("[WIFI] STA SSID is empty");
+        if (fallbackToAp) {
+            startApMode();
+        }
+        return false;
+    }
 
+    WiFi.disconnect(true, true);
+    delay(100);
     WiFi.mode(WIFI_STA);
-    WiFi.begin(STA_SSID, STA_PASSWORD);
-
+    WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
@@ -156,14 +204,48 @@ void setupWiFi() {
         DEBUG_PRINTLN();
         DEBUG_PRINT("[WIFI] Connected! IP: ");
         DEBUG_PRINTLN(WiFi.localIP());
-    } else {
-        DEBUG_PRINTLN();
-        DEBUG_PRINTLN("[WIFI] Connection failed, starting AP as fallback");
-        WiFi.mode(WIFI_AP);
-        WiFi.softAP(AP_SSID, AP_PASSWORD);
+        return true;
     }
 
-#endif
+    DEBUG_PRINTLN();
+    DEBUG_PRINTLN("[WIFI] STA connection failed");
+    if (fallbackToAp) {
+        DEBUG_PRINTLN("[WIFI] Falling back to AP");
+        startApMode();
+    }
+    return false;
+}
+
+const char* getWifiModeName() {
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_AP) return "AP";
+    if (mode == WIFI_STA) return "STA";
+    if (mode == WIFI_AP_STA) return "AP_STA";
+    return "UNKNOWN";
+}
+
+String getCurrentIp() {
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_AP || mode == WIFI_AP_STA) {
+        return WiFi.softAPIP().toString();
+    }
+    if (mode == WIFI_STA) {
+        return WiFi.localIP().toString();
+    }
+    return "0.0.0.0";
+}
+
+void setupWiFi() {
+    if (g_wifiModeSetting == AH_WIFI_MODE_STA) {
+        DEBUG_PRINTF("[WIFI] Connecting to STA: %s\n", g_staSsid.c_str());
+        connectToSta(true);
+    } else if (g_wifiModeSetting == AH_WIFI_MODE_DUAL) {
+        DEBUG_PRINTF("[WIFI] Starting dual mode, trying STA: %s\n", g_staSsid.c_str());
+        connectToSta(true);
+    } else {
+        DEBUG_PRINTF("[WIFI] Starting AP mode: %s\n", AP_SSID);
+        startApMode();
+    }
 }
 
 // ============================================
@@ -309,6 +391,46 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             sendResponse(clientNum, false,"Homing unavailable");
         }
 
+    } else if (strcmp(type, "wifi_status") == 0) {
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_config_set") == 0) {
+        if (!doc["data"]["sta_ssid"].is<const char*>() || !doc["data"]["sta_password"].is<const char*>()) {
+            sendResponse(clientNum, false, "Missing required fields in wifi_config_set");
+            return;
+        }
+        g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
+        g_staPassword = doc["data"]["sta_password"].as<const char*>();
+        g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+        saveWiFiConfig();
+        DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
+        sendResponse(clientNum, true, "WiFi config saved");
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_connect_sta") == 0) {
+        bool connected = connectToSta(true);
+        if (connected) {
+            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+            saveWiFiConfig();
+            sendResponse(clientNum, true, "STA connected");
+        } else {
+            sendResponse(clientNum, false, "STA connection failed");
+        }
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_start_ap") == 0) {
+        g_wifiModeSetting = AH_WIFI_MODE_AP;
+        saveWiFiConfig();
+        startApMode();
+        sendResponse(clientNum, true, "AP started");
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_clear_sta") == 0) {
+        clearWiFiConfig();
+        startApMode();
+        sendResponse(clientNum, true, "STA config cleared");
+        sendWifiStatus(clientNum);
+
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
         sendResponse(clientNum, false,"Unknown command type");
@@ -327,6 +449,22 @@ void sendResponse(uint8_t clientNum, bool success, const char* message) {
         response["error"]["code"] = "COMMAND_ERROR";
         response["error"]["message"] = message;
     }
+
+    String output;
+    serializeJson(response, output);
+    wsServer.sendText(clientNum, output);
+}
+
+void sendWifiStatus(uint8_t clientNum) {
+    JsonDocument response;
+    response["type"] = "wifi_status";
+    response["timestamp"] = millis();
+    response["data"]["mode"] = getWifiModeName();
+    response["data"]["ip"] = getCurrentIp();
+    if (!g_staSsid.isEmpty()) {
+        response["data"]["sta_ssid"] = g_staSsid;
+    }
+    response["data"]["configured_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
 
     String output;
     serializeJson(response, output);

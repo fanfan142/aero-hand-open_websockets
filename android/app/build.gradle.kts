@@ -24,34 +24,31 @@ android {
         }
     }
 
+    val propsFile = rootProject.file("keystore.properties")
+    val props = Properties()
+    if (propsFile.exists()) {
+        propsFile.inputStream().use { props.load(it) }
+    }
+
+    val storePath = props.getProperty("storeFile") ?: System.getenv("ANDROID_SIGNING_STORE_FILE")
+    val storePwd = props.getProperty("storePassword") ?: System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+    val alias = props.getProperty("keyAlias") ?: System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+    val keyPwd = props.getProperty("keyPassword") ?: System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
+    val hasReleaseSigning = !storePath.isNullOrBlank() && !storePwd.isNullOrBlank() && !alias.isNullOrBlank() && !keyPwd.isNullOrBlank()
+
     signingConfigs {
-        create("release") {
-            val propsFile = rootProject.file("keystore.properties")
-            val props = Properties()
-            if (propsFile.exists()) {
-                propsFile.inputStream().use { props.load(it) }
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(storePath!!)
+                storePassword = storePwd
+                keyAlias = alias
+                keyPassword = keyPwd
             }
-
-            val storePath = props.getProperty("storeFile") ?: System.getenv("ANDROID_SIGNING_STORE_FILE")
-            val storePwd = props.getProperty("storePassword") ?: System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
-            val alias = props.getProperty("keyAlias") ?: System.getenv("ANDROID_SIGNING_KEY_ALIAS")
-            val keyPwd = props.getProperty("keyPassword") ?: System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
-
-            require(!storePath.isNullOrBlank()) { "Missing signing store file. Configure android/keystore.properties or ANDROID_SIGNING_STORE_FILE." }
-            require(!storePwd.isNullOrBlank()) { "Missing signing store password." }
-            require(!alias.isNullOrBlank()) { "Missing signing key alias." }
-            require(!keyPwd.isNullOrBlank()) { "Missing signing key password." }
-
-            storeFile = file(storePath)
-            storePassword = storePwd
-            keyAlias = alias
-            keyPassword = keyPwd
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("release")
         }
         release {
             isMinifyEnabled = false
@@ -60,7 +57,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

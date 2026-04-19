@@ -15,14 +15,25 @@
 // WiFi工作模式选择
 // 1: AP模式 (ESP32开热点，手机/电脑直连)
 // 2: STA模式 (ESP32连接已有路由器)
+// 3: Dual模式 (优先STA，失败回退AP)
 #define WIFI_MODE 1
 
-// AP模式配置 (WIFI_MODE = 1)
-#define AP_SSID "AeroHand_WIFI"
+#define AH_WIFI_MODE_AP 1
+#define AH_WIFI_MODE_STA 2
+#define AH_WIFI_MODE_DUAL 3
+
+#if defined(LEFT_HAND)
+  #define AP_SSID "AeroHand_Left"
+#elif defined(RIGHT_HAND)
+  #define AP_SSID "AeroHand_Right"
+#else
+  #define AP_SSID "AeroHand_Unknown"
+#endif
+
 #define AP_PASSWORD "12345678"
 #define AP_CHANNEL 6
 
-// STA模式配置 (WIFI_MODE = 2)
+// STA / Dual模式默认配置
 #define STA_SSID "Your_WiFi_SSID"
 #define STA_PASSWORD "Your_WiFi_Password"
 

@@ -10,13 +10,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -24,22 +24,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aerohand.viewmodel.ConnectionMode
+import com.aerohand.viewmodel.WifiConfigUiState
 
 // ============== 连接面板 ==============
 
@@ -52,13 +49,19 @@ fun ConnectionPanel(
     wifiConnected: Boolean,
     usbConnected: Boolean,
     statusMessage: String,
+    connectedServer: String?,
+    wifiConfig: WifiConfigUiState,
     onModeChange: (ConnectionMode) -> Unit,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onStaSsidChange: (String) -> Unit,
+    onStaPasswordChange: (String) -> Unit,
+    onApplyStaConfig: () -> Unit,
+    onSwitchToAp: () -> Unit,
+    onClearStaConfig: () -> Unit,
     expanded: Boolean,
-    onToggleExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val connected = if (mode == ConnectionMode.WIFI) wifiConnected else usbConnected
@@ -66,7 +69,7 @@ fun ConnectionPanel(
         listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.secondaryContainer)
     )
 
-    var selectedTab by remember { mutableIntStateOf(if (mode == ConnectionMode.WIFI) 0 else 1) }
+    val selectedTab = if (mode == ConnectionMode.WIFI) 0 else 1
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -93,18 +96,6 @@ fun ConnectionPanel(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     StatusBadge(if (connected) "ONLINE" else "OFFLINE", connected)
-                    IconButton(
-                        onClick = onToggleExpanded,
-                        modifier = Modifier.semantics {
-                            contentDescription = if (expanded) "收起连接面板" else "展开连接面板"
-                        }
-                    ) {
-                        Text(
-                            text = if (expanded) "▲" else "▼",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
             }
 
@@ -121,18 +112,12 @@ fun ConnectionPanel(
                 ) {
                     Tab(
                         selected = selectedTab == 0,
-                        onClick = {
-                            selectedTab = 0
-                            onModeChange(ConnectionMode.WIFI)
-                        },
+                        onClick = { onModeChange(ConnectionMode.WIFI) },
                         text = { Text("WiFi") }
                     )
                     Tab(
                         selected = selectedTab == 1,
-                        onClick = {
-                            selectedTab = 1
-                            onModeChange(ConnectionMode.USB)
-                        },
+                        onClick = { onModeChange(ConnectionMode.USB) },
                         text = { Text("USB OTG") }
                     )
                 }
@@ -144,10 +129,17 @@ fun ConnectionPanel(
                         host = host,
                         port = port,
                         connected = wifiConnected,
+                        connectedServer = connectedServer,
+                        wifiConfig = wifiConfig,
                         onHostChange = onHostChange,
                         onPortChange = onPortChange,
                         onConnect = onConnect,
-                        onDisconnect = onDisconnect
+                        onDisconnect = onDisconnect,
+                        onStaSsidChange = onStaSsidChange,
+                        onStaPasswordChange = onStaPasswordChange,
+                        onApplyStaConfig = onApplyStaConfig,
+                        onSwitchToAp = onSwitchToAp,
+                        onClearStaConfig = onClearStaConfig
                     )
                     1 -> UsbConnectionContent(
                         connected = usbConnected,
@@ -165,11 +157,20 @@ private fun WifiConnectionContent(
     host: String,
     port: String,
     connected: Boolean,
+    connectedServer: String?,
+    wifiConfig: WifiConfigUiState,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onStaSsidChange: (String) -> Unit,
+    onStaPasswordChange: (String) -> Unit,
+    onApplyStaConfig: () -> Unit,
+    onSwitchToAp: () -> Unit,
+    onClearStaConfig: () -> Unit
 ) {
+    val canProvisionSta = connected && connectedServer == "192.168.4.1:8765" && wifiConfig.currentWifiMode.equals("AP", ignoreCase = true)
+
     Column {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -211,6 +212,83 @@ private fun WifiConnectionContent(
                 shape = RoundedCornerShape(18.dp)
             ) {
                 Text("连接 WiFi")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Dual 配网",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "当前 ${wifiConfig.currentWifiMode} · IP ${wifiConfig.currentIp}" +
+                        (wifiConfig.configuredStaSsid?.let { " · STA $it" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!canProvisionSta) {
+                    Text(
+                        text = "仅实际连接设备默认 AP 192.168.4.1:8765 时允许下发 WiFi 凭据",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                OutlinedTextField(
+                    value = wifiConfig.staSsid,
+                    onValueChange = onStaSsidChange,
+                    label = { Text("STA WiFi") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(18.dp)
+                )
+                OutlinedTextField(
+                    value = wifiConfig.staPassword,
+                    onValueChange = onStaPasswordChange,
+                    label = { Text("STA 密码") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    shape = RoundedCornerShape(18.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MiniActionButton(
+                        text = "下发并切 STA",
+                        onClick = onApplyStaConfig,
+                        enabled = canProvisionSta && wifiConfig.staSsid.isNotBlank() && wifiConfig.staPassword.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    MiniActionButton(
+                        text = "切回 AP",
+                        onClick = onSwitchToAp,
+                        enabled = connected,
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                MiniActionButton(
+                    text = "清除 STA 配置",
+                    onClick = onClearStaConfig,
+                    enabled = connected,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.tertiary
+                )
             }
         }
     }

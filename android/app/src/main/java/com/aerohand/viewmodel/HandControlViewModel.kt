@@ -24,13 +24,30 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+data class WifiConfigUiState(
+    val staSsid: String = "",
+    val staPassword: String = "",
+    val currentWifiMode: String = "AP",
+    val currentIp: String = "192.168.4.1",
+    val configuredStaSsid: String? = null
+)
+
+enum class ConnectionPanelVisibility {
+    EXPANDED,
+    COLLAPSED,
+    HIDDEN
+}
+
 data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
     val wifiConnected: Boolean = false,
     val usbConnected: Boolean = false,
     val connectedHandType: String? = null,
+    val connectedServer: String? = null,
     val host: String = "192.168.4.1",
     val port: String = "8765",
+    val connectionPanelVisibility: ConnectionPanelVisibility = ConnectionPanelVisibility.COLLAPSED,
+    val wifiConfig: WifiConfigUiState = WifiConfigUiState(),
     val controlValues: Map<String, Float> = ControlDefinitions.DEFAULT_CONTROL_STATE,
     val logs: List<LogEntry> = emptyList(),
     val protocolPreview: String = "[]",
@@ -76,6 +93,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     copy(
                         wifiConnected = state is ConnectionState.Connected,
                         connectedHandType = if (state is ConnectionState.Connected) state.handType else null,
+                        connectedServer = if (state is ConnectionState.Connected) state.server else null,
                         statusMessage = when (state) {
                             is ConnectionState.Connected -> "WiFi 已连接 ${state.server}"
                             is ConnectionState.Connecting -> "WiFi 连接中..."
@@ -91,6 +109,21 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             webSocketService.logs.collectLatest { logs ->
                 latestWifiLogs = logs
                 refreshLogs()
+            }
+        }
+
+        viewModelScope.launch {
+            webSocketService.wifiStatus.collectLatest { status ->
+                mutateState {
+                    copy(
+                        wifiConfig = wifiConfig.copy(
+                            currentWifiMode = status.mode,
+                            currentIp = status.ip,
+                            configuredStaSsid = status.staSsid?.takeIf { it.isNotBlank() }
+                        ),
+                        host = if (wifiConnected && status.ip.isNotBlank() && status.ip != "0.0.0.0") status.ip else host
+                    )
+                }
             }
         }
 
@@ -157,6 +190,30 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         mutateState { copy(port = port.filter { it.isDigit() }.take(5)) }
     }
 
+    fun cycleConnectionPanelVisibility() {
+        mutateState {
+            copy(
+                connectionPanelVisibility = when (connectionPanelVisibility) {
+                    ConnectionPanelVisibility.EXPANDED -> ConnectionPanelVisibility.COLLAPSED
+                    ConnectionPanelVisibility.COLLAPSED -> ConnectionPanelVisibility.HIDDEN
+                    ConnectionPanelVisibility.HIDDEN -> ConnectionPanelVisibility.EXPANDED
+                }
+            )
+        }
+    }
+
+    fun setConnectionPanelVisibility(visibility: ConnectionPanelVisibility) {
+        mutateState { copy(connectionPanelVisibility = visibility) }
+    }
+
+    fun setStaSsid(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(staSsid = value)) }
+    }
+
+    fun setStaPassword(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(staPassword = value)) }
+    }
+
     fun connect() {
         resetGestureSendState()
         val state = _uiState.value
@@ -212,6 +269,77 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.requestStates()
             ConnectionMode.USB -> usbSerialService.requestStates()
+        }
+    }
+
+    fun requestWifiStatus() {
+        if (_uiState.value.connectionMode == ConnectionMode.WIFI) {
+            webSocketService.requestWifiStatus()
+        }
+    }
+
+    fun applyStaConfig() {
+        val state = _uiState.value
+        val wifiConfig = state.wifiConfig
+        if (state.connectionMode != ConnectionMode.WIFI || !state.wifiConnected) {
+            mutateState { copy(statusMessage = "WiFi 未连接，无法下发配置") }
+            return
+        }
+        if (state.connectedServer != "192.168.4.1:8765") {
+            mutateState { copy(statusMessage = "仅连接设备默认 AP 时允许下发 WiFi 配置") }
+            return
+        }
+        val sentConfig = webSocketService.sendWifiConfig(wifiConfig.staSsid, wifiConfig.staPassword)
+        val sentConnect = sentConfig && webSocketService.connectSta()
+        if (sentConnect) {
+            mutateState {
+                copy(
+                    statusMessage = "已发送 WiFi 配置，等待设备切换 STA",
+                    wifiConfig = wifiConfig.copy(
+                        staPassword = "",
+                        configuredStaSsid = wifiConfig.staSsid
+                    )
+                )
+            }
+        } else {
+            mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
+        }
+    }
+
+    fun switchDeviceToAp() {
+        val state = _uiState.value
+        if (state.connectionMode != ConnectionMode.WIFI || !state.wifiConnected) {
+            mutateState { copy(statusMessage = "WiFi 未连接，无法切回 AP") }
+            return
+        }
+        if (webSocketService.switchToAp()) {
+            mutateState {
+                copy(
+                    host = "192.168.4.1",
+                    port = "8765",
+                    statusMessage = "已请求设备切回 AP 模式"
+                )
+            }
+        } else {
+            mutateState { copy(statusMessage = "切回 AP 失败，请检查连接") }
+        }
+    }
+
+    fun clearStaConfig() {
+        val state = _uiState.value
+        if (state.connectionMode != ConnectionMode.WIFI || !state.wifiConnected) {
+            mutateState { copy(statusMessage = "WiFi 未连接，无法清除 STA 配置") }
+            return
+        }
+        if (webSocketService.clearWifiConfig()) {
+            mutateState {
+                copy(
+                    statusMessage = "已清除设备 STA 配置",
+                    wifiConfig = wifiConfig.copy(staSsid = "", staPassword = "", configuredStaSsid = null)
+                )
+            }
+        } else {
+            mutateState { copy(statusMessage = "清除 STA 配置失败，请检查连接") }
         }
     }
 

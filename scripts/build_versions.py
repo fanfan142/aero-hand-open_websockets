@@ -4,6 +4,7 @@
 """
 
 import os
+import re
 import shutil
 import subprocess
 import pathlib
@@ -13,10 +14,21 @@ SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 BASE_DIR = REPO_ROOT
 FIRMWARE_WS = BASE_DIR / "firmware_ws"
+ESP32_WIFI_FIRMWARE = BASE_DIR / "esp32_wifi" / "firmware" / "aero_hand_wifi"
 BUILD_DIR = BASE_DIR / "firmware_ws_build"
 
 VERSIONS = ['v0.1.0', 'v0.1.3', 'v0.1.4', 'v0.1.5', 'v0.2.0']
 HANDS = ['lefthand', 'righthand']
+HLSCL_FILES = [
+    'HLSCL.cpp',
+    'HLSCL.h',
+    'SCSerial.cpp',
+    'SCSerial.h',
+    'SCS.cpp',
+    'SCS.h',
+    'INST.h',
+    'HandConfig.h',
+]
 
 PLATFORMIO_INI_TEMPLATE = '''; PlatformIO Project Configuration File
 ; Aero Hand WebSocket Firmware - {version} ({hand})
@@ -42,20 +54,77 @@ lib_deps =
 upload_resetmethod = esptool
 '''
 
+
+def copy_hlscl_library(dst_dir):
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    hlscl_src_candidates = [
+        FIRMWARE_WS / "lib" / "HLSCL",
+        ESP32_WIFI_FIRMWARE,
+        BUILD_DIR / "lib" / "HLSCL",
+    ]
+    hlscl_src = next((p for p in hlscl_src_candidates if (p / "HLSCL.h").exists() and (p / "HLSCL.cpp").exists()), None)
+    if hlscl_src is None:
+        raise FileNotFoundError("HLSCL source not found in repository")
+
+    for name in HLSCL_FILES:
+        src_file = hlscl_src / name
+        if not src_file.exists():
+            raise FileNotFoundError(f"Required HLSCL file missing: {src_file}")
+        shutil.copy2(src_file, dst_dir / name)
+
+    print(f"    Copied HLSCL files from: {hlscl_src}")
+
+
+def configure_hand_config(file_path, hand_flag):
+    if not file_path.exists():
+        return
+
+    content = file_path.read_text(encoding='utf-8')
+    lines = content.splitlines()
+    define_pattern = re.compile(r'^(\s*)(//\s*)?#define\s+(LEFT_HAND|RIGHT_HAND)\s*$')
+    updated_lines = []
+    seen = set()
+
+    for line in lines:
+        match = define_pattern.match(line)
+        if not match:
+            updated_lines.append(line)
+            continue
+
+        indent, _, macro = match.groups()
+        seen.add(macro)
+        prefix = '' if macro == hand_flag else '//'
+        updated_lines.append(f"{indent}{prefix}#define {macro}")
+
+    if seen != {"LEFT_HAND", "RIGHT_HAND"}:
+        raise ValueError(f"Unexpected HandConfig format in {file_path}")
+
+    updated = "\n".join(updated_lines)
+    if content.endswith("\n"):
+        updated += "\n"
+
+    if updated != content:
+        file_path.write_text(updated, encoding='utf-8')
+
+
 def create_project(version, hand):
+    if hand not in {"lefthand", "righthand"}:
+        raise ValueError(f"Unsupported hand target: {hand}")
+
     proj_dir = BUILD_DIR / version / hand
     src_dir = proj_dir / "src"
     lib_dir = proj_dir / "lib"
+
+    if proj_dir.exists():
+        shutil.rmtree(proj_dir)
 
     # Create directories
     os.makedirs(src_dir, exist_ok=True)
     os.makedirs(lib_dir, exist_ok=True)
 
-    # Copy HLSCL library
-    hlscl_src = BUILD_DIR / "lib" / "HLSCL"
+    # Copy HLSCL library from the repository source
     hlscl_dst = lib_dir / "HLSCL"
-    if hlscl_src.exists():
-        shutil.copytree(hlscl_src, hlscl_dst, dirs_exist_ok=True)
+    copy_hlscl_library(hlscl_dst)
 
     # Copy source files
     firmware_src = FIRMWARE_WS / version
@@ -66,10 +135,12 @@ def create_project(version, hand):
             shutil.copy2(src_path, src_dir / f)
             print(f"    Copied: {f}")
 
-    # Copy shared lib files from firmware_ws/lib/
+    # Copy shared lib files from firmware_ws/lib/ without overwriting version-specific config
     lib_src = FIRMWARE_WS / "lib"
     if lib_src.is_dir():
         for f in os.listdir(lib_src):
+            if f == "config.h":
+                continue
             src_path = lib_src / f
             if src_path.is_file():
                 shutil.copy2(src_path, src_dir / f)
@@ -77,6 +148,9 @@ def create_project(version, hand):
 
     # Determine hand flag
     hand_flag = "LEFT_HAND" if hand == "lefthand" else "RIGHT_HAND"
+
+    configure_hand_config(src_dir / "HandConfig.h", hand_flag)
+    configure_hand_config(hlscl_dst / "HandConfig.h", hand_flag)
 
     # Create platformio.ini
     ini_path = proj_dir / "platformio.ini"
@@ -110,8 +184,15 @@ def build_project(version, hand):
                         print(f"    Copied: {f} -> firmware_{version}_{hand}.bin")
             return True
         else:
-            print(f"  Build failed:")
-            print(result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr)
+            print("  Build failed:")
+            stdout_tail = result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout
+            stderr_tail = result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr
+            if stdout_tail:
+                print("--- stdout ---")
+                print(stdout_tail)
+            if stderr_tail:
+                print("--- stderr ---")
+                print(stderr_tail)
             return False
     except subprocess.TimeoutExpired:
         print(f"  Build timed out!")

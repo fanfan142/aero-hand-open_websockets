@@ -15,7 +15,12 @@
 // WiFi工作模式选择
 // 1: AP模式 (ESP32开热点，手机/电脑直连)
 // 2: STA模式 (ESP32连接已有路由器)
+// 3: Dual模式 (优先STA，失败回退AP)
 #define WIFI_MODE 1
+
+#define AH_WIFI_MODE_AP 1
+#define AH_WIFI_MODE_STA 2
+#define AH_WIFI_MODE_DUAL 3
 
 // 固件类型：左手或右手（影响热点名称和标识）
 // 0: 左手 (Left Hand) - 热点 AeroHand_Left
@@ -31,8 +36,8 @@
 #define AP_PASSWORD "12345678"
 #define AP_CHANNEL 6
 
-// STA模式配置 (WIFI_MODE = 2)
-// 如果使用STA模式，需要填入路由器的SSID和密码
+// STA / Dual模式配置
+// 如果使用STA或Dual模式，需要填入路由器的SSID和密码
 #define STA_SSID "Your_WiFi_SSID"
 #define STA_PASSWORD "Your_WiFi_Password"
 

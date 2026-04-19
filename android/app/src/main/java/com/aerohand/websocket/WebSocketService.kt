@@ -7,6 +7,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +31,9 @@ class WebSocketService {
     private val _jointStates = MutableStateFlow<Map<String, Float>>(emptyMap())
     val jointStates: StateFlow<Map<String, Float>> = _jointStates
 
+    private val _wifiStatus = MutableStateFlow(WifiStatus())
+    val wifiStatus: StateFlow<WifiStatus> = _wifiStatus
+
     fun connect(host: String, port: Int) {
         if (_connectionState.value is ConnectionState.Connected ||
             _connectionState.value is ConnectionState.Connecting
@@ -47,17 +51,18 @@ class WebSocketService {
                 _connectionState.value = ConnectionState.Connected("$host:$port")
                 addLog(LogEntry.Info("Connected", timestamp()))
                 requestStates()
+                requestWifiStatus()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                addLog(LogEntry.Receive(text, timestamp()))
-                // 解析 hand_info 消息，更新连接手性
+                addLog(LogEntry.Receive(sanitizeLogMessage(text), timestamp()))
                 parseHandInfo(text)?.let { handType ->
                     val current = _connectionState.value
                     if (current is ConnectionState.Connected) {
                         _connectionState.value = ConnectionState.Connected(current.server, handType)
                     }
                 }
+                parseWifiStatus(text)?.let { _wifiStatus.value = it }
                 parseStatesResponse(text)?.let { _jointStates.value = it }
             }
 
@@ -83,31 +88,67 @@ class WebSocketService {
         _connectionState.value = ConnectionState.Disconnected
     }
 
-    fun sendHoming() {
-        sendInternal(Commands.homing())
+    fun sendHoming(): Boolean {
+        return sendInternal(Commands.homing())
     }
 
-    fun requestStates() {
-        sendInternal(Commands.getStates())
+    fun requestStates(): Boolean {
+        return sendInternal(Commands.getStates())
+    }
+
+    fun requestWifiStatus(): Boolean {
+        return sendInternal(Commands.getWifiStatus())
+    }
+
+    fun sendWifiConfig(ssid: String, password: String): Boolean {
+        return sendInternal(Commands.setWifiConfig(ssid, password))
+    }
+
+    fun connectSta(): Boolean {
+        return sendInternal(Commands.connectSta())
+    }
+
+    fun switchToAp(): Boolean {
+        return sendInternal(Commands.startAp())
+    }
+
+    fun clearWifiConfig(): Boolean {
+        return sendInternal(Commands.clearWifiConfig())
     }
 
     fun sendCompactState(
         compactState: Map<String, Float>,
         durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS
-    ) {
-        sendInternal(buildMultiJointControlPayload(compactState, durationMs))
+    ): Boolean {
+        return sendInternal(buildMultiJointControlPayload(compactState, durationMs))
     }
 
     fun clearLogs() {
         _logs.value = emptyList()
     }
 
-    private fun sendInternal(json: String) {
+    private fun sendInternal(json: String): Boolean {
         val sent = webSocket?.send(json) ?: false
         if (sent) {
-            addLog(LogEntry.Send(json, timestamp()))
+            addLog(LogEntry.Send(sanitizeLogMessage(json), timestamp()))
         } else {
             addLog(LogEntry.Error("Send failed: socket not ready", timestamp()))
+        }
+        return sent
+    }
+
+    private fun sanitizeLogMessage(message: String): String {
+        return try {
+            val json = JSONObject(message)
+            if (json.optString("type") == "wifi_config_set") {
+                val data = json.optJSONObject("data")
+                data?.put("sta_password", "***")
+                json.toString()
+            } else {
+                message
+            }
+        } catch (_: Exception) {
+            message
         }
     }
 
