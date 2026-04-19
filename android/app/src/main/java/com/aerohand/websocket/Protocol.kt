@@ -261,6 +261,12 @@ object PresetActions {
     fun find(id: String): PresetAction? = all.firstOrNull { it.id == id }
 }
 
+data class WifiStatus(
+    val mode: String = "AP",
+    val ip: String = "192.168.4.1",
+    val staSsid: String? = null
+)
+
 sealed class ConnectionState {
     object Disconnected : ConnectionState()
     object Connecting : ConnectionState()
@@ -282,6 +288,23 @@ object Commands {
     fun homing() = """{"type":"homing","timestamp":${System.currentTimeMillis()}}"""
 
     fun getStates() = """{"type":"get_states","timestamp":${System.currentTimeMillis()}}"""
+
+    fun getWifiStatus() = """{"type":"wifi_status","timestamp":${System.currentTimeMillis()}}"""
+
+    fun setWifiConfig(ssid: String, password: String) = JSONObject().apply {
+        put("type", "wifi_config_set")
+        put("timestamp", System.currentTimeMillis())
+        put("data", JSONObject().apply {
+            put("sta_ssid", ssid)
+            put("sta_password", password)
+        })
+    }.toString()
+
+    fun connectSta() = """{"type":"wifi_connect_sta","timestamp":${System.currentTimeMillis()}}"""
+
+    fun startAp() = """{"type":"wifi_start_ap","timestamp":${System.currentTimeMillis()}}"""
+
+    fun clearWifiConfig() = """{"type":"wifi_clear_sta","timestamp":${System.currentTimeMillis()}}"""
 }
 
 private const val UINT16_MAX = 65535f
@@ -452,31 +475,37 @@ fun parseSerialActuationResponse(frame: ByteArray): Map<String, Float>? {
 }
 
 fun compactStateToJointPositions(compactState: Map<String, Float>): List<Float> {
-    val thumbAbd = compactState["thumb_cmc_abd"] ?: 0f
-    val thumbFlex = compactState["thumb_cmc_flex"] ?: 0f
+    val thumbCmcFlex = compactState["thumb_cmc_flex"] ?: 0f
     val thumbMcpIp = compactState["thumb_mcp_ip"] ?: 0f
+    val thumbAbd = compactState["thumb_cmc_abd"] ?: 0f
     val index = compactState["index_flexion"] ?: 0f
     val middle = compactState["middle_flexion"] ?: 0f
     val ring = compactState["ring_flexion"] ?: 0f
     val pinky = compactState["pinky_flexion"] ?: 0f
 
+    // Joint angles for firmware (15 joints + thumb_rotation at end = 16 positions)
+    // Firmware JOINT_NAMES order:
+    //   0=thumb_proximal  1=thumb_distal  2-4=index  5-7=middle  8-10=ring  11-13=pinky  14=thumb_rotation
+    // Compact: thumb_cmc_flex -> thumb_proximal (CMC flexion)
+    //          thumb_mcp_ip -> thumb_distal (IP flexion)
+    //          thumb_cmc_abd -> thumb_rotation (abduction maps to rotation)
+    // Each finger: single flexion value -> all 3 joints (tendon-coupled)
     return listOf(
-        thumbAbd,
-        thumbFlex,
-        thumbMcpIp,
-        thumbMcpIp,
-        index,
-        index,
-        index,
-        middle,
-        middle,
-        middle,
-        ring,
-        ring,
-        ring,
-        pinky,
-        pinky,
-        pinky
+        thumbCmcFlex,   // 0: thumb_proximal (CMC flexion)
+        thumbMcpIp,     // 1: thumb_distal (IP flexion)
+        index,          // 2: index_proximal
+        index,          // 3: index_middle
+        index,          // 4: index_distal
+        middle,         // 5: middle_proximal
+        middle,         // 6: middle_middle
+        middle,         // 7: middle_distal
+        ring,           // 8: ring_proximal
+        ring,           // 9: ring_middle
+        ring,           // 10: ring_distal
+        pinky,          // 11: pinky_proximal
+        pinky,          // 12: pinky_middle
+        pinky,          // 13: pinky_distal
+        thumbAbd        // 14: thumb_rotation (abduction angle)
     )
 }
 
@@ -531,6 +560,24 @@ fun parseHandInfo(text: String): String? {
             null
         } else {
             json.optString("hand_type").takeIf { it.isNotBlank() }
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun parseWifiStatus(text: String): WifiStatus? {
+    return try {
+        val json = JSONObject(text)
+        if (json.optString("type") != "wifi_status") {
+            null
+        } else {
+            val data = json.optJSONObject("data") ?: json
+            WifiStatus(
+                mode = data.optString("mode", "AP"),
+                ip = data.optString("ip", "192.168.4.1"),
+                staSsid = data.optString("sta_ssid").takeIf { it.isNotBlank() }
+            )
         }
     } catch (_: Exception) {
         null

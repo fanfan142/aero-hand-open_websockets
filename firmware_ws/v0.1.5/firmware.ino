@@ -32,6 +32,11 @@ Preferences prefs;
 
 #include "config.h"
 
+Preferences wifiPrefs;
+uint8_t g_wifiModeSetting = WIFI_MODE;
+String g_staSsid = STA_SSID;
+String g_staPassword = STA_PASSWORD;
+
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
 static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
@@ -128,11 +133,20 @@ SemaphoreHandle_t gBusMux = nullptr;
 
 // WebSocket相关函数 (新增)
 void setupWiFi();
+void loadWiFiConfig();
+void saveWiFiConfig();
+void clearWiFiConfig();
+void startApMode();
+bool connectToSta(bool fallbackToAp);
+const char* getWifiModeName();
+String getCurrentIp();
+void sendWifiStatus(uint8_t clientNum);
 void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length);
-void handleWsCommand(const char* payload, size_t length);
-void processJsonCommand(const JsonDocument& doc);
-void sendWsResponse(bool success, const char* message);
+void handleWsCommand(uint8_t clientNum, const char* payload, size_t length);
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
+void sendWsResponse(uint8_t clientNum, bool success, const char* message);
 void broadcastJointStates();
+void broadcastJointStatesTo(uint8_t clientNum);
 void blinkLED(int times);
 
 // 关节名称映射 (新增)
@@ -290,10 +304,91 @@ static inline uint16_t mapU16ToRaw(uint8_t ch, uint16_t u16) {
   } else {
     raw32 = ext + ((int64_t)u16 * (gra - ext)) / 65535LL;
   }
-  // clamp
   if (raw32 < 0)    raw32 = 0;
   if (raw32 > 4095) raw32 = 4095;
   return (uint16_t)raw32;
+}
+
+static constexpr float MOTOR_PULLEY_RADIUS = 9.0f;
+static constexpr float FINGER_MCP_FLEX_COEFF = 12.4912f;
+static constexpr float FINGER_PIP_COEFF = 7.3211f;
+static constexpr float FINGER_DIP_COEFF = 9.0f;
+static constexpr float THUMB_FLEX_ABD_COEFF = 2.5f;
+static constexpr float THUMB_FLEX_COEFF = 12.4931f;
+static constexpr float THUMB_IP_ABD_COEFF = 2.5f;
+static constexpr float THUMB_IP_FLEX_COEFF = 2.5f;
+static constexpr float THUMB_IP_MCP_COEFF = 9.4372f;
+static constexpr float THUMB_IP_COEFF = 12.5f;
+static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {0.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
+static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {100.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
+
+static inline float clampJointAngleDegrees(uint8_t jointNum, float angle) {
+  if (jointNum == JOINT_THUMB_ROTATION) {
+    return constrain(angle, -30.0f, 30.0f);
+  }
+  return constrain(angle, SERVO_MIN_ANGLE / 10.0f, SERVO_MAX_ANGLE / 10.0f);
+}
+
+static uint16_t mapActuationToRaw(uint8_t servoIndex, float actuationDeg) {
+  float lower = ACTUATION_LOWER_LIMITS[servoIndex];
+  float upper = ACTUATION_UPPER_LIMITS[servoIndex];
+  float clamped = constrain(actuationDeg, lower, upper);
+  float normalized = (upper > lower) ? ((clamped - lower) / (upper - lower)) : 0.0f;
+
+  int32_t ext = sd[servoIndex].extend_count;
+  int32_t gra = sd[servoIndex].grasp_count;
+  int32_t raw32;
+  if (ext == 0 && gra == 0) {
+    raw32 = (int32_t)(normalized * 4095.0f);
+  } else {
+    raw32 = ext + (int32_t)(normalized * (gra - ext));
+  }
+
+  if (raw32 < 0) raw32 = 0;
+  if (raw32 > 4095) raw32 = 4095;
+  return (uint16_t)raw32;
+}
+
+static uint16_t computeServoRawTarget(uint8_t servoIndex, const float jointAngles[JOINT_COUNT]) {
+  const float thumbAbdDeg = jointAngles[JOINT_THUMB_ROTATION];
+  const float thumbFlexDeg = jointAngles[JOINT_THUMB_PROXIMAL];
+  const float thumbIpDeg = jointAngles[JOINT_THUMB_DISTAL];
+
+  const float thumbAbdAct = thumbAbdDeg;
+  const float thumbFlexAct = (THUMB_FLEX_ABD_COEFF * thumbAbdDeg + THUMB_FLEX_COEFF * thumbFlexDeg) / MOTOR_PULLEY_RADIUS;
+  const float thumbTendonAct = (THUMB_IP_ABD_COEFF * thumbAbdDeg - THUMB_IP_FLEX_COEFF * thumbFlexDeg + THUMB_IP_MCP_COEFF * thumbFlexDeg + THUMB_IP_COEFF * thumbIpDeg) / MOTOR_PULLEY_RADIUS;
+
+  const auto fingerActuation = [&](uint8_t p, uint8_t m, uint8_t d) -> float {
+    const float proximal = jointAngles[p];
+    const float middle = jointAngles[m];
+    const float distal = jointAngles[d];
+    return (FINGER_MCP_FLEX_COEFF * proximal + FINGER_PIP_COEFF * middle + FINGER_DIP_COEFF * distal) / MOTOR_PULLEY_RADIUS;
+  };
+
+  switch (servoIndex) {
+    case 0:
+      return mapActuationToRaw(0, thumbAbdAct);
+    case 1:
+      return mapActuationToRaw(1, thumbFlexAct);
+    case 2:
+      return mapActuationToRaw(2, thumbTendonAct);
+    case 3:
+      return mapActuationToRaw(3, fingerActuation(JOINT_INDEX_PROXIMAL, JOINT_INDEX_MIDDLE, JOINT_INDEX_DISTAL));
+    case 4:
+      return mapActuationToRaw(4, fingerActuation(JOINT_MIDDLE_PROXIMAL, JOINT_MIDDLE_MIDDLE, JOINT_MIDDLE_DISTAL));
+    case 5:
+      return mapActuationToRaw(5, fingerActuation(JOINT_RING_PROXIMAL, JOINT_RING_MIDDLE, JOINT_RING_DISTAL));
+    case 6:
+      return mapActuationToRaw(6, fingerActuation(JOINT_PINKY_PROXIMAL, JOINT_PINKY_MIDDLE, JOINT_PINKY_DISTAL));
+    default:
+      return sd[0].extend_count;
+  }
+}
+
+static void buildServoTargetsFromJointAngles(const float jointAngles[JOINT_COUNT], int16_t pos[SERVO_COUNT]) {
+  for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+    pos[i] = (int16_t)computeServoRawTarget(i, jointAngles);
+  }
 }
 
 // ---- Helper Functions for u16, Decode to sign and copy values in u16 format----
@@ -532,7 +627,7 @@ static bool handleHostFrame(uint8_t op) { return true; }
 
 void setup() {
   // USB debug
-  // Serial.begin(921600);  // 已注释，原用于USB调试
+  Serial.begin(921600);
   delay(100);
 
   // Servo bus UART @ 1 Mbps
@@ -573,50 +668,143 @@ void setup() {
   gBusMux =xSemaphoreCreateMutex();
   gMetricsMux = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(TaskSyncRead_Core1, "SyncRead", 4096, NULL, 1, NULL, 1); // run on Core1
+
+  pinMode(STATUS_LED, OUTPUT);
+  digitalWrite(STATUS_LED, HIGH);
+  loadWiFiConfig();
+  setupWiFi();
+  wsServer.begin(WS_PORT);
+  wsServer.onMessage(handleWsCommand);
+  wsServer.onConnect([](uint8_t num) {
+    DynamicJsonDocument doc(256);
+    doc["type"] = "hand_info";
+  #if defined(LEFT_HAND)
+    doc["hand_type"] = "Left";
+  #elif defined(RIGHT_HAND)
+    doc["hand_type"] = "Right";
+  #else
+    doc["hand_type"] = "Unknown";
+  #endif
+    doc["wifi_mode"] = getWifiModeName();
+    doc["configured_wifi_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
+    doc["ip"] = getCurrentIp();
+    doc["firmware_type"] = "firmware_ws";
+    doc["firmware_version"] = "v0.1.5";
+    String output;
+    serializeJson(doc, output);
+    wsServer.sendText(num, output);
+    blinkLED(2);
+  });
+  wsServer.onDisconnect([](uint8_t num) {
+    DEBUG_PRINTF("[WS] Client %u disconnected\n", num);
+  });
 }
 
 // ============================================
 // WiFi / WebSocket 初始化 (新增)
 // ============================================
 
-void setupWiFi() {
-#if WIFI_MODE == 1
-    // AP模式 - ESP32开热点
-    DEBUG_PRINTF("[WIFI] Starting AP mode: %s\n", AP_SSID);
+void loadWiFiConfig() {
+    wifiPrefs.begin("wifi", true);
+    g_wifiModeSetting = wifiPrefs.getUChar("mode", WIFI_MODE);
+    g_staSsid = wifiPrefs.getString("sta_ssid", STA_SSID);
+    g_staPassword = wifiPrefs.getString("sta_pass", STA_PASSWORD);
+    wifiPrefs.end();
+}
 
+void saveWiFiConfig() {
+    wifiPrefs.begin("wifi", false);
+    wifiPrefs.putUChar("mode", g_wifiModeSetting);
+    wifiPrefs.putString("sta_ssid", g_staSsid);
+    wifiPrefs.putString("sta_pass", g_staPassword);
+    wifiPrefs.end();
+}
+
+void clearWiFiConfig() {
+    g_staSsid = "";
+    g_staPassword = "";
+    g_wifiModeSetting = AH_WIFI_MODE_AP;
+    wifiPrefs.begin("wifi", false);
+    wifiPrefs.remove("sta_ssid");
+    wifiPrefs.remove("sta_pass");
+    wifiPrefs.putUChar("mode", g_wifiModeSetting);
+    wifiPrefs.end();
+}
+
+void startApMode() {
+    WiFi.disconnect(true, true);
+    delay(100);
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
-
-    IPAddress IP = WiFi.softAPIP();
     DEBUG_PRINT("[WIFI] AP IP address: ");
-    DEBUG_PRINTLN(IP.toString());
+    DEBUG_PRINTLN(WiFi.softAPIP().toString());
+}
 
-#elif WIFI_MODE == 2
-    // STA模式 - 连接路由器
-    DEBUG_PRINTF("[WIFI] Connecting to: %s\n", STA_SSID);
+bool connectToSta(bool fallbackToAp) {
+    if (g_staSsid.isEmpty()) {
+        DEBUG_PRINTLN("[WIFI] STA SSID is empty");
+        if (fallbackToAp) {
+            startApMode();
+        }
+        return false;
+    }
 
+    WiFi.disconnect(true, true);
+    delay(100);
     WiFi.mode(WIFI_STA);
-    WiFi.begin(STA_SSID, STA_PASSWORD);
-
+    WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
         delay(500);
         DEBUG_PRINT(".");
         attempts++;
     }
-
     if (WiFi.status() == WL_CONNECTED) {
         DEBUG_PRINTLN();
         DEBUG_PRINT("[WIFI] Connected! IP: ");
         DEBUG_PRINTLN(WiFi.localIP());
-    } else {
-        DEBUG_PRINTLN();
-        DEBUG_PRINTLN("[WIFI] Connection failed, starting AP as fallback");
-        WiFi.mode(WIFI_AP);
-        WiFi.softAP(AP_SSID, AP_PASSWORD);
+        return true;
     }
 
-#endif
+    DEBUG_PRINTLN();
+    DEBUG_PRINTLN("[WIFI] STA connection failed");
+    if (fallbackToAp) {
+        DEBUG_PRINTLN("[WIFI] Falling back to AP");
+        startApMode();
+    }
+    return false;
+}
+
+const char* getWifiModeName() {
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_AP) return "AP";
+    if (mode == WIFI_STA) return "STA";
+    if (mode == WIFI_AP_STA) return "AP_STA";
+    return "UNKNOWN";
+}
+
+String getCurrentIp() {
+    wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_AP || mode == WIFI_AP_STA) {
+        return WiFi.softAPIP().toString();
+    }
+    if (mode == WIFI_STA) {
+        return WiFi.localIP().toString();
+    }
+    return "0.0.0.0";
+}
+
+void setupWiFi() {
+    if (g_wifiModeSetting == AH_WIFI_MODE_STA) {
+        DEBUG_PRINTF("[WIFI] Connecting to STA: %s\n", g_staSsid.c_str());
+        connectToSta(true);
+    } else if (g_wifiModeSetting == AH_WIFI_MODE_DUAL) {
+        DEBUG_PRINTF("[WIFI] Starting dual mode, trying STA: %s\n", g_staSsid.c_str());
+        connectToSta(true);
+    } else {
+        DEBUG_PRINTF("[WIFI] Starting AP mode: %s\n", AP_SSID);
+        startApMode();
+    }
 }
 
 // WebSocket事件处理
@@ -635,7 +823,7 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
         case WStype_TEXT:
             DEBUG_PRINTF("[WS] Client %u sent: %s\n", num, payload);
-            handleWsCommand((const char*)payload, length);
+            handleWsCommand(num, (const char*)payload, length);
             g_lastWsActivity = millis();
             break;
 
@@ -668,32 +856,30 @@ void blinkLED(int times) {
 // WebSocket命令处理 (新增)
 // ============================================
 
-void handleWsCommand(const char* payload, size_t length) {
+void handleWsCommand(uint8_t clientNum, const char* payload, size_t length) {
     DynamicJsonDocument doc(1024);
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
         DEBUG_PRINTF("[CMD] JSON parse error: %s\n", error.c_str());
-        sendWsResponse(false, error.c_str());
+        sendWsResponse(clientNum, false, error.c_str());
         return;
     }
 
-    processJsonCommand(doc);
+    processJsonCommand(clientNum, doc);
 }
 
-void processJsonCommand(const JsonDocument& doc) {
-    // 检查type字段
+void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
     if (!doc["type"].is<const char*>()) {
-        sendWsResponse(false, "Missing type field");
+        sendWsResponse(clientNum, false, "Missing type field");
         return;
     }
 
     const char* type = doc["type"].as<const char*>();
 
     if (strcmp(type, "joint_control") == 0) {
-        // 单关节控制
         if (!doc["data"]["joint_id"].is<const char*>() || !doc["data"]["angle"].is<float>()) {
-            sendWsResponse(false, "Missing required fields in joint_control");
+            sendWsResponse(clientNum, false, "Missing required fields in joint_control");
             return;
         }
 
@@ -703,17 +889,17 @@ void processJsonCommand(const JsonDocument& doc) {
 
         uint8_t jointNum = getJointNumber(jointId);
         if (jointNum >= JOINT_COUNT) {
-            sendWsResponse(false, "Invalid joint_id");
+            sendWsResponse(clientNum, false, "Invalid joint_id");
             return;
         }
 
-        // 角度限制
-        float minAngle = (jointNum == JOINT_THUMB_ROTATION) ? THUMB_ROT_MIN_ANGLE / 10.0f : SERVO_MIN_ANGLE / 10.0f;
-        float maxAngle = (jointNum == JOINT_THUMB_ROTATION) ? THUMB_ROT_MAX_ANGLE / 10.0f : SERVO_MAX_ANGLE / 10.0f;
-        float clampedAngle = constrain(angle, minAngle, maxAngle);
-        int16_t angleInt = (int16_t)(clampedAngle * 10.0f);
+        float nextJointAngles[JOINT_COUNT];
+        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+            nextJointAngles[i] = g_jointAngles[i];
+        }
+        float clampedAngle = clampJointAngleDegrees(jointNum, angle);
+        nextJointAngles[jointNum] = clampedAngle;
 
-        // 设置位置模式
         if (g_currentMode != MODE_POS) {
             if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
             for (int i = 0; i < 7; ++i) {
@@ -723,13 +909,11 @@ void processJsonCommand(const JsonDocument& doc) {
             if (gBusMux) xSemaphoreGive(gBusMux);
         }
 
-        // 计算舵机目标位置
         int16_t pos[7];
+        buildServoTargetsFromJointAngles(nextJointAngles, pos);
         uint16_t torque_eff[7];
         for (int i = 0; i < 7; ++i) {
-            pos[i] = mapU16ToRaw(i, (uint16_t)((clampedAngle / 90.0) * 4095));
             torque_eff[i] = g_torque[i];
-            // 热保护 (如果启用)
             if (isHot((uint8_t)i)) {
                 torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
             }
@@ -741,28 +925,76 @@ void processJsonCommand(const JsonDocument& doc) {
 
         g_jointAngles[jointNum] = clampedAngle;
         DEBUG_PRINTF("[CMD] Joint %s -> %.1f°\n", jointId, clampedAngle);
-        sendWsResponse(true, "Joint controlled");
+        sendWsResponse(clientNum, true, "Joint controlled");
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
-        // 多关节控制
         if (!doc["data"]["joints"].is<JsonArrayConst>()) {
-            sendWsResponse(false, "Missing required fields in multi_joint_control");
+            sendWsResponse(clientNum, false, "Missing required fields in multi_joint_control");
             return;
         }
 
         JsonArrayConst joints = doc["data"]["joints"].as<JsonArrayConst>();
         int duration = doc["data"]["duration_ms"].as<int>();
 
-        DEBUG_PRINTF("[CMD] Multi-joint control: %d joints\n", (int)joints.size());
-        sendWsResponse(true, "Multi-joint control received");
-        // TODO: 完整实现多关节控制
+        if (g_currentMode != MODE_POS) {
+            if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+            for (int i = 0; i < 7; ++i) {
+                hlscl.ServoMode(SERVO_IDS[i]);
+            }
+            g_currentMode = MODE_POS;
+            if (gBusMux) xSemaphoreGive(gBusMux);
+        }
+
+        float nextJointAngles[JOINT_COUNT];
+        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+            nextJointAngles[i] = g_jointAngles[i];
+        }
+
+        int validCount = 0;
+        for (JsonObjectConst joint : joints) {
+            if (!joint["joint_id"].is<const char*>() || !joint["angle"].is<float>()) {
+                continue;
+            }
+
+            const char* jId = joint["joint_id"].as<const char*>();
+            float angle = joint["angle"].as<float>();
+
+            uint8_t jointNum = getJointNumber(jId);
+            if (jointNum >= JOINT_COUNT) continue;
+
+            nextJointAngles[jointNum] = clampJointAngleDegrees(jointNum, angle);
+            validCount++;
+        }
+
+        if (validCount <= 0) {
+            sendWsResponse(clientNum, false, "No valid joints in multi_joint_control");
+            return;
+        }
+
+        int16_t pos[7];
+        buildServoTargetsFromJointAngles(nextJointAngles, pos);
+        uint16_t torque_eff[7];
+        for (int i = 0; i < 7; ++i) {
+            torque_eff[i] = g_torque[i];
+            if (isHot((uint8_t)i)) {
+                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
+            }
+        }
+
+        if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+        hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, 7, pos, g_speed, g_accel, torque_eff);
+        if (gBusMux) xSemaphoreGive(gBusMux);
+
+        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+            g_jointAngles[i] = nextJointAngles[i];
+        }
+        DEBUG_PRINTF("[CMD] Multi-joint control: %d joints\n", validCount);
+        sendWsResponse(clientNum, true, "Multi-joint control received");
 
     } else if (strcmp(type, "get_states") == 0) {
-        // 获取状态
-        broadcastJointStates();
+        broadcastJointStatesTo(clientNum);
 
     } else if (strcmp(type, "homing") == 0) {
-        // 归零
         if (!HOMING_isBusy()) {
             HOMING_start();
             saveExtendsToNVS();
@@ -770,18 +1002,58 @@ void processJsonCommand(const JsonDocument& doc) {
                 g_jointAngles[i] = 0;
             }
             DEBUG_PRINTLN("[CMD] Homing executed");
-            sendWsResponse(true, "Homing executed");
+            sendWsResponse(clientNum, true, "Homing executed");
         } else {
-            sendWsResponse(false, "Homing in progress");
+            sendWsResponse(clientNum, false, "Homing in progress");
         }
+
+    } else if (strcmp(type, "wifi_status") == 0) {
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_config_set") == 0) {
+        if (!doc["data"]["sta_ssid"].is<const char*>() || !doc["data"]["sta_password"].is<const char*>()) {
+            sendWsResponse(clientNum, false, "Missing required fields in wifi_config_set");
+            return;
+        }
+        g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
+        g_staPassword = doc["data"]["sta_password"].as<const char*>();
+        g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+        saveWiFiConfig();
+        DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
+        sendWsResponse(clientNum, true, "WiFi config saved");
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_connect_sta") == 0) {
+        bool connected = connectToSta(true);
+        if (connected) {
+            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+            saveWiFiConfig();
+            sendWsResponse(clientNum, true, "STA connected");
+        } else {
+            sendWsResponse(clientNum, false, "STA connection failed");
+        }
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_start_ap") == 0) {
+        g_wifiModeSetting = AH_WIFI_MODE_AP;
+        saveWiFiConfig();
+        startApMode();
+        sendWsResponse(clientNum, true, "AP started");
+        sendWifiStatus(clientNum);
+
+    } else if (strcmp(type, "wifi_clear_sta") == 0) {
+        clearWiFiConfig();
+        startApMode();
+        sendWsResponse(clientNum, true, "STA config cleared");
+        sendWifiStatus(clientNum);
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
-        sendWsResponse(false, "Unknown command type");
+        sendWsResponse(clientNum, false, "Unknown command type");
     }
 }
 
-void sendWsResponse(bool success, const char* message) {
+void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
     DynamicJsonDocument response(256);
     response["type"] = "response";
     response["success"] = success;
@@ -796,7 +1068,42 @@ void sendWsResponse(bool success, const char* message) {
 
     String output;
     serializeJson(response, output);
-    wsServer.broadcastText(output);
+    wsServer.sendText(clientNum, output);
+}
+
+void sendWifiStatus(uint8_t clientNum) {
+    DynamicJsonDocument response(256);
+    response["type"] = "wifi_status";
+    response["timestamp"] = millis();
+    response["data"]["mode"] = getWifiModeName();
+    response["data"]["ip"] = getCurrentIp();
+    if (!g_staSsid.isEmpty()) {
+        response["data"]["sta_ssid"] = g_staSsid;
+    }
+    response["data"]["configured_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
+
+    String output;
+    serializeJson(response, output);
+    wsServer.sendText(clientNum, output);
+}
+
+void broadcastJointStatesTo(uint8_t clientNum) {
+    DynamicJsonDocument response(1024);
+    response["type"] = "states_response";
+    response["success"] = true;
+    response["timestamp"] = millis();
+
+    JsonArray jointsData = response["data"].to<JsonArray>();
+    for (int i = 0; i < JOINT_COUNT; i++) {
+        JsonObject joint = jointsData.createNestedObject();
+        joint["joint_id"] = JOINT_NAMES[i];
+        joint["angle"] = g_jointAngles[i];
+        joint["load"] = 0.0;
+    }
+
+    String output;
+    serializeJson(response, output);
+    wsServer.sendText(clientNum, output);
 }
 
 void broadcastJointStates() {
