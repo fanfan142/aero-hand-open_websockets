@@ -1294,8 +1294,10 @@ void broadcastJointStates() {
 }
 
 void loop() {
+  // Process WebSocket events frequently to avoid starving connections
   wsServer.loop();
 
+  // Process serial input - interleave WebSocket processing to avoid starvation
   while (Serial.available() > 0) {
     int ch = Serial.read();
     if (ch < 0) {
@@ -1304,12 +1306,22 @@ void loop() {
     }
     g_serialFrameBuffer[g_serialFrameIndex++] = (uint8_t)ch;
     if (g_serialFrameIndex < sizeof(g_serialFrameBuffer)) {
+      // Interleave: keep WebSocket alive while collecting frame bytes
+      wsServer.loop();
       continue;
     }
 
+    // Full 16-byte frame received - check arbitration BEFORE consuming
     uint8_t op = g_serialFrameBuffer[0];
-    const uint8_t* payload = &g_serialFrameBuffer[2];
+    if (!canAcceptControl(CONTROL_SOURCE_SERIAL) && op != HOMING) {
+      // Control is busy with WebSocket - discard frame silently
+      // (serial protocol has no back-channel for error responses)
+      g_serialFrameIndex = 0;
+      continue;
+    }
+
     if (!HOMING_isBusy()) {
+      const uint8_t* payload = &g_serialFrameBuffer[2];
       handleHostFrame(op, payload);
     }
     g_serialFrameIndex = 0;
