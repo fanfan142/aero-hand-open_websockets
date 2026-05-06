@@ -41,7 +41,7 @@ class WebSocketService {
             disconnect()
         }
 
-        val url = "ws://$host:$port"
+        val url = "ws://$host:$port/"
         _connectionState.value = ConnectionState.Connecting
         addLog(LogEntry.Info("Connecting to $url...", timestamp()))
 

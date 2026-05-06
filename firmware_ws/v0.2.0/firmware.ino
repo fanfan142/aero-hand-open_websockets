@@ -65,6 +65,11 @@ static uint8_t g_serialFrameIndex = 0;
 
 // 当前关节角度记录 (用于get_states命令)
 static float g_jointAngles[JOINT_COUNT] = {0};
+static float g_actuatorAngles[SERVO_COUNT] = {0};
+
+static constexpr size_t WS_JSON_DOC_CAPACITY = 4096;
+static constexpr size_t WS_RESPONSE_DOC_CAPACITY = 2048;
+static constexpr size_t WS_STATE_DOC_CAPACITY = 3072;
 
 // LED引脚
 #ifdef LED_BUILTIN
@@ -737,6 +742,9 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       for (int i = 0; i < JOINT_COUNT; ++i) {
         g_jointAngles[i] = 0.0f;
       }
+      for (int i = 0; i < SERVO_COUNT; ++i) {
+        g_actuatorAngles[i] = 0.0f;
+      }
       sendAckFrame(HOMING, nullptr, 0);
       markControlActivity(CONTROL_SOURCE_SERIAL);
       return true;
@@ -1008,7 +1016,12 @@ void updateLEDBlink() {
 // ============================================
 
 void handleWsCommand(uint8_t clientNum, const char* payload, size_t length) {
-    DynamicJsonDocument doc(1024);
+    if (length == 0 || length > 3500) {
+        sendWsResponse(clientNum, false, "Invalid JSON length");
+        return;
+    }
+
+    DynamicJsonDocument doc(WS_JSON_DOC_CAPACITY);
 
     DeserializationError error = deserializeJson(doc, payload, length);
     if (error) {
@@ -1083,6 +1096,68 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         markControlActivity(CONTROL_SOURCE_WEBSOCKET);
         DEBUG_PRINTF("[CMD] Joint %s -> %.1f°\n", jointId, clampedAngle);
         sendWsResponse(clientNum, true, "Joint controlled");
+
+    } else if (strcmp(type, "actuator_control") == 0) {
+        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
+            sendWsResponse(clientNum, false, "Control busy: serial source active");
+            return;
+        }
+        if (!doc["data"]["actuators"].is<JsonArrayConst>()) {
+            sendWsResponse(clientNum, false, "Missing actuators in actuator_control");
+            return;
+        }
+
+        JsonArrayConst actuators = doc["data"]["actuators"].as<JsonArrayConst>();
+        int16_t pos[SERVO_COUNT];
+        for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+            pos[i] = (int16_t)mapActuationToRaw(i, g_actuatorAngles[i]);
+        }
+
+        int validCount = 0;
+        for (JsonObjectConst actuator : actuators) {
+            if (!actuator["id"].is<int>() || !actuator["angle"].is<float>()) {
+                continue;
+            }
+            int id = actuator["id"].as<int>();
+            if (id < 0 || id >= SERVO_COUNT) {
+                continue;
+            }
+            float angle = actuator["angle"].as<float>();
+            g_actuatorAngles[id] = constrain(angle, ACTUATION_LOWER_LIMITS[id], ACTUATION_UPPER_LIMITS[id]);
+            pos[id] = (int16_t)mapActuationToRaw((uint8_t)id, g_actuatorAngles[id]);
+            validCount++;
+        }
+
+        if (validCount <= 0) {
+            sendWsResponse(clientNum, false, "No valid actuators in actuator_control");
+            return;
+        }
+
+        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+            g_jointAngles[i] = 0.0f;
+        }
+
+        uint16_t torque_eff[SERVO_COUNT];
+        for (int i = 0; i < SERVO_COUNT; ++i) {
+            torque_eff[i] = g_torque[i];
+            if (isHot((uint8_t)i)) {
+                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
+            }
+        }
+
+        if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+        if (g_currentMode != MODE_POS) {
+            for (int i = 0; i < SERVO_COUNT; ++i) {
+                hlscl.ServoMode(SERVO_IDS[i]);
+            }
+            g_currentMode = MODE_POS;
+        }
+        hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, pos, g_speed, g_accel, torque_eff);
+        if (gBusMux) xSemaphoreGive(gBusMux);
+
+        markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+        DEBUG_PRINTF("[CMD] Actuator control: %d actuators\n", validCount);
+        sendWsResponse(clientNum, true, "Actuator control executed");
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
@@ -1168,6 +1243,9 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             for (int i = 0; i < JOINT_COUNT; i++) {
                 g_jointAngles[i] = 0;
             }
+            for (int i = 0; i < SERVO_COUNT; i++) {
+                g_actuatorAngles[i] = 0;
+            }
             markControlActivity(CONTROL_SOURCE_WEBSOCKET);
             DEBUG_PRINTLN("[CMD] Homing executed");
             sendWsResponse(clientNum, true, "Homing executed");
@@ -1222,7 +1300,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
 }
 
 void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
-    DynamicJsonDocument response(256);
+    DynamicJsonDocument response(WS_RESPONSE_DOC_CAPACITY);
     response["type"] = "response";
     response["success"] = success;
     response["timestamp"] = millis();
@@ -1256,12 +1334,12 @@ void sendWifiStatus(uint8_t clientNum) {
 }
 
 void broadcastJointStatesTo(uint8_t clientNum) {
-    DynamicJsonDocument response(1024);
+    DynamicJsonDocument response(WS_STATE_DOC_CAPACITY);
     response["type"] = "states_response";
     response["success"] = true;
     response["timestamp"] = millis();
 
-    JsonArray jointsData = response["data"].to<JsonArray>();
+    JsonArray jointsData = response["data"]["joints"].to<JsonArray>();
     for (int i = 0; i < JOINT_COUNT; i++) {
         JsonObject joint = jointsData.createNestedObject();
         joint["joint_id"] = JOINT_NAMES[i];
@@ -1275,12 +1353,12 @@ void broadcastJointStatesTo(uint8_t clientNum) {
 }
 
 void broadcastJointStates() {
-    DynamicJsonDocument response(1024);
+    DynamicJsonDocument response(WS_STATE_DOC_CAPACITY);
     response["type"] = "states_response";
     response["success"] = true;
     response["timestamp"] = millis();
 
-    JsonArray jointsData = response["data"].to<JsonArray>();
+    JsonArray jointsData = response["data"]["joints"].to<JsonArray>();
     for (int i = 0; i < JOINT_COUNT; i++) {
         JsonObject joint = jointsData.createNestedObject();
         joint["joint_id"] = JOINT_NAMES[i];

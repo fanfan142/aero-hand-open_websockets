@@ -332,16 +332,27 @@ fun buildMultiJointControlPayload(
     durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS
 ): String {
     return JSONObject().apply {
-        put("type", "multi_joint_control")
+        put("type", "actuator_control")
         put("timestamp", System.currentTimeMillis())
         put(
             "data",
             JSONObject().apply {
-                put("joints", buildProtocolJoints(compactState))
+                put("actuators", buildActuatorTargets(compactState))
                 put("duration_ms", durationMs)
             }
         )
     }.toString()
+}
+
+fun buildActuatorTargets(compactState: Map<String, Float>): JSONArray {
+    return JSONArray().apply {
+        compactStateToActuations(compactState).forEachIndexed { index, actuation ->
+            put(JSONObject().apply {
+                put("id", index)
+                put("angle", actuation)
+            })
+        }
+    }
 }
 
 fun buildProtocolPreview(compactState: Map<String, Float>): String = buildProtocolJoints(compactState).toString(2)
