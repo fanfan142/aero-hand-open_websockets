@@ -432,7 +432,7 @@ fun compactStateToActuations(compactState: Map<String, Float>): List<Float> {
             THUMB_IP_IP_COEFF * thumbIp
         ) / MOTOR_PULLEY_RADIUS
 
-    val fingerActuations = listOf(4, 7, 10, 13).map { offset ->
+    val fingerActuations = listOf(2, 5, 8, 11).map { offset ->
         val mcp = positions[offset]
         val pip = positions[offset + 1]
         val dip = positions[offset + 2]
@@ -518,7 +518,7 @@ fun compactStateToJointPositions(compactState: Map<String, Float>): List<Float> 
     val ring = compactState["ring_flexion"] ?: 0f
     val pinky = compactState["pinky_flexion"] ?: 0f
 
-    // Joint angles for firmware (15 joints + thumb_rotation at end = 16 positions)
+    // Joint angles for firmware (14 flex joints + thumb_rotation = 15 positions)
     // Firmware JOINT_NAMES order:
     //   0=thumb_proximal  1=thumb_distal  2-4=index  5-7=middle  8-10=ring  11-13=pinky  14=thumb_rotation
     // Compact: thumb_cmc_flex -> thumb_proximal (CMC flexion)
