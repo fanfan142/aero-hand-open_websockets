@@ -129,7 +129,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
         viewModelScope.launch {
             webSocketService.jointStates.collectLatest { states ->
-                if (states.isNotEmpty()) {
+                if (states.isNotEmpty() && _uiState.value.connectionMode != ConnectionMode.WIFI) {
                     updateControlValues(compactStateFromJointStates(states))
                 }
             }

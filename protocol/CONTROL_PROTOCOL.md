@@ -33,7 +33,7 @@
 }
 ```
 
-**多关节同步控制（推荐）：**
+**多关节同步控制：**
 ```json
 {
   "type": "multi_joint_control",
@@ -43,6 +43,26 @@
       {"joint_id": "index_proximal", "angle": 45.0},
       {"joint_id": "index_middle", "angle": 30.0},
       {"joint_id": "index_distal", "angle": 15.0}
+    ],
+    "duration_ms": 500
+  }
+}
+```
+
+**7执行器直控（Android WiFi 推荐）：**
+```json
+{
+  "type": "actuator_control",
+  "timestamp": 1711641600000,
+  "data": {
+    "actuators": [
+      {"id": 0, "angle": 0.0},
+      {"id": 1, "angle": 20.0},
+      {"id": 2, "angle": 35.0},
+      {"id": 3, "angle": 80.0},
+      {"id": 4, "angle": 80.0},
+      {"id": 5, "angle": 80.0},
+      {"id": 6, "angle": 80.0}
     ],
     "duration_ms": 500
   }

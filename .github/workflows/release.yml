@@ -75,7 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aero-hand-release-apk
-          path: android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
+          path: android/app/build/outputs/apk/release/HandControl-*.apk
 
       - name: Create GitHub release
         if: success()

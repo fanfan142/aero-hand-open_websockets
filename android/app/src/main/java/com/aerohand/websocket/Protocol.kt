@@ -355,7 +355,15 @@ fun buildActuatorTargets(compactState: Map<String, Float>): JSONArray {
     }
 }
 
-fun buildProtocolPreview(compactState: Map<String, Float>): String = buildProtocolJoints(compactState).toString(2)
+fun buildProtocolPreview(compactState: Map<String, Float>): String {
+    return JSONObject().apply {
+        put("type", "actuator_control")
+        put("data", JSONObject().apply {
+            put("actuators", buildActuatorTargets(compactState))
+            put("duration_ms", ControlDefinitions.DEFAULT_DURATION_MS)
+        })
+    }.toString(2)
+}
 
 fun buildProtocolJoints(compactState: Map<String, Float>): JSONArray {
     return JSONArray().apply {
@@ -401,10 +409,10 @@ fun buildSerialGetPositionsFrame(): ByteArray = buildSerialFrame(SerialCommands.
 fun compactStateToActuations(compactState: Map<String, Float>): List<Float> {
     val positions = compactStateToJointPositions(compactState)
 
-    val thumbCmcAbd = positions[0]
-    val thumbCmcFlex = positions[1]
-    val thumbMcp = positions[2]
-    val thumbIp = positions[3]
+    val thumbCmcAbd = positions[14]
+    val thumbCmcFlex = positions[0]
+    val thumbMcp = positions[0]
+    val thumbIp = positions[1]
 
     val thumbCmcAbdActuation = thumbCmcAbd
     val thumbCmcFlexActuation = (
