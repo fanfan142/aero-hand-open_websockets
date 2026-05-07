@@ -20,8 +20,8 @@ static constexpr float THUMB_IP_FLEX_COEFF = 2.5f;
 static constexpr float THUMB_IP_MCP_COEFF = 9.4372f;
 static constexpr float THUMB_IP_COEFF = 12.5f;
 
-static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {0.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
-static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {100.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
+static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {-30.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
+static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {30.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
 
 static uint16_t g_speed[SERVO_COUNT] = {32766, 32766, 32766, 32766, 32766, 32766, 32766};
 static uint8_t g_accel[SERVO_COUNT] = {0, 0, 0, 0, 0, 0, 0};
@@ -119,6 +119,36 @@ bool ServoControl::setAngles(const JointAngle* joints, uint8_t count, uint16_t d
     }
 
     return _applyJointState(duration);
+}
+
+bool ServoControl::setActuators(const float actuations[SERVO_COUNT], uint16_t duration) {
+    if (!_initialized || actuations == nullptr) {
+        return false;
+    }
+
+    uint16_t moveDuration = duration > 0 ? duration : 500;
+    uint16_t speedValue = constrain((int)(moveDuration * 4), 200, 32766);
+    int16_t pos[SERVO_COUNT];
+    uint8_t ids[SERVO_COUNT];
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+        ids[i] = SERVO_IDS[i];
+        pos[i] = (int16_t)_mapActuationToRaw(i, actuations[i]);
+        g_speed[i] = speedValue;
+    }
+
+    if (gBusMux) {
+        xSemaphoreTake(gBusMux, portMAX_DELAY);
+    }
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+        hlscl.ServoMode(ids[i]);
+    }
+    hlscl.SyncWritePosEx(ids, SERVO_COUNT, pos, g_speed, g_accel, g_torque);
+    if (gBusMux) {
+        xSemaphoreGive(gBusMux);
+    }
+
+    DEBUG_PRINTF("[SERVO] Applied direct actuator command, duration=%u\n", moveDuration);
+    return true;
 }
 
 int16_t ServoControl::getAngle(uint8_t jointId) {

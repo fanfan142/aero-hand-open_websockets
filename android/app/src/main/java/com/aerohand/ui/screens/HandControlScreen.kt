@@ -104,17 +104,17 @@ fun HandControlScreen() {
     }
 
     // Collect gesture state and update viewmodel
-    LaunchedEffect(gestureService.state) {
+    LaunchedEffect(gestureService.state, selectedControlPage) {
         gestureService.state.collect { state ->
             viewModel.updateGestureCameraState(state)
-            if (selectedControlPage == 2 &&
-                state.calibrationState == com.aerohand.gesture.CalibrationState.CALIBRATED &&
-                state.handDetected &&
-                state.targetHandMatched
-            ) {
-                viewModel.markGestureControlReady()
-                val calibratedAngles = gestureService.getCalibratedAngles()
-                viewModel.updateControlValuesFromGesture(calibratedAngles)
+            if (selectedControlPage == 2) {
+                val frame = gestureService.getControlFrame()
+                if (frame.allowed) {
+                    viewModel.markGestureControlReady()
+                    viewModel.updateControlValuesFromGesture(frame.angles)
+                } else {
+                    viewModel.resetGestureSendState()
+                }
             } else {
                 viewModel.resetGestureSendState()
             }

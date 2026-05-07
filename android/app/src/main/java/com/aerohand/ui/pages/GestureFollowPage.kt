@@ -80,7 +80,6 @@ fun GestureFollowPage(
 
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
-    var isFrontCamera by remember { mutableStateOf(true) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -168,14 +167,14 @@ fun GestureFollowPage(
 
                             Surface(
                                 modifier = Modifier.clickable {
-                                    isFrontCamera = gestureService.toggleCamera()
+                                    gestureService.toggleCamera()
                                     onCameraFlip()
                                 },
                                 shape = RoundedCornerShape(10.dp),
                                 color = Color.Black.copy(alpha = 0.6f)
                             ) {
                                 Text(
-                                    text = if (isFrontCamera) "📷 前" else "📷 后",
+                                    text = cameraState.cameraFacing.label,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
@@ -254,8 +253,13 @@ fun GestureFollowPage(
             Text(
                 text = buildString {
                     append("检测手：")
-                    append(if (cameraState.handedness.isBlank()) "未识别" else cameraState.handedness)
+                    append(handLabel(cameraState.handedness))
                     append(" · 控制目标：${cameraState.targetHand.label}")
+                    append(" · ${cameraState.cameraFacing.label}")
+                    append(" · ${cameraState.mirrorMode.label}")
+                    cameraState.calibrationProfile?.let { profile ->
+                        append(" · 标定：${handLabel(profile.handSide)} ${profile.cameraFacing.label}")
+                    }
                     if (cameraState.handDetected && !cameraState.targetHandMatched) {
                         append(" · 当前手别不匹配")
                     }
@@ -377,6 +381,14 @@ private fun FingerStatusBars(angles: FingerAngles) {
         FingerBar("中指肌腱", angles.middleTendon, 0f, 90f, Color(0xFF10B981))
         FingerBar("无名指肌腱", angles.ringTendon, 0f, 90f, Color(0xFF8B5CF6))
         FingerBar("小指肌腱", angles.pinkyTendon, 0f, 90f, Color(0xFFEC4899))
+    }
+}
+
+private fun handLabel(hand: String): String {
+    return when (hand) {
+        "Left" -> "左手"
+        "Right" -> "右手"
+        else -> "未识别"
     }
 }
 

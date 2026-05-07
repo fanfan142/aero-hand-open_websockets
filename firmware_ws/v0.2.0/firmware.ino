@@ -111,7 +111,7 @@ static int16_t g_lastTorqueCmd[7] = {0};
 
 // ---- Thermal torque limiting (GLOBAL PARAMETERS) ----
 static uint8_t  TEMP_CUTOFF_C    = 70;    // °C cutoff
-static uint16_t HOT_TORQUE_LIMIT = 500;   // clamp torque when motor exceeds TEMP_CUTOFF_C 
+static uint16_t HOT_TORQUE_LIMIT = 500;   // clamp torque when motor exceeds TEMP_CUTOFF_C
 
 // ----- Registers / constants (Mapped as per Feetech Servo HLS3606M) -----
 #define REG_ID                 0x05       // ID register
@@ -192,7 +192,7 @@ static inline uint16_t u16_min(uint16_t a, uint16_t b) { return (a < b) ? a : b;
 
 // ---- Set-ID helpers for setting ID ---
 extern void runReIdScanAndSet(uint8_t Id, uint16_t currentLimit);
-static volatile int g_lastFoundId; 
+static volatile int g_lastFoundId;
 
 // ----- Helper Functions for Set-ID Mode -----
 static bool scanRequireSingleServo(uint8_t* outId, uint8_t requestedNewId) {
@@ -200,12 +200,12 @@ static bool scanRequireSingleServo(uint8_t* outId, uint8_t requestedNewId) {
   int count = 0;
   if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
   for (int id = SCAN_MIN; id <= SCAN_MAX; ++id) {
-    if (id == BROADCAST_ID) continue;        
+    if (id == BROADCAST_ID) continue;
     (void)hlscl.Ping((uint8_t)id);
     if (!hlscl.getLastError()) {
       if (count == 0) first = (uint8_t)id;
       ++count;
-      if (count > 1) break;                    
+      if (count > 1) break;
     }
   }
   if (gBusMux) xSemaphoreGive(gBusMux);
@@ -335,8 +335,8 @@ static constexpr float THUMB_IP_ABD_COEFF = 2.5f;
 static constexpr float THUMB_IP_FLEX_COEFF = 2.5f;
 static constexpr float THUMB_IP_MCP_COEFF = 9.4372f;
 static constexpr float THUMB_IP_COEFF = 12.5f;
-static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {0.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
-static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {100.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
+static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {-30.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
+static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {30.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
 
 static inline float clampJointAngleDegrees(uint8_t jointNum, float angle) {
   if (jointNum == JOINT_THUMB_ROTATION) {
@@ -449,7 +449,7 @@ static inline void sendU16Frame(uint8_t header, const uint16_t data[7]) {
     out[2 + 2*i + 0] = (uint8_t)(data[i] & 0xFF);
     out[2 + 2*i + 1] = (uint8_t)((data[i] >> 8) & 0xFF);
   }
-  Serial.write(out, sizeof(out)); 
+  Serial.write(out, sizeof(out));
 }
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n) {
   uint8_t out[16];
@@ -493,7 +493,7 @@ void sendTemps() {
   sendU16Frame(GET_TEMP, buf);
 }
 
-// ----- Task - Sync Read running always on Core 1 ----- 
+// ----- Task - Sync Read running always on Core 1 -----
 static void TaskSyncRead_Core1(void *arg) {
   uint8_t  rx[REG_BLOCK_LEN];          // 15 bytes
   uint16_t pos[7], vel[7], cur[7], tmp[7];
@@ -527,7 +527,7 @@ static void TaskSyncRead_Core1(void *arg) {
         gMetrics.cur[i] = cur[i];
       }
       xSemaphoreGive(gMetricsMux);
-    } 
+    }
     vTaskDelayUntil(&nextWake, period);
   }
 }
@@ -546,8 +546,8 @@ static bool handleSetIdCmd(const uint8_t* payload) {
   }
   // Find any servo present
   uint8_t oldId = 0xFF;
-  if (!scanRequireSingleServo(&oldId, newId)) return true; 
-  
+  if (!scanRequireSingleServo(&oldId, newId)) return true;
+
   if (newId != oldId) {
   if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
   (void)hlscl.Ping(newId);
@@ -568,7 +568,7 @@ static bool handleSetIdCmd(const uint8_t* payload) {
     targetId = newId;
   }
   (void)hlscl.LockEprom(targetId);
-  
+
   // Read back limit for ACK
   uint16_t curLimitRead = 0;
   int rd = hlscl.readWord(targetId, REG_CURRENT_LIMIT);

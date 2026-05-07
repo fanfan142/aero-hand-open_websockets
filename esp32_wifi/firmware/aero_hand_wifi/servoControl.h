@@ -51,6 +51,8 @@ public:
      */
     bool setAngles(const JointAngle* joints, uint8_t count, uint16_t duration = 500);
 
+    bool setActuators(const float actuations[SERVO_COUNT], uint16_t duration = 500);
+
     /**
      * 获取当前关节角度
      * @param jointId 关节ID

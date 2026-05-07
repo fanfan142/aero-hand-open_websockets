@@ -43,12 +43,12 @@ object ControlDefinitions {
 
     val DEFAULT_CONTROL_STATE: Map<String, Float> = COMPACT_CONTROLS.associate { it.id to it.defaultValue }
 
-    val ACTUATION_LOWER_LIMITS = listOf(0f, 0f, -15.2789f, 0f, 0f, 0f, 0f)
-    val ACTUATION_UPPER_LIMITS = listOf(100f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f)
-
     const val DEFAULT_DURATION_MS = 500
     const val THUMB_ROTATION_MIN = -30f
     const val THUMB_ROTATION_MAX = 30f
+
+    val ACTUATION_LOWER_LIMITS = listOf(THUMB_ROTATION_MIN, 0f, -15.2789f, 0f, 0f, 0f, 0f)
+    val ACTUATION_UPPER_LIMITS = listOf(THUMB_ROTATION_MAX, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f)
 }
 
 object SerialCommands {
@@ -409,7 +409,13 @@ fun buildSerialGetPositionsFrame(): ByteArray = buildSerialFrame(SerialCommands.
 fun compactStateToActuations(compactState: Map<String, Float>): List<Float> {
     val positions = compactStateToJointPositions(compactState)
 
-    val thumbCmcAbd = positions[14]
+    val thumbCmcAbd = mapRange(
+        positions[14],
+        0f,
+        100f,
+        ControlDefinitions.THUMB_ROTATION_MIN,
+        ControlDefinitions.THUMB_ROTATION_MAX
+    )
     val thumbCmcFlex = positions[0]
     val thumbMcp = positions[0]
     val thumbIp = positions[1]
@@ -445,7 +451,11 @@ fun compactStateFromActuations(actuationsDegrees: List<Float>): Map<String, Floa
 
     val actuations = actuationsDegrees.map { it * DEG_TO_RAD }
 
-    val cmcAbdJoint = actuations[0]
+    val cmcAbdDeg = actuationsDegrees[0].coerceIn(
+        ControlDefinitions.THUMB_ROTATION_MIN,
+        ControlDefinitions.THUMB_ROTATION_MAX
+    )
+    val cmcAbdJoint = cmcAbdDeg * DEG_TO_RAD
     val flexTendonMovement = actuations[1] * MOTOR_PULLEY_RADIUS
     val cmcFlexJoint = (
         flexTendonMovement - THUMB_FLEX_CMC_ABD_COEFF * cmcAbdJoint
@@ -462,7 +472,13 @@ fun compactStateFromActuations(actuationsDegrees: List<Float>): Map<String, Floa
     }
 
     return mapOf(
-        "thumb_cmc_abd" to (cmcAbdJoint * RAD_TO_DEG).coerceIn(0f, 100f),
+        "thumb_cmc_abd" to mapRange(
+            cmcAbdDeg,
+            ControlDefinitions.THUMB_ROTATION_MIN,
+            ControlDefinitions.THUMB_ROTATION_MAX,
+            0f,
+            100f
+        ).coerceIn(0f, 100f),
         "thumb_cmc_flex" to (cmcFlexJoint * RAD_TO_DEG).coerceIn(0f, 55f),
         "thumb_mcp_ip" to (mcpIpJoint * RAD_TO_DEG).coerceIn(0f, 90f),
         "index_flexion" to (fingerJoint(3) * RAD_TO_DEG).coerceIn(0f, 90f),

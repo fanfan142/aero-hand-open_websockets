@@ -51,6 +51,10 @@ const char* const JOINT_NAMES[JOINT_COUNT] = {
 
 // 当前关节角度
 float g_jointAngles[JOINT_COUNT] = {0};
+float g_actuatorAngles[SERVO_COUNT] = {0};
+
+static constexpr float ACTUATION_LOWER_LIMITS[SERVO_COUNT] = {-30.0f, 0.0f, -15.2789f, 0.0f, 0.0f, 0.0f, 0.0f};
+static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {30.0f, 104.1250f, 247.1500f, 288.1603f, 288.1603f, 288.1603f, 288.1603f};
 
 // LED引脚 (板载LED，通常是GPIO 48 或 2)
 #ifdef LED_BUILTIN
@@ -305,6 +309,45 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             sendResponse(clientNum, false,"Invalid joint_id");
         }
 
+    } else if (strcmp(type, "actuator_control") == 0) {
+        if (!doc["data"]["actuators"].is<JsonArrayConst>()) {
+            sendResponse(clientNum, false, "Missing actuators in actuator_control");
+            return;
+        }
+
+        JsonArrayConst actuators = doc["data"]["actuators"].as<JsonArrayConst>();
+        int duration = doc["data"]["duration_ms"].as<int>();
+        int validCount = 0;
+
+        for (JsonObjectConst actuator : actuators) {
+            if (!actuator["id"].is<int>() || !actuator["angle"].is<float>()) {
+                continue;
+            }
+            int id = actuator["id"].as<int>();
+            if (id < 0 || id >= SERVO_COUNT) {
+                continue;
+            }
+            float angle = actuator["angle"].as<float>();
+            g_actuatorAngles[id] = constrain(angle, ACTUATION_LOWER_LIMITS[id], ACTUATION_UPPER_LIMITS[id]);
+            validCount++;
+        }
+
+        if (validCount <= 0) {
+            sendResponse(clientNum, false, "No valid actuators");
+            return;
+        }
+
+        bool executed = servoControl.setActuators(g_actuatorAngles, duration > 0 ? duration : 500);
+        if (executed) {
+            for (int i = 0; i < JOINT_COUNT; i++) {
+                g_jointAngles[i] = 0;
+            }
+            DEBUG_PRINTF("[CMD] Actuator control: %d actuators\n", validCount);
+            sendResponse(clientNum, true, "Actuator control executed");
+        } else {
+            sendResponse(clientNum, false, "Actuator control failed");
+        }
+
     } else if (strcmp(type, "multi_joint_control") == 0) {
         // 多关节控制 - const JsonDocument 只能读取 JsonArrayConst
         if (!doc["data"]["joints"].is<JsonArrayConst>()) {
@@ -384,6 +427,9 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             servoControl.homing();
             for (int i = 0; i < JOINT_COUNT; i++) {
                 g_jointAngles[i] = 0;
+            }
+            for (int i = 0; i < SERVO_COUNT; i++) {
+                g_actuatorAngles[i] = 0;
             }
             DEBUG_PRINTLN("[CMD] Homing executed");
             sendResponse(clientNum, true,"Homing executed");

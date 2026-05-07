@@ -84,6 +84,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     companion object {
         private const val GESTURE_SEND_INTERVAL_MS = 80L
         private const val GESTURE_MIN_DELTA = 1.5f
+        private const val GESTURE_MAX_STEP = 10f
     }
 
     init {
@@ -478,9 +479,17 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun updateControlValuesFromGesture(angles: FingerAngles) {
-        val compactState = fingerAnglesToCompactState(angles)
-        val now = System.currentTimeMillis()
+        val rawCompactState = fingerAnglesToCompactState(angles)
         val previous = lastGestureCompactState
+        val compactState = if (previous == null) {
+            rawCompactState
+        } else {
+            rawCompactState.mapValues { (key, value) ->
+                val old = previous[key] ?: value
+                (old + (value - old).coerceIn(-GESTURE_MAX_STEP, GESTURE_MAX_STEP)).coerceIn(0f, 100f)
+            }
+        }
+        val now = System.currentTimeMillis()
         val changedEnough = previous == null || compactState.any { (key, value) ->
             abs((previous[key] ?: value) - value) >= GESTURE_MIN_DELTA
         }
