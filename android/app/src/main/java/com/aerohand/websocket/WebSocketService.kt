@@ -111,8 +111,16 @@ class WebSocketService {
         return sendInternal(Commands.getWifiStatus())
     }
 
-    fun sendWifiConfig(ssid: String, password: String): Boolean {
-        return sendInternal(Commands.setWifiConfig(ssid, password))
+    fun sendWifiConfig(
+        ssid: String,
+        password: String,
+        staticIp: String,
+        gateway: String,
+        subnet: String,
+        dns1: String,
+        dns2: String
+    ): Boolean {
+        return sendInternal(Commands.setWifiConfig(ssid, password, staticIp, gateway, subnet, dns1, dns2))
     }
 
     fun connectSta(): Boolean {

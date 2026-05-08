@@ -5,8 +5,10 @@ ESP32 WiFi 控制固件，支持 AP 热点模式和 WebSocket 通信。
 ## 功能特性
 
 - WiFi AP 模式：ESP32 开启热点，手机/电脑直连控制
+- WiFi STA 模式：保存路由器 SSID/密码并用静态 IP 入网
+- 上电初始化后自动执行一次 homing 归位
 - WebSocket 服务端：接收 JSON 指令控制机械手
-- 完整协议支持：单关节/多关节控制、状态查询、归零
+- 完整协议支持：单关节/多关节控制、状态查询、归零、WiFi 配网
 
 ## 硬件要求
 
@@ -52,16 +54,26 @@ ESP32 WiFi 控制固件，支持 AP 热点模式和 WebSocket 通信。
 
 // WebSocket端口
 #define WS_PORT 8765
+
+// STA 静态网络默认值，可只改 IP，其它项保持默认
+#define STA_STATIC_IP "192.168.1.210"
+#define STA_GATEWAY "192.168.1.1"
+#define STA_SUBNET "255.255.255.0"
+#define STA_DNS1 "192.168.1.1"
+#define STA_DNS2 "114.114.114.114"
 ```
+
+运行后也可通过 Android App 下发并保存 STA 配置。
 
 ## 测试
 
 固件上传后:
-1. ESP32 会创建 WiFi 热点 "AeroHand_WIFI"
-2. 手机/电脑连接该热点 (密码: 12345678)
-3. 打开浏览器访问 `examples/html_client.html`
-4. 修改连接地址为 `192.168.4.1:8765`
-5. 开始控制机械手
+1. ESP32 初始化并执行一次 homing
+2. ESP32 会创建 WiFi 热点 "AeroHand_WIFI"
+3. 手机/电脑连接该热点 (密码: 12345678)
+4. App 或浏览器连接 `192.168.4.1:8765`
+5. App 可扫描 2.4GHz WiFi，填写密码和静态网络参数
+6. 下发配置后 ESP32 切换到 STA，之后使用静态 IP 继续控制机械手
 
 ## 协议格式
 

@@ -59,6 +59,7 @@ Android App 支持两种控制链路：
 - 预设动作：张开、抓握、捏取、OK、剪刀手、点赞、石头/布/剪刀等
 - MediaPipe 手势识别跟随控制
 - WiFi AP / STA 配置下发
+- Android 扫描附近 2.4GHz WiFi，并下发静态 IP / 网关 / 子网 / DNS
 - USB 串口状态读取与位置控制
 
 调试构建由 GitHub Actions 的 `Android CI` 自动完成；正式 APK 由版本标签触发 `Android Release`。
@@ -83,12 +84,24 @@ ws://192.168.4.1:8765
 
 固件支持：
 
+- 上电初始化后执行一次 `homing`
+- 默认 AP 热点配网，手机可直连 `192.168.4.1:8765`
+- STA 模式静态 IP 入网，配置项可持久化保存
 - `joint_control`
 - `multi_joint_control`
 - `actuator_control`
 - `get_states`
 - `homing`
 - WiFi 配置相关命令
+
+典型配网流程：
+
+1. 烧录并上电，等待机械手归位，ESP32 开启 AP 热点；
+2. 手机连接 `AeroHand_WIFI`，App 连接 `192.168.4.1:8765`；
+3. 在 App 中扫描 2.4GHz WiFi，选择 SSID，输入密码；
+4. 静态 IP、网关、子网、DNS 均可自定义，默认可只改静态 IP；
+5. 点击“下发并切 STA”，ESP32 保存配置并连接目标路由器；
+6. 手机切到同一个 WiFi 后，用静态 IP 继续 WebSocket 控制。
 
 烧录示例：
 

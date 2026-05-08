@@ -36,6 +36,11 @@ Preferences wifiPrefs;
 uint8_t g_wifiModeSetting = WIFI_MODE;
 String g_staSsid = STA_SSID;
 String g_staPassword = STA_PASSWORD;
+String g_staStaticIp = STA_STATIC_IP;
+String g_staGateway = STA_GATEWAY;
+String g_staSubnet = STA_SUBNET;
+String g_staDns1 = STA_DNS1;
+String g_staDns2 = STA_DNS2;
 
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
@@ -860,6 +865,11 @@ void loadWiFiConfig() {
     g_wifiModeSetting = wifiPrefs.getUChar("mode", WIFI_MODE);
     g_staSsid = wifiPrefs.getString("sta_ssid", STA_SSID);
     g_staPassword = wifiPrefs.getString("sta_pass", STA_PASSWORD);
+    g_staStaticIp = wifiPrefs.getString("sta_ip", STA_STATIC_IP);
+    g_staGateway = wifiPrefs.getString("sta_gw", STA_GATEWAY);
+    g_staSubnet = wifiPrefs.getString("sta_mask", STA_SUBNET);
+    g_staDns1 = wifiPrefs.getString("sta_dns1", STA_DNS1);
+    g_staDns2 = wifiPrefs.getString("sta_dns2", STA_DNS2);
     wifiPrefs.end();
 }
 
@@ -868,18 +878,57 @@ void saveWiFiConfig() {
     wifiPrefs.putUChar("mode", g_wifiModeSetting);
     wifiPrefs.putString("sta_ssid", g_staSsid);
     wifiPrefs.putString("sta_pass", g_staPassword);
+    wifiPrefs.putString("sta_ip", g_staStaticIp);
+    wifiPrefs.putString("sta_gw", g_staGateway);
+    wifiPrefs.putString("sta_mask", g_staSubnet);
+    wifiPrefs.putString("sta_dns1", g_staDns1);
+    wifiPrefs.putString("sta_dns2", g_staDns2);
     wifiPrefs.end();
 }
 
 void clearWiFiConfig() {
     g_staSsid = "";
     g_staPassword = "";
+    g_staStaticIp = STA_STATIC_IP;
+    g_staGateway = STA_GATEWAY;
+    g_staSubnet = STA_SUBNET;
+    g_staDns1 = STA_DNS1;
+    g_staDns2 = STA_DNS2;
     g_wifiModeSetting = AH_WIFI_MODE_AP;
     wifiPrefs.begin("wifi", false);
     wifiPrefs.remove("sta_ssid");
     wifiPrefs.remove("sta_pass");
+    wifiPrefs.remove("sta_ip");
+    wifiPrefs.remove("sta_gw");
+    wifiPrefs.remove("sta_mask");
+    wifiPrefs.remove("sta_dns1");
+    wifiPrefs.remove("sta_dns2");
     wifiPrefs.putUChar("mode", g_wifiModeSetting);
     wifiPrefs.end();
+}
+
+static bool parseIp(const String& value, IPAddress& out) {
+    return !value.isEmpty() && out.fromString(value);
+}
+
+static void applyStaStaticConfig() {
+    IPAddress ip;
+    IPAddress gateway;
+    IPAddress subnet;
+    IPAddress dns1;
+    IPAddress dns2;
+    if (!parseIp(g_staStaticIp, ip)) {
+        return;
+    }
+    parseIp(g_staGateway, gateway);
+    parseIp(g_staSubnet, subnet);
+    parseIp(g_staDns1, dns1);
+    parseIp(g_staDns2, dns2);
+    if (gateway == IPAddress(0, 0, 0, 0)) gateway = IPAddress(192, 168, 1, 1);
+    if (subnet == IPAddress(0, 0, 0, 0)) subnet = IPAddress(255, 255, 255, 0);
+    if (dns1 == IPAddress(0, 0, 0, 0)) dns1 = gateway;
+    if (dns2 == IPAddress(0, 0, 0, 0)) dns2 = dns1;
+    WiFi.config(ip, gateway, subnet, dns1, dns2);
 }
 
 void startApMode() {
@@ -903,6 +952,7 @@ bool connectToSta(bool fallbackToAp) {
     WiFi.disconnect(true, true);
     delay(100);
     WiFi.mode(WIFI_STA);
+    applyStaStaticConfig();
     WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
@@ -1264,6 +1314,11 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
         g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
         g_staPassword = doc["data"]["sta_password"].as<const char*>();
+        if (doc["data"]["sta_static_ip"].is<const char*>()) g_staStaticIp = doc["data"]["sta_static_ip"].as<const char*>();
+        if (doc["data"]["sta_gateway"].is<const char*>()) g_staGateway = doc["data"]["sta_gateway"].as<const char*>();
+        if (doc["data"]["sta_subnet"].is<const char*>()) g_staSubnet = doc["data"]["sta_subnet"].as<const char*>();
+        if (doc["data"]["sta_dns1"].is<const char*>()) g_staDns1 = doc["data"]["sta_dns1"].as<const char*>();
+        if (doc["data"]["sta_dns2"].is<const char*>()) g_staDns2 = doc["data"]["sta_dns2"].as<const char*>();
         g_wifiModeSetting = AH_WIFI_MODE_DUAL;
         saveWiFiConfig();
         DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
@@ -1319,7 +1374,7 @@ void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
 }
 
 void sendWifiStatus(uint8_t clientNum) {
-    DynamicJsonDocument response(256);
+    DynamicJsonDocument response(512);
     response["type"] = "wifi_status";
     response["timestamp"] = millis();
     response["data"]["mode"] = getWifiModeName();
@@ -1327,6 +1382,11 @@ void sendWifiStatus(uint8_t clientNum) {
     if (!g_staSsid.isEmpty()) {
         response["data"]["sta_ssid"] = g_staSsid;
     }
+    response["data"]["sta_static_ip"] = g_staStaticIp;
+    response["data"]["sta_gateway"] = g_staGateway;
+    response["data"]["sta_subnet"] = g_staSubnet;
+    response["data"]["sta_dns1"] = g_staDns1;
+    response["data"]["sta_dns2"] = g_staDns2;
     response["data"]["configured_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
 
     String output;

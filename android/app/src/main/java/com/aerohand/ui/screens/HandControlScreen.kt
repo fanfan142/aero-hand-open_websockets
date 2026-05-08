@@ -1,6 +1,10 @@
 package com.aerohand.ui.screens
 
+import android.Manifest
 import android.app.Application
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +82,20 @@ fun HandControlScreen() {
     val uiState by viewModel.uiState.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
+    val wifiPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.scanWifiNetworks()
+    }
+    val requestWifiScan = {
+        val permissions = buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        }.toTypedArray()
+        wifiPermissionLauncher.launch(permissions)
+    }
 
     // Gesture camera service
     val gestureService = remember {
@@ -225,6 +243,12 @@ fun HandControlScreen() {
                         onDisconnect = viewModel::disconnect,
                         onStaSsidChange = viewModel::setStaSsid,
                         onStaPasswordChange = viewModel::setStaPassword,
+                        onStaStaticIpChange = viewModel::setStaStaticIp,
+                        onStaGatewayChange = viewModel::setStaGateway,
+                        onStaSubnetChange = viewModel::setStaSubnet,
+                        onStaDns1Change = viewModel::setStaDns1,
+                        onStaDns2Change = viewModel::setStaDns2,
+                        onScanWifi = requestWifiScan,
                         onApplyStaConfig = viewModel::applyStaConfig,
                         onSwitchToAp = viewModel::switchDeviceToAp,
                         onClearStaConfig = viewModel::clearStaConfig,

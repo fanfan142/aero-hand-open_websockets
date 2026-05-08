@@ -264,7 +264,12 @@ object PresetActions {
 data class WifiStatus(
     val mode: String = "AP",
     val ip: String = "192.168.4.1",
-    val staSsid: String? = null
+    val staSsid: String? = null,
+    val staStaticIp: String = "192.168.1.210",
+    val staGateway: String = "192.168.1.1",
+    val staSubnet: String = "255.255.255.0",
+    val staDns1: String = "192.168.1.1",
+    val staDns2: String = "114.114.114.114"
 )
 
 sealed class ConnectionState {
@@ -291,12 +296,25 @@ object Commands {
 
     fun getWifiStatus() = """{"type":"wifi_status","timestamp":${System.currentTimeMillis()}}"""
 
-    fun setWifiConfig(ssid: String, password: String) = JSONObject().apply {
+    fun setWifiConfig(
+        ssid: String,
+        password: String,
+        staticIp: String,
+        gateway: String,
+        subnet: String,
+        dns1: String,
+        dns2: String
+    ) = JSONObject().apply {
         put("type", "wifi_config_set")
         put("timestamp", System.currentTimeMillis())
         put("data", JSONObject().apply {
             put("sta_ssid", ssid)
             put("sta_password", password)
+            put("sta_static_ip", staticIp)
+            put("sta_gateway", gateway)
+            put("sta_subnet", subnet)
+            put("sta_dns1", dns1)
+            put("sta_dns2", dns2)
         })
     }.toString()
 
@@ -614,7 +632,12 @@ fun parseWifiStatus(text: String): WifiStatus? {
             WifiStatus(
                 mode = data.optString("mode", "AP"),
                 ip = data.optString("ip", "192.168.4.1"),
-                staSsid = data.optString("sta_ssid").takeIf { it.isNotBlank() }
+                staSsid = data.optString("sta_ssid").takeIf { it.isNotBlank() },
+                staStaticIp = data.optString("sta_static_ip", "192.168.1.210"),
+                staGateway = data.optString("sta_gateway", "192.168.1.1"),
+                staSubnet = data.optString("sta_subnet", "255.255.255.0"),
+                staDns1 = data.optString("sta_dns1", "192.168.1.1"),
+                staDns2 = data.optString("sta_dns2", "114.114.114.114")
             )
         }
     } catch (_: Exception) {

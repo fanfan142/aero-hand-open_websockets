@@ -58,6 +58,12 @@ fun ConnectionPanel(
     onDisconnect: () -> Unit,
     onStaSsidChange: (String) -> Unit,
     onStaPasswordChange: (String) -> Unit,
+    onStaStaticIpChange: (String) -> Unit,
+    onStaGatewayChange: (String) -> Unit,
+    onStaSubnetChange: (String) -> Unit,
+    onStaDns1Change: (String) -> Unit,
+    onStaDns2Change: (String) -> Unit,
+    onScanWifi: () -> Unit,
     onApplyStaConfig: () -> Unit,
     onSwitchToAp: () -> Unit,
     onClearStaConfig: () -> Unit,
@@ -137,6 +143,12 @@ fun ConnectionPanel(
                         onDisconnect = onDisconnect,
                         onStaSsidChange = onStaSsidChange,
                         onStaPasswordChange = onStaPasswordChange,
+                        onStaStaticIpChange = onStaStaticIpChange,
+                        onStaGatewayChange = onStaGatewayChange,
+                        onStaSubnetChange = onStaSubnetChange,
+                        onStaDns1Change = onStaDns1Change,
+                        onStaDns2Change = onStaDns2Change,
+                        onScanWifi = onScanWifi,
                         onApplyStaConfig = onApplyStaConfig,
                         onSwitchToAp = onSwitchToAp,
                         onClearStaConfig = onClearStaConfig
@@ -152,6 +164,7 @@ fun ConnectionPanel(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WifiConnectionContent(
     host: String,
@@ -165,6 +178,12 @@ private fun WifiConnectionContent(
     onDisconnect: () -> Unit,
     onStaSsidChange: (String) -> Unit,
     onStaPasswordChange: (String) -> Unit,
+    onStaStaticIpChange: (String) -> Unit,
+    onStaGatewayChange: (String) -> Unit,
+    onStaSubnetChange: (String) -> Unit,
+    onStaDns1Change: (String) -> Unit,
+    onStaDns2Change: (String) -> Unit,
+    onScanWifi: () -> Unit,
     onApplyStaConfig: () -> Unit,
     onSwitchToAp: () -> Unit,
     onClearStaConfig: () -> Unit
@@ -245,14 +264,57 @@ private fun WifiConnectionContent(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                OutlinedTextField(
-                    value = wifiConfig.staSsid,
-                    onValueChange = onStaSsidChange,
-                    label = { Text("STA WiFi") },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(18.dp)
-                )
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = wifiConfig.staSsid,
+                        onValueChange = onStaSsidChange,
+                        label = { Text("STA WiFi") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    MiniActionButton(
+                        text = if (wifiConfig.isScanning) "扫描中" else "扫描 2.4G",
+                        onClick = onScanWifi,
+                        enabled = !wifiConfig.isScanning,
+                        modifier = Modifier.width(100.dp),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                if (wifiConfig.scanResults.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        wifiConfig.scanResults.forEach { item ->
+                            Surface(
+                                onClick = { onStaSsidChange(item.ssid) },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (wifiConfig.staSsid == item.ssid) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(item.ssid, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "${item.frequency}MHz · ${item.level}dBm",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = wifiConfig.staPassword,
                     onValueChange = onStaPasswordChange,
@@ -261,6 +323,56 @@ private fun WifiConnectionContent(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    shape = RoundedCornerShape(18.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = wifiConfig.staticIp,
+                        onValueChange = onStaStaticIpChange,
+                        label = { Text("静态 IP") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    OutlinedTextField(
+                        value = wifiConfig.gateway,
+                        onValueChange = onStaGatewayChange,
+                        label = { Text("网关") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = wifiConfig.subnet,
+                        onValueChange = onStaSubnetChange,
+                        label = { Text("子网") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                    OutlinedTextField(
+                        value = wifiConfig.dns1,
+                        onValueChange = onStaDns1Change,
+                        label = { Text("DNS1") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                }
+                OutlinedTextField(
+                    value = wifiConfig.dns2,
+                    onValueChange = onStaDns2Change,
+                    label = { Text("DNS2") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
                     shape = RoundedCornerShape(18.dp)
                 )
                 Row(

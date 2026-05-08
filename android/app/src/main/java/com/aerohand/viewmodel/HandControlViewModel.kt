@@ -1,6 +1,10 @@
 package com.aerohand.viewmodel
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aerohand.gesture.FingerAngles
@@ -8,6 +12,8 @@ import com.aerohand.gesture.GestureCameraState
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
+import com.aerohand.wifi.WifiNetworkItem
+import com.aerohand.wifi.WifiScanService
 import com.aerohand.websocket.ConnectionState
 import com.aerohand.websocket.ControlDefinitions
 import com.aerohand.websocket.LogEntry
@@ -27,9 +33,16 @@ import kotlin.math.abs
 data class WifiConfigUiState(
     val staSsid: String = "",
     val staPassword: String = "",
+    val staticIp: String = "192.168.1.210",
+    val gateway: String = "192.168.1.1",
+    val subnet: String = "255.255.255.0",
+    val dns1: String = "192.168.1.1",
+    val dns2: String = "114.114.114.114",
     val currentWifiMode: String = "AP",
     val currentIp: String = "192.168.4.1",
-    val configuredStaSsid: String? = null
+    val configuredStaSsid: String? = null,
+    val scanResults: List<WifiNetworkItem> = emptyList(),
+    val isScanning: Boolean = false
 )
 
 enum class ConnectionPanelVisibility {
@@ -67,6 +80,7 @@ enum class ConnectionMode {
 class HandControlViewModel(application: Application) : AndroidViewModel(application) {
     private val webSocketService = WebSocketService()
     private val usbSerialService = UsbSerialService(application)
+    private val wifiScanService = WifiScanService(application)
 
     private val _uiState = MutableStateFlow(
         HandControlUiState(protocolPreview = buildProtocolPreview(ControlDefinitions.DEFAULT_CONTROL_STATE))
@@ -120,7 +134,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                         wifiConfig = wifiConfig.copy(
                             currentWifiMode = status.mode,
                             currentIp = status.ip,
-                            configuredStaSsid = status.staSsid?.takeIf { it.isNotBlank() }
+                            configuredStaSsid = status.staSsid?.takeIf { it.isNotBlank() },
+                            staticIp = status.staStaticIp,
+                            gateway = status.staGateway,
+                            subnet = status.staSubnet,
+                            dns1 = status.staDns1,
+                            dns2 = status.staDns2
                         ),
                         host = if (wifiConnected && status.ip.isNotBlank() && status.ip != "0.0.0.0") status.ip else host
                     )
@@ -215,6 +234,51 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         mutateState { copy(wifiConfig = wifiConfig.copy(staPassword = value)) }
     }
 
+    fun setStaStaticIp(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(staticIp = value)) }
+    }
+
+    fun setStaGateway(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(gateway = value)) }
+    }
+
+    fun setStaSubnet(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(subnet = value)) }
+    }
+
+    fun setStaDns1(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(dns1 = value)) }
+    }
+
+    fun setStaDns2(value: String) {
+        mutateState { copy(wifiConfig = wifiConfig.copy(dns2 = value)) }
+    }
+
+    fun scanWifiNetworks() {
+        if (!hasWifiScanPermission()) {
+            mutateState { copy(statusMessage = "请先授予附近 WiFi / 定位权限") }
+            return
+        }
+        mutateState { copy(wifiConfig = wifiConfig.copy(isScanning = true), statusMessage = "正在扫描 2.4GHz WiFi") }
+        viewModelScope.launch {
+            val results = runCatching { wifiScanService.scan2g() }.getOrElse { emptyList() }
+            mutateState {
+                copy(
+                    wifiConfig = wifiConfig.copy(scanResults = results, isScanning = false),
+                    statusMessage = if (results.isEmpty()) "未扫描到 2.4GHz WiFi" else "扫描到 ${results.size} 个 2.4GHz WiFi"
+                )
+            }
+        }
+    }
+
+    private fun hasWifiScanPermission(): Boolean {
+        val context = getApplication<Application>()
+        val fineLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val nearbyWifi = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+        return fineLocation && nearbyWifi
+    }
+
     fun connect() {
         resetGestureSendState()
         val state = _uiState.value
@@ -290,7 +354,15 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "仅连接设备默认 AP 时允许下发 WiFi 配置") }
             return
         }
-        val sentConfig = webSocketService.sendWifiConfig(wifiConfig.staSsid, wifiConfig.staPassword)
+        val sentConfig = webSocketService.sendWifiConfig(
+            wifiConfig.staSsid,
+            wifiConfig.staPassword,
+            wifiConfig.staticIp.ifBlank { "192.168.1.210" },
+            wifiConfig.gateway.ifBlank { "192.168.1.1" },
+            wifiConfig.subnet.ifBlank { "255.255.255.0" },
+            wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } },
+            wifiConfig.dns2.ifBlank { wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } } }
+        )
         val sentConnect = sentConfig && webSocketService.connectSta()
         if (sentConnect) {
             mutateState {

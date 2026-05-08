@@ -36,6 +36,11 @@
 // STA / Dual模式默认配置
 #define STA_SSID "Your_WiFi_SSID"
 #define STA_PASSWORD "Your_WiFi_Password"
+#define STA_STATIC_IP "192.168.1.210"
+#define STA_GATEWAY "192.168.1.1"
+#define STA_SUBNET "255.255.255.0"
+#define STA_DNS1 "192.168.1.1"
+#define STA_DNS2 "114.114.114.114"
 
 // ============================================
 // WebSocket 配置

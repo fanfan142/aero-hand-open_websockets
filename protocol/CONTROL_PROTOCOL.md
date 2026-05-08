@@ -85,6 +85,52 @@
 }
 ```
 
+**下发 WiFi STA 静态配置：**
+```json
+{
+  "type": "wifi_config_set",
+  "timestamp": 1711641600000,
+  "data": {
+    "sta_ssid": "Lab_2G",
+    "sta_password": "password",
+    "sta_static_ip": "192.168.1.210",
+    "sta_gateway": "192.168.1.1",
+    "sta_subnet": "255.255.255.0",
+    "sta_dns1": "192.168.1.1",
+    "sta_dns2": "114.114.114.114"
+  }
+}
+```
+
+**切换 STA / AP 与查询 WiFi 状态：**
+```json
+{"type": "wifi_connect_sta", "timestamp": 1711641600000}
+{"type": "wifi_start_ap", "timestamp": 1711641600000}
+{"type": "wifi_clear_sta", "timestamp": 1711641600000}
+{"type": "wifi_status", "timestamp": 1711641600000}
+```
+
+**WiFi 状态响应：**
+```json
+{
+  "type": "wifi_status",
+  "success": true,
+  "timestamp": 1711641600100,
+  "data": {
+    "mode": "AP",
+    "ip": "192.168.4.1",
+    "sta_ssid": "Lab_2G",
+    "sta_static_ip": "192.168.1.210",
+    "sta_gateway": "192.168.1.1",
+    "sta_subnet": "255.255.255.0",
+    "sta_dns1": "192.168.1.1",
+    "sta_dns2": "114.114.114.114"
+  }
+}
+```
+
+`sta_static_ip` 到 `sta_dns2` 可全部自定义；只修改静态 IP 时，网关、子网与 DNS 可使用默认值。
+
 ### 2.2 关节ID映射表
 
 | joint_id | 描述 | 舵机ID |
