@@ -67,11 +67,16 @@ ESP32 runs WebSocket server independently for wireless control.
 Use pre-built firmware in `firmware_bin/`:
 
 ```bash
+# Full merged image
+esptool.py --chip esp32s3 --port COM3 write_flash \
+  0x0 firmware_bin/aero_hand_wifi.ino.merged.bin
+
+# Split images
 esptool.py --chip esp32s3 --port COM3 write_flash \
   0x0 firmware_bin/boot_app0.bin \
   0x1000 firmware_bin/aero_hand_wifi.ino.bootloader.bin \
   0x8000 firmware_bin/aero_hand_wifi.ino.partitions.bin \
-  0x10000 firmware_bin/aero_hand_wifi.ino.merged.bin
+  0x10000 firmware_bin/aero_hand_wifi.ino.bin
 ```
 
 ### Usage

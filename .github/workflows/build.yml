@@ -38,27 +38,7 @@ jobs:
           echo "PREVIEW_VERSION_NAME=${BASE_VERSION_NAME}-t${{ github.run_number }}" >> "$GITHUB_ENV"
           echo "PREVIEW_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
 
-      - name: Prepare signing keystore from secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
-        run: |
-          test -n "$KEYSTORE_BASE64"
-          test -n "$STORE_PASSWORD"
-          test -n "$KEY_ALIAS"
-          test -n "$KEY_PASSWORD"
-          echo "$KEYSTORE_BASE64" | base64 --decode > /tmp/android-signing.jks
-          ls -la /tmp/android-signing.jks
-          echo "Keystore file size: $(wc -c < /tmp/android-signing.jks) bytes"
-
       - name: Build APK
-        env:
-          ANDROID_SIGNING_STORE_FILE: /tmp/android-signing.jks
-          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
-          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
-          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           set -o pipefail
           cd android

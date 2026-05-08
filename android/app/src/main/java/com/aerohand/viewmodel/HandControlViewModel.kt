@@ -259,13 +259,17 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "请先授予附近 WiFi / 定位权限") }
             return
         }
+        if (!wifiScanService.isWifiEnabled()) {
+            mutateState { copy(statusMessage = "请先在系统设置中打开 WiFi") }
+            return
+        }
         mutateState { copy(wifiConfig = wifiConfig.copy(isScanning = true), statusMessage = "正在扫描 2.4GHz WiFi") }
         viewModelScope.launch {
             val results = runCatching { wifiScanService.scan2g() }.getOrElse { emptyList() }
             mutateState {
                 copy(
                     wifiConfig = wifiConfig.copy(scanResults = results, isScanning = false),
-                    statusMessage = if (results.isEmpty()) "未扫描到 2.4GHz WiFi" else "扫描到 ${results.size} 个 2.4GHz WiFi"
+                    statusMessage = if (results.isEmpty()) "未扫描到 2.4GHz WiFi，稍后重试" else "扫描到 ${results.size} 个 2.4GHz WiFi"
                 )
             }
         }
@@ -354,23 +358,32 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "仅连接设备默认 AP 时允许下发 WiFi 配置") }
             return
         }
+        val targetIp = wifiConfig.staticIp.ifBlank { "192.168.1.210" }
+        val targetGateway = wifiConfig.gateway.ifBlank { "192.168.1.1" }
+        val targetDns1 = wifiConfig.dns1.ifBlank { targetGateway }
         val sentConfig = webSocketService.sendWifiConfig(
             wifiConfig.staSsid,
             wifiConfig.staPassword,
-            wifiConfig.staticIp.ifBlank { "192.168.1.210" },
-            wifiConfig.gateway.ifBlank { "192.168.1.1" },
+            targetIp,
+            targetGateway,
             wifiConfig.subnet.ifBlank { "255.255.255.0" },
-            wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } },
-            wifiConfig.dns2.ifBlank { wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } } }
+            targetDns1,
+            wifiConfig.dns2.ifBlank { targetDns1 }
         )
         val sentConnect = sentConfig && webSocketService.connectSta()
         if (sentConnect) {
             mutateState {
                 copy(
-                    statusMessage = "已发送 WiFi 配置，等待设备切换 STA",
+                    host = targetIp,
+                    port = "8765",
+                    statusMessage = "已发送配置；手机切到目标 WiFi 后连接 $targetIp:8765",
                     wifiConfig = wifiConfig.copy(
                         staPassword = "",
-                        configuredStaSsid = wifiConfig.staSsid
+                        configuredStaSsid = wifiConfig.staSsid,
+                        staticIp = targetIp,
+                        gateway = targetGateway,
+                        dns1 = targetDns1,
+                        dns2 = wifiConfig.dns2.ifBlank { targetDns1 }
                     )
                 )
             }

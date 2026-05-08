@@ -70,8 +70,8 @@ jobs:
 
             ## 烧录说明
 
-            1. 使用 esptool 或 ESP32 Flash Download Tool 烧录
-            2. 烧录地址: 0x0000
+            1. 使用 esptool 或 ESP32 Flash Download Tool 烧录上传的 `firmware_v*_*.bin`
+            2. 应用固件烧录地址: 0x10000
             3. 波特率: 921600
 
             ## 源码

@@ -1,24 +1,19 @@
 # Aero Hand Open WebSocket 控制套件
 
+<video src="./aero-hand-open_websockets.mp4" controls width="100%"></video>
+
+[如果 GitHub 没有自动显示视频，点击这里打开演示文件](./aero-hand-open_websockets.mp4)
+
 <p align="center">
   <img src="https://img.shields.io/badge/project-Aero%20Hand%20Open-blue" alt="project">
+  <img src="https://img.shields.io/badge/android-Compose-brightgreen" alt="android">
+  <img src="https://img.shields.io/badge/esp32--s3-WebSocket-orange" alt="esp32">
   <img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="license">
-  <img src="https://img.shields.io/badge/android-CI%20ready-brightgreen" alt="android ci">
 </p>
 
-<p align="center">
-  <strong>面向 Aero Hand Open 灵巧手的 Android、ESP32 WiFi、Python Bridge 与 C DLL WebSocket 通信方案。</strong>
-</p>
+本仓库是 Aero Hand Open 灵巧手的 WebSocket 通信扩展，提供 Android 控制 App、ESP32 WiFi 固件、Python Bridge、C DLL 和统一 JSON 协议。目标是让灵巧手可以通过手机、电脑脚本或跨语言程序稳定控制。
 
----
-
-## 项目定位
-
-本仓库是 [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open) 的 WebSocket 通信扩展，目标是让 Aero Hand Open 灵巧手可以通过手机、电脑脚本或跨语言 DLL 进行稳定控制。
-
-它不是机械本体仓库，而是围绕原始灵巧手控制板和 ESP32-S3 构建的通信中间件与控制应用。
-
-```
+```text
 Android / PC / 脚本
         │
         ├── WiFi WebSocket ──> ESP32-S3 ──> 舵机总线 ──> Aero Hand
@@ -30,94 +25,137 @@ Android / PC / 脚本
 
 ---
 
-## 当前通信方案
+## 当前发布
 
-| 方案 | 目录 | 适用场景 | 硬件/固件需求 |
-|------|------|----------|---------------|
-| Android 控制 App | `android/` | 手机直接控制、手势跟随、预设动作 | WiFi 模式需 ESP32 固件；USB 模式需 OTG |
-| ESP32 WiFi 固件 | `esp32_wifi/` | 机械手作为 WiFi 热点或 STA 设备 | ESP32-S3 + 舵机控制链路 |
-| WebSocket 改造固件 | `firmware_ws/` | 多历史固件版本维护 | PlatformIO / Arduino |
-| Python Bridge | `python_bridge/` | PC 侧有线桥接、自动化测试、fake 模式 | Python 3.10+；真实模式需串口 |
-| C DLL | `c_dll/` | C/C++/C#/Python ctypes 等跨语言调用 | CMake；WiFi WebSocket 服务端 |
-| 协议文档 | `protocol/` | JSON 控制协议说明 | 无 |
+最新正式包在 GitHub Releases 下载：
+
+- Android APK：`HandControl-*.apk`
+- WebSocket 固件：`firmware_v*_lefthand.bin` / `firmware_v*_righthand.bin`
+- 调试包：`main` 分支推送后由 Android CI 上传 artifact
+
+发布标签会同时触发 Android Release 和 Firmware Release，同一个 Release 页面会包含 APK 与固件 bin。
 
 ---
 
-## Android 控制应用
+## 该选哪条链路
 
-Android App 支持两种控制链路：
+| 链路 | 适合场景 | 需要什么 |
+|------|----------|----------|
+| Android + WiFi | 手机无线控制、预设动作、手势跟随、AP→STA 配网 | ESP32-S3 WiFi 固件 |
+| Android + USB OTG | 手机直连控制板，不依赖路由器 | 支持 OTG 的手机和 USB 串口 |
+| ESP32 WiFi | 上位机或脚本直接通过 WebSocket 控制 | ESP32-S3 + 舵机控制链路 |
+| Python Bridge | PC 有线桥接、协议调试、fake 模式测试 | Python 3.10+，真实模式需串口 |
+| C DLL | C/C++/C#/ctypes 等跨语言集成 | 可连接到 ESP32 WebSocket 服务端 |
 
-| 模式 | 连接方式 | 说明 |
-|------|----------|------|
-| WiFi WebSocket | 连接 ESP32 热点或局域网 IP | 推荐无线控制方式 |
-| USB OTG 串口 | 手机 USB-C OTG 直连控制板 | 不依赖 ESP32 WiFi |
+---
+
+## Android 控制 App
 
 主要功能：
 
+- WiFi WebSocket / USB OTG 双连接模式
 - 7 通道紧凑控制映射到灵巧手执行器
 - 15 关节状态显示与回填
 - 预设动作：张开、抓握、捏取、OK、剪刀手、点赞、石头/布/剪刀等
 - MediaPipe 手势识别跟随控制
-- WiFi AP / STA 配置下发
-- Android 扫描附近 2.4GHz WiFi，并下发静态 IP / 网关 / 子网 / DNS
-- USB 串口状态读取与位置控制
+- 扫描附近 2.4GHz WiFi 并下发 STA 配置
+- 静态 IP、网关、子网、DNS 可自定义，默认值可自动补全
 
-调试构建由 GitHub Actions 的 `Android CI` 自动完成；正式 APK 由版本标签触发 `Android Release`。
+安装流程：
+
+1. 在 Releases 下载 `HandControl-*.apk`。
+2. Android 允许安装未知来源应用。
+3. WiFi 模式下连接 ESP32 AP 或同网段静态 IP。
+4. USB 模式下插入 OTG 串口线并授权系统弹窗。
+
+WiFi 扫描需要系统 WiFi 已开启，并授予附近 WiFi / 定位权限。Android 10+ 对扫描频率有限制，短时间连续扫描可能返回系统缓存结果。
 
 ---
 
 ## ESP32 WiFi 固件
 
-默认 WebSocket 地址：
+默认 AP：
 
-```text
-ws://192.168.4.1:8765
-```
+| 配置 | 默认值 |
+|------|--------|
+| SSID | `AeroHand_WIFI` 或左右手专用热点名 |
+| 密码 | `12345678` |
+| WebSocket | `ws://192.168.4.1:8765` |
 
-默认 AP 配置：
+支持命令：
 
-| 配置 | 值 |
-|------|----|
-| 热点名称 | `AeroHand_WIFI` / 左右手专用热点名 |
-| 热点密码 | `12345678` |
-| WebSocket 端口 | `8765` |
-
-固件支持：
-
-- 上电初始化后执行一次 `homing`
-- 默认 AP 热点配网，手机可直连 `192.168.4.1:8765`
-- STA 模式静态 IP 入网，配置项可持久化保存
 - `joint_control`
 - `multi_joint_control`
 - `actuator_control`
 - `get_states`
 - `homing`
-- WiFi 配置相关命令
+- `wifi_status`
+- `wifi_config_set`
+- `wifi_connect_sta`
+- `wifi_start_ap`
+- `wifi_clear_sta`
 
-典型配网流程：
+上电后固件会执行一次归位流程；确认机械结构安全、电源稳定、手指无外部阻挡后再上电。
 
-1. 烧录并上电，等待机械手归位，ESP32 开启 AP 热点；
-2. 手机连接 `AeroHand_WIFI`，App 连接 `192.168.4.1:8765`；
-3. 在 App 中扫描 2.4GHz WiFi，选择 SSID，输入密码；
-4. 静态 IP、网关、子网、DNS 均可自定义，默认可只改静态 IP；
-5. 点击“下发并切 STA”，ESP32 保存配置并连接目标路由器；
-6. 手机切到同一个 WiFi 后，用静态 IP 继续 WebSocket 控制。
+---
 
-烧录示例：
+## AP → STA 静态 IP 配网
+
+目标流程：先由 ESP32 发 AP 让手机直连配置，再切到实验室/家庭路由器，ESP32 以固定 IP 作为局域网设备。
+
+1. 烧录并上电，等待归位完成。
+2. 手机连接 ESP32 热点。
+3. App WiFi 模式连接 `192.168.4.1:8765`。
+4. 展开连接面板，扫描附近 2.4GHz WiFi。
+5. 选择 SSID，输入密码。
+6. 填写静态 IP；网关、子网、DNS 可保留默认值。
+7. 点击“下发并切 STA”。
+8. 手机切到目标 WiFi。
+9. App 会把 Host 预填成目标静态 IP，重新连接即可控制。
+
+默认静态网络参数：
+
+| 字段 | 默认值 |
+|------|--------|
+| 静态 IP | `192.168.1.210` |
+| 网关 | `192.168.1.1` |
+| 子网 | `255.255.255.0` |
+| DNS1 | `192.168.1.1` |
+| DNS2 | `114.114.114.114` |
+
+---
+
+## 烧录固件
+
+Releases 中的 `firmware_v*_*.bin` 是应用固件，烧录地址为 `0x10000`：
 
 ```bash
+esptool.py --chip esp32s3 --port COM3 write_flash \
+  0x10000 firmware_v0.2.0_lefthand.bin
+```
+
+如果使用 `firmware_bin/` 中的 Arduino 构建产物，可选择二者之一：
+
+```bash
+# 单文件完整镜像
+esptool.py --chip esp32s3 --port COM3 write_flash \
+  0x0 firmware_bin/aero_hand_wifi.ino.merged.bin
+
+# 分区烧录
 esptool.py --chip esp32s3 --port COM3 write_flash \
   0x0 firmware_bin/boot_app0.bin \
   0x1000 firmware_bin/aero_hand_wifi.ino.bootloader.bin \
   0x8000 firmware_bin/aero_hand_wifi.ino.partitions.bin \
-  0x10000 firmware_bin/aero_hand_wifi.ino.merged.bin
+  0x10000 firmware_bin/aero_hand_wifi.ino.bin
 ```
+
+左右手固件要与实际机械手匹配，避免手型配置和舵机方向不一致。
 
 ---
 
-## WebSocket 协议
+## WebSocket 协议最小示例
 
-### 单关节控制
+单关节控制：
 
 ```json
 {
@@ -131,23 +169,7 @@ esptool.py --chip esp32s3 --port COM3 write_flash \
 }
 ```
 
-### 多关节控制
-
-```json
-{
-  "type": "multi_joint_control",
-  "timestamp": 1710000000000,
-  "data": {
-    "joints": [
-      {"joint_id": "thumb_proximal", "angle": 30.0},
-      {"joint_id": "index_proximal", "angle": 60.0}
-    ],
-    "duration_ms": 500
-  }
-}
-```
-
-### 执行器控制
+执行器控制：
 
 ```json
 {
@@ -163,7 +185,7 @@ esptool.py --chip esp32s3 --port COM3 write_flash \
 }
 ```
 
-### 状态与归零
+状态与归位：
 
 ```json
 {"type": "get_states", "timestamp": 1710000000000}
@@ -174,25 +196,9 @@ esptool.py --chip esp32s3 --port COM3 write_flash \
 
 ---
 
-## 关节定义
-
-| 关节 ID | 描述 | 角度范围 |
-|---------|------|----------|
-| `thumb_proximal` | 拇指近端 | 0° ~ 90° |
-| `thumb_distal` | 拇指远端 | 0° ~ 90° |
-| `index_proximal` / `index_middle` / `index_distal` | 食指三节 | 0° ~ 90° |
-| `middle_proximal` / `middle_middle` / `middle_distal` | 中指三节 | 0° ~ 90° |
-| `ring_proximal` / `ring_middle` / `ring_distal` | 无名指三节 | 0° ~ 90° |
-| `pinky_proximal` / `pinky_middle` / `pinky_distal` | 小指三节 | 0° ~ 90° |
-| `thumb_rotation` | 拇指旋转 | -30° ~ 30° |
-
-Android 内部还使用 7 通道紧凑控制映射，最终会转换到固件侧执行器或关节目标。
-
----
-
 ## Python Bridge
 
-fake 模式可不接硬件，适合协议和 App 调试：
+fake 模式不需要硬件，适合协议和 App 调试：
 
 ```bash
 cd python_bridge
@@ -200,22 +206,20 @@ pip install -e .
 python -m aero_ws_python.server --fake
 ```
 
-测试：
+运行测试：
 
 ```bash
 cd python_bridge
 python -m pytest tests -q
 ```
 
-Python 客户端会忽略畸形状态项，避免单个坏关节数据中断接收循环。
-
 ---
 
 ## C DLL
 
-C DLL 提供纯 C ABI，适合 C/C++、C#、Python ctypes 等跨语言调用。
+C DLL 提供纯 C ABI，可被 C/C++、C#、Python ctypes 等调用。
 
-核心 API：
+常用 API：
 
 | API | 说明 |
 |-----|------|
@@ -224,8 +228,8 @@ C DLL 提供纯 C ABI，适合 C/C++、C#、Python ctypes 等跨语言调用。
 | `aero_ws_set_joint` | 单关节控制 |
 | `aero_ws_set_joints` | 多关节控制 |
 | `aero_ws_get_states` | 同步获取状态 |
-| `aero_ws_free_states` | 释放 `aero_ws_get_states` 返回的状态数组 |
-| `aero_ws_homing` | 归零 |
+| `aero_ws_free_states` | 释放状态数组 |
+| `aero_ws_homing` | 归位 |
 | `aero_ws_send_raw` | 发送原始 JSON |
 
 构建：
@@ -248,70 +252,17 @@ cmake --build build --config Release
 | v0.1.5 | 70°C / 500 | 700 | 电机配置修复 |
 | v0.2.0 | 70°C / 500 | 700 | 拇指归位偏移优化 |
 
-固件发布由版本标签触发 `Firmware Release` 工作流自动编译并上传产物。
-
 ---
 
-## 稳定性修复记录
-
-当前版本重点加固了以下风险点：
-
-- WebSocket payload 日志不再按 C 字符串打印，避免非 NUL 结尾 payload 越界读取
-- Python 客户端跳过畸形状态项，避免接收循环异常退出
-- C DLL 校验 joint id、角度、duration，避免 JSON 注入、NaN 和缓冲区截断
-- C DLL `get_states` 修复同步读取与后台接收线程抢 socket 的问题
-- C DLL 新增 `aero_ws_free_states`，明确跨 DLL 边界内存释放方式
-- C DLL 断开连接时先关闭 socket 唤醒接收线程，再等待线程退出
-- Android USB 串口读写串行化，避免并发读写同一串口
-- Android USB 状态帧改为累积读取 16 字节，避免短读丢帧
-- Android WebSocket 旧连接回调用 token 隔离，避免覆盖新连接状态
-- Android 状态解析过滤 NaN / Inf
-- Android WiFi 状态回填逻辑修正为 WiFi 模式生效
-
----
-
-## 本地验证
-
-可直接运行的检查：
-
-```bash
-git diff --check
-python -m pytest python_bridge/tests -q
-python -m py_compile \
-  python_bridge/aero_ws_python/client.py \
-  python_bridge/aero_ws_python/server.py \
-  python_bridge/aero_ws_python/protocol.py
-```
-
-Android 本地构建建议使用 JDK 17：
-
-```bash
-cd android
-./gradlew assembleDebug
-```
-
-如果本机是 JDK 25，当前 Kotlin/Gradle 组合会在 Gradle Kotlin DSL 解析阶段失败；GitHub Actions 使用 JDK 17，是发布门禁。
-
----
-
-## CI / 发布
+## CI / Release
 
 | Workflow | 触发条件 | 产物 |
 |----------|----------|------|
 | Android CI | push / PR 到 `main` | Debug APK artifact |
-| Android Release | 推送 `v*` 标签 | Release APK + GitHub Release |
-| Firmware Release | 推送 `v*` 标签 | 固件 bin 包 + GitHub Release |
+| Android Release | 推送 `v*` 标签 | Release APK |
+| Firmware Release | 推送 `v*` 标签 | 多版本左右手固件 bin |
 
-推荐发布流程：
-
-```bash
-git status
-git diff --check
-python -m pytest python_bridge/tests -q
-git commit -m "fix: harden websocket control paths"
-git push origin main
-# 确认 Android CI 通过后，再打 v* 标签触发正式发布
-```
+本项目验证以 GitHub Actions 云端构建为准；本地 Windows 环境不作为 Android 发布门禁。
 
 ---
 
@@ -323,12 +274,25 @@ aero-hand-open_websockets/
 ├── c_dll/            # C ABI WebSocket 客户端库
 ├── esp32_wifi/       # ESP32 WiFi WebSocket 固件
 ├── firmware_ws/      # 多版本 WebSocket 改造固件
-├── firmware_bin/     # 预编译固件二进制
+├── firmware_bin/     # Arduino 固件烧录辅助产物
 ├── python_bridge/    # Python WebSocket 桥接
 ├── protocol/         # JSON 协议文档
 ├── scripts/          # 固件构建脚本
 └── docs/             # 附加文档
 ```
+
+---
+
+## 已审计的关键风险点
+
+当前版本已重点处理：
+
+- Android WiFi 扫描等待系统扫描结果事件，避免总是读取旧缓存。
+- Android 不再尝试主动打开系统 WiFi，改为提示用户手动开启。
+- AP→STA 配网后自动预填目标静态 IP，减少切网后的重连误操作。
+- Debug CI 不依赖签名 secrets，Release 才强制签名。
+- Firmware Release 文档明确应用固件烧录地址为 `0x10000`。
+- WebSocket payload、C DLL 输入校验、USB 串口短读、旧 WebSocket 回调覆盖等问题已在前序版本加固。
 
 ---
 
