@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import pathlib
+import sys
 
 # 获取脚本所在目录的父目录（即仓库根目录）
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
@@ -225,14 +226,25 @@ def main():
 
     print(f"\n=== Build complete: {success_count}/{total_count} successful ===")
 
-    if success_count == total_count:
-        print("\nAll firmware built successfully!")
-        print("Bin files are in:")
-        for version in VERSIONS:
-            for hand in HANDS:
-                bin_path = BUILD_DIR / f"firmware_{version}_{hand}.bin"
-                if bin_path.exists():
-                    print(f"  {bin_path}")
+    if success_count != total_count:
+        sys.exit(1)
+
+    missing_bins = []
+    print("\nAll firmware built successfully!")
+    print("Bin files are in:")
+    for version in VERSIONS:
+        for hand in HANDS:
+            bin_path = BUILD_DIR / f"firmware_{version}_{hand}.bin"
+            if bin_path.exists():
+                print(f"  {bin_path}")
+            else:
+                missing_bins.append(bin_path)
+
+    if missing_bins:
+        print("\nMissing firmware bin files:")
+        for bin_path in missing_bins:
+            print(f"  {bin_path}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

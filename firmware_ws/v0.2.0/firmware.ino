@@ -1023,8 +1023,7 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
             break;
 
         case WStype_TEXT:
-            DEBUG_PRINTF("[WS] Client %u sent %u bytes
-", num, (unsigned int)length);
+            DEBUG_PRINTF("[WS] Client %u sent %u bytes\n", num, (unsigned int)length);
             handleWsCommand(num, (const char*)payload, length);
             g_lastWsActivity = millis();
             break;

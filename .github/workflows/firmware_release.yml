@@ -38,8 +38,8 @@ jobs:
       - name: Create Firmware Package
         run: |
           mkdir -p firmware_release
-          # Copy freshly built firmware from firmware_ws_build/
-          cp firmware_ws_build/firmware_v*.bin firmware_release/ 2>/dev/null || true
+          cp firmware_ws_build/firmware_v*.bin firmware_release/
+          test -n "$(ls -A firmware_release)"
           echo "=== Firmware package contents ==="
           ls -la firmware_release/
 
