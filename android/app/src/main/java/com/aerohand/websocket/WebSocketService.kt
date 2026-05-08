@@ -12,6 +12,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class WebSocketService {
     private val client = OkHttpClient.Builder()
@@ -21,6 +22,7 @@ class WebSocketService {
         .build()
 
     private var webSocket: WebSocket? = null
+    private val connectionToken = AtomicInteger(0)
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -42,12 +44,16 @@ class WebSocketService {
         }
 
         val url = "ws://$host:$port/"
+        val token = connectionToken.incrementAndGet()
         _connectionState.value = ConnectionState.Connecting
         addLog(LogEntry.Info("Connecting to $url...", timestamp()))
 
         val request = Request.Builder().url(url).build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val nextWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+            private fun isCurrent(): Boolean = connectionToken.get() == token
+
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (!isCurrent()) return
                 _connectionState.value = ConnectionState.Connected("$host:$port")
                 addLog(LogEntry.Info("Connected", timestamp()))
                 requestStates()
@@ -55,6 +61,7 @@ class WebSocketService {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (!isCurrent()) return
                 addLog(LogEntry.Receive(sanitizeLogMessage(text), timestamp()))
                 parseHandInfo(text)?.let { handType ->
                     val current = _connectionState.value
@@ -71,18 +78,22 @@ class WebSocketService {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrent()) return
                 _connectionState.value = ConnectionState.Disconnected
                 addLog(LogEntry.Info("Disconnected", timestamp()))
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (!isCurrent()) return
                 _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
                 addLog(LogEntry.Error("Error: ${t.message}", timestamp()))
             }
         })
+        webSocket = nextWebSocket
     }
 
     fun disconnect() {
+        connectionToken.incrementAndGet()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected

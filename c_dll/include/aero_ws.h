@@ -120,6 +120,7 @@ AERO_WS_API int aero_ws_get_states(
     int max_count
 );
 
+AERO_WS_API void aero_ws_free_states(AeroStates* states);
 AERO_WS_API int aero_ws_homing(AeroWSHandle handle);
 AERO_WS_API int aero_ws_send_raw(AeroWSHandle handle, const char* json);
 

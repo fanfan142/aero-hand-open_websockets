@@ -218,15 +218,21 @@ class AeroWebSocketClient:
             if msg_type == "states_response":
                 joints = obj.get("data", {}).get("joints", [])
                 if isinstance(joints, list):
-                    self._latest_states = [
-                        JointState(
-                            joint_id=str(joint.get("joint_id", "")),
-                            angle=float(joint.get("angle", 0.0)),
-                            load=float(joint.get("load", 0.0)),
-                        )
-                        for joint in joints
-                        if isinstance(joint, dict)
-                    ]
+                    states = []
+                    for joint in joints:
+                        if not isinstance(joint, dict):
+                            continue
+                        try:
+                            states.append(
+                                JointState(
+                                    joint_id=str(joint.get("joint_id", "")),
+                                    angle=float(joint.get("angle", 0.0)),
+                                    load=float(joint.get("load", 0.0)),
+                                )
+                            )
+                        except (TypeError, ValueError):
+                            logger.warning("Invalid joint state item: %s", joint)
+                    self._latest_states = states
                     self._state_response_event.set()
 
             callback = self._callbacks.get(msg_type)
@@ -234,6 +240,8 @@ class AeroWebSocketClient:
                 callback(obj)
         except json.JSONDecodeError:
             logger.warning("Invalid JSON: %s", message)
+        except Exception as e:
+            logger.warning("Failed to handle message: %s", e)
 
     def on(self, event_type: str, callback: Callable):
         """

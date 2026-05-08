@@ -38,6 +38,16 @@ def _start_server_in_thread(server: AeroWebSocketServer):
     return thread, lambda: runner.loop
 
 
+def test_client_ignores_malformed_joint_state_items():
+    client = AeroWebSocketClient("127.0.0.1", 1)
+    client._handle_message('{"type":"states_response","data":{"joints":[{"joint_id":"index_proximal","angle":"bad"},{"joint_id":"index_middle","angle":30}]}}')
+
+    assert client._latest_states is not None
+    assert len(client._latest_states) == 1
+    assert client._latest_states[0].joint_id == "index_middle"
+    assert client._latest_states[0].angle == 30.0
+
+
 def test_client_server_fake_mode_roundtrip():
     port = _get_free_port()
     server = AeroWebSocketServer(host="127.0.0.1", port=port, use_fake_servo=True)

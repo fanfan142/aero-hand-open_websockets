@@ -40,6 +40,7 @@ class UsbSerialService(context: Context) {
 
     private var port: UsbSerialPort? = null
     private var currentDevice: UsbDevice? = null
+    private val portMux = Any()
     private var receiverRegistered = false
     private var pendingDevice: UsbDevice? = null
 
@@ -121,8 +122,11 @@ class UsbSerialService(context: Context) {
     fun requestStates() {
         ioScope.launch {
             val frame = buildSerialGetPositionsFrame()
-            sendFrame(frame, frame.toHexString())
-            readActuationState()
+            synchronized(portMux) {
+                if (sendFrameLocked(frame, frame.toHexString())) {
+                    readActuationStateLocked()
+                }
+            }
         }
     }
 
@@ -138,54 +142,64 @@ class UsbSerialService(context: Context) {
     }
 
     fun release() {
-        disconnectInternal()
-        unregisterReceiver()
         ioScope.cancel()
+        synchronized(portMux) {
+            disconnectInternalLocked()
+        }
+        unregisterReceiver()
     }
 
     private fun openDevice(device: UsbDevice) {
-        try {
-            val driver = UsbSerialProber.getDefaultProber().probeDevice(device)
-            if (driver == null) {
-                _connectionState.value = UsbConnectionState.Error("设备不是受支持的 USB 串口")
-                addLog(LogEntry.Error("Unsupported USB serial device", timestamp()))
-                return
-            }
+        synchronized(portMux) {
+            try {
+                val driver = UsbSerialProber.getDefaultProber().probeDevice(device)
+                if (driver == null) {
+                    _connectionState.value = UsbConnectionState.Error("设备不是受支持的 USB 串口")
+                    addLog(LogEntry.Error("Unsupported USB serial device", timestamp()))
+                    return
+                }
 
-            val connection = usbManager.openDevice(device)
-            if (connection == null) {
-                _connectionState.value = UsbConnectionState.Error("打开 USB 设备失败")
-                addLog(LogEntry.Error("Open USB device failed", timestamp()))
-                return
-            }
+                val connection = usbManager.openDevice(device)
+                if (connection == null) {
+                    _connectionState.value = UsbConnectionState.Error("打开 USB 设备失败")
+                    addLog(LogEntry.Error("Open USB device failed", timestamp()))
+                    return
+                }
 
-            val nextPort = driver.ports.firstOrNull()
-            if (nextPort == null) {
-                connection.close()
-                _connectionState.value = UsbConnectionState.Error("USB 串口不可用")
-                addLog(LogEntry.Error("No USB serial port available", timestamp()))
-                return
-            }
+                val nextPort = driver.ports.firstOrNull()
+                if (nextPort == null) {
+                    connection.close()
+                    _connectionState.value = UsbConnectionState.Error("USB 串口不可用")
+                    addLog(LogEntry.Error("No USB serial port available", timestamp()))
+                    return
+                }
 
-            disconnectInternal()
-            nextPort.open(connection)
-            nextPort.setParameters(921600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            nextPort.dtr = true
-            nextPort.rts = true
-            port = nextPort
-            currentDevice = device
-            _connectionState.value = UsbConnectionState.Connected(device.deviceName ?: "USB Serial")
-            addLog(LogEntry.Info("USB connected @ 921600", timestamp()))
-            readActuationState()
-        } catch (e: Exception) {
-            port = null
-            currentDevice = null
-            _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 连接失败")
-            addLog(LogEntry.Error("USB open failed: ${e.message}", timestamp()))
+                disconnectInternalLocked()
+                nextPort.open(connection)
+                nextPort.setParameters(921600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                nextPort.dtr = true
+                nextPort.rts = true
+                port = nextPort
+                currentDevice = device
+                _connectionState.value = UsbConnectionState.Connected(device.deviceName ?: "USB Serial")
+                addLog(LogEntry.Info("USB connected @ 921600", timestamp()))
+                readActuationStateLocked()
+            } catch (e: Exception) {
+                port = null
+                currentDevice = null
+                _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 连接失败")
+                addLog(LogEntry.Error("USB open failed: ${e.message}", timestamp()))
+            }
         }
     }
 
     private fun disconnectInternal() {
+        synchronized(portMux) {
+            disconnectInternalLocked()
+        }
+    }
+
+    private fun disconnectInternalLocked() {
         try {
             port?.close()
         } catch (_: IOException) {
@@ -196,37 +210,58 @@ class UsbSerialService(context: Context) {
     }
 
     private fun readActuationState() {
+        synchronized(portMux) {
+            readActuationStateLocked()
+        }
+    }
+
+    private fun readActuationStateLocked() {
         val currentPort = port ?: return
         val buffer = ByteArray(16)
+        var offset = 0
         try {
-            val length = currentPort.read(buffer, 80)
-            if (length == 16) {
-                val state = parseSerialActuationResponse(buffer)
-                if (state != null) {
-                    _compactState.value = state
-                    addLog(LogEntry.Receive(buffer.toHexString(), timestamp()))
+            while (offset < buffer.size) {
+                val chunk = ByteArray(buffer.size - offset)
+                val length = currentPort.read(chunk, 80)
+                if (length <= 0) {
+                    return
                 }
+                chunk.copyInto(buffer, offset, 0, length)
+                offset += length
+            }
+            val state = parseSerialActuationResponse(buffer)
+            if (state != null) {
+                _compactState.value = state
+                addLog(LogEntry.Receive(buffer.toHexString(), timestamp()))
             }
         } catch (e: Exception) {
             addLog(LogEntry.Error("USB read failed: ${e.message}", timestamp()))
             _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 读取失败")
-            disconnectInternal()
+            disconnectInternalLocked()
         }
     }
 
     private fun sendFrame(frame: ByteArray, logMessage: String) {
+        synchronized(portMux) {
+            sendFrameLocked(frame, logMessage)
+        }
+    }
+
+    private fun sendFrameLocked(frame: ByteArray, logMessage: String): Boolean {
         val currentPort = port
         if (currentPort == null) {
             addLog(LogEntry.Error("Send failed: USB socket not ready", timestamp()))
-            return
+            return false
         }
 
-        try {
+        return try {
             currentPort.write(frame, 200)
             addLog(LogEntry.Send(logMessage, timestamp()))
+            true
         } catch (e: Exception) {
             _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 发送失败")
             addLog(LogEntry.Error("USB send failed: ${e.message}", timestamp()))
+            false
         }
     }
 

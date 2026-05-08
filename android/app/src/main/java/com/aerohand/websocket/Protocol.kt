@@ -578,7 +578,10 @@ fun parseStatesResponse(text: String): Map<String, Float>? {
                     val joint = statesArray.optJSONObject(i) ?: continue
                     val jointId = joint.optString("joint_id")
                     if (jointId.isNotBlank()) {
-                        put(jointId, joint.optDouble("angle", 0.0).toFloat())
+                        val angle = joint.optDouble("angle", Double.NaN)
+                        if (angle.isFinite()) {
+                            put(jointId, angle.toFloat())
+                        }
                     }
                 }
             }

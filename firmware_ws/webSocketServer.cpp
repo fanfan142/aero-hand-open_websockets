@@ -80,7 +80,8 @@ void AeroWebSocketServer::_wsEvent(uint8_t num, WStype_t type, uint8_t* payload,
             break;
 
         case WStype_TEXT:
-            DEBUG_PRINTF("[WS] Client %u sent: %s\n", num, payload);
+            DEBUG_PRINTF("[WS] Client %u sent %u bytes
+", num, (unsigned int)length);
             if (_messageCallback) {
                 _messageCallback((const char*)payload, length);
             }

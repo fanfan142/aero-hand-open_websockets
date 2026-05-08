@@ -69,9 +69,8 @@ static int connect_socket(SOCKET sock, const char* host, int port, int timeout_m
     addr.sin_addr.s_addr = inet_addr(host);
 
     if (addr.sin_addr.s_addr == INADDR_NONE) {
-        // 尝试解析主机名
         struct hostent* he = gethostbyname(host);
-        if (he == NULL) {
+        if (he == NULL || he->h_addr_list[0] == NULL) {
             set_error("Failed to resolve host");
             return AERO_WS_ERROR;
         }
@@ -84,6 +83,11 @@ static int connect_socket(SOCKET sock, const char* host, int port, int timeout_m
 
     int result = connect(sock, (struct sockaddr*)&addr, sizeof(addr));
     if (result == SOCKET_ERROR) {
+        int err = WSAGetLastError();
+        if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS && err != WSAEINVAL) {
+            set_error("Connection failed");
+            return AERO_WS_ERROR;
+        }
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(sock, &fds);
@@ -93,12 +97,27 @@ static int connect_socket(SOCKET sock, const char* host, int port, int timeout_m
             set_error("Connection timeout");
             return AERO_WS_TIMEOUT;
         }
+        int so_error = 0;
+        int so_error_len = sizeof(so_error);
+        getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&so_error, &so_error_len);
+        if (so_error != 0) {
+            set_error("Connection failed");
+            return AERO_WS_ERROR;
+        }
     }
+
+    mode = 0;
+    ioctlsocket(sock, FIONBIO, &mode);
+    DWORD recv_timeout = (DWORD)timeout_ms;
+    DWORD send_timeout = (DWORD)timeout_ms;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recv_timeout, sizeof(recv_timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&send_timeout, sizeof(send_timeout));
 #else
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         set_error("Connection failed");
@@ -340,6 +359,7 @@ static int json_parse_joints_array(const char* p, AeroStates* states, int max_co
 
         if (has_id) {
             strncpy(joints[count].joint_id, joint_id, sizeof(joints[count].joint_id) - 1);
+            joints[count].joint_id[sizeof(joints[count].joint_id) - 1] = '\0';
             joints[count].angle = (float)angle;
             joints[count].load = (float)load;
             count++;
@@ -421,6 +441,27 @@ static void generate_random_bytes(unsigned char* buf, int len) {
     for (i = 0; i < len; i++) {
         buf[i] = (unsigned char)(rand() % 256);
     }
+}
+
+static int is_valid_joint_id_value(const char* joint_id) {
+    if (joint_id == NULL || joint_id[0] == '\0') return 0;
+    size_t len = strlen(joint_id);
+    if (len >= 32) return 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = joint_id[i];
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+static int is_valid_angle_value(float angle) {
+    if (angle != angle) return 0;
+    return angle >= -30.0f && angle <= 90.0f;
+}
+
+static int is_valid_duration_value(int duration_ms) {
+    return duration_ms >= 0 && duration_ms <= 5000;
 }
 
 // WebSocket握手
@@ -789,9 +830,15 @@ void aero_ws_disconnect(AeroWSHandle handle) {
 
     ctx->running = 0;
 
+    SOCKET sock = ctx->sock;
+    if (sock != INVALID_SOCKET) {
+        ctx->sock = INVALID_SOCKET;
+        close_socket(sock);
+    }
+
 #ifdef _WIN32
     if (ctx->thread) {
-        WaitForSingleObject(ctx->thread, 1000);
+        WaitForSingleObject(ctx->thread, INFINITE);
         CloseHandle(ctx->thread);
         ctx->thread = NULL;
     }
@@ -801,11 +848,6 @@ void aero_ws_disconnect(AeroWSHandle handle) {
         ctx->thread = 0;
     }
 #endif
-
-    if (ctx->sock != INVALID_SOCKET) {
-        close_socket(ctx->sock);
-        ctx->sock = INVALID_SOCKET;
-    }
 
     if (ctx->connected && ctx->connect_cb) {
         ctx->connect_cb(0, ctx->connect_userdata);
@@ -835,38 +877,52 @@ void aero_ws_set_message_callback(AeroWSHandle handle, MessageCallback callback,
 }
 
 int aero_ws_set_joint(AeroWSHandle handle, const char* joint_id, float angle, int duration_ms) {
-    if (handle == NULL) return AERO_WS_INVALID_PARAM;
+    if (handle == NULL || !is_valid_joint_id_value(joint_id) || !is_valid_angle_value(angle) || !is_valid_duration_value(duration_ms)) {
+        return AERO_WS_INVALID_PARAM;
+    }
 
     char json[512];
-    snprintf(json, sizeof(json),
+    int written = snprintf(json, sizeof(json),
         "{\"type\":\"joint_control\",\"timestamp\":%ld,\"data\":{\"joint_id\":\"%s\",\"angle\":%.1f,\"duration_ms\":%d}}",
         (long)time(NULL), joint_id, angle, duration_ms
     );
+    if (written < 0 || written >= (int)sizeof(json)) return AERO_WS_INVALID_PARAM;
 
     return aero_ws_send_raw(handle, json);
 }
 
 int aero_ws_set_joints(AeroWSHandle handle, AeroJoint* joints, int count, int duration_ms) {
-    if (handle == NULL || joints == NULL || count <= 0) return AERO_WS_INVALID_PARAM;
-
-    char json[4096];
-    char* p = json;
-    int len;
-
-    p += snprintf(p, 256, "{\"type\":\"multi_joint_control\",\"timestamp\":%ld,\"data\":{\"joints\":[", (long)time(NULL));
-
-    for (int i = 0; i < count; i++) {
-        p += snprintf(p, 128, "%s{\"joint_id\":\"%s\",\"angle\":%.1f}",
-            (i > 0) ? "," : "", joints[i].joint_id, joints[i].angle);
+    if (handle == NULL || joints == NULL || count <= 0 || count > JOINT_COUNT || !is_valid_duration_value(duration_ms)) {
+        return AERO_WS_INVALID_PARAM;
     }
 
-    snprintf(p, 256, "],\"duration_ms\":%d}}", duration_ms);
+    char json[4096];
+    int used = snprintf(json, sizeof(json),
+        "{\"type\":\"multi_joint_control\",\"timestamp\":%ld,\"data\":{\"joints\":[",
+        (long)time(NULL)
+    );
+    if (used < 0 || used >= (int)sizeof(json)) return AERO_WS_INVALID_PARAM;
+
+    for (int i = 0; i < count; i++) {
+        if (!is_valid_joint_id_value(joints[i].joint_id) || !is_valid_angle_value(joints[i].angle)) {
+            return AERO_WS_INVALID_PARAM;
+        }
+        int remaining = (int)sizeof(json) - used;
+        int written = snprintf(json + used, remaining, "%s{\"joint_id\":\"%s\",\"angle\":%.1f}",
+            (i > 0) ? "," : "", joints[i].joint_id, joints[i].angle);
+        if (written < 0 || written >= remaining) return AERO_WS_INVALID_PARAM;
+        used += written;
+    }
+
+    int remaining = (int)sizeof(json) - used;
+    int written = snprintf(json + used, remaining, "],\"duration_ms\":%d}}", duration_ms);
+    if (written < 0 || written >= remaining) return AERO_WS_INVALID_PARAM;
 
     return aero_ws_send_raw(handle, json);
 }
 
 int aero_ws_get_states(AeroWSHandle handle, AeroStates* states, int max_count) {
-    if (handle == NULL || states == NULL) return AERO_WS_INVALID_PARAM;
+    if (handle == NULL || states == NULL || max_count <= 0) return AERO_WS_INVALID_PARAM;
 
     struct AeroWSContext* ctx = (struct AeroWSContext*)handle;
 
@@ -874,114 +930,144 @@ int aero_ws_get_states(AeroWSHandle handle, AeroStates* states, int max_count) {
         return AERO_WS_NOT_CONNECTED;
     }
 
+    states->joints = NULL;
+    states->count = 0;
+
+#ifdef _WIN32
+    WaitForSingleObject(ctx->states_mutex, INFINITE);
+    ctx->states_pending = true;
+    ctx->states_response[0] = '\0';
+    ctx->states_response_len = 0;
+    ResetEvent(ctx->states_cv);
+    ReleaseMutex(ctx->states_mutex);
+#else
+    pthread_mutex_lock(&ctx->states_mutex);
+    ctx->states_pending = true;
+    ctx->states_response[0] = '\0';
+    ctx->states_response_len = 0;
+    pthread_mutex_unlock(&ctx->states_mutex);
+#endif
+
     char json[256];
     snprintf(json, sizeof(json),
         "{\"type\":\"get_states\",\"timestamp\":%ld}",
         (long)time(NULL)
     );
 
-    // 使用互斥锁同步响应
+    if (websocket_send(ctx->sock, json, strlen(json)) != AERO_WS_OK) {
 #ifdef _WIN32
-    WaitForSingleObject(ctx->states_mutex, INFINITE);
-#else
-    pthread_mutex_lock(&ctx->states_mutex);
-#endif
-
-    // 标记等待状态
-    ctx->states_pending = true;
-    ctx->states_response[0] = '\0';
-    ctx->states_response_len = 0;
-
-    if (aero_ws_send_raw(handle, json) != AERO_WS_OK) {
-#ifdef _WIN32
+        WaitForSingleObject(ctx->states_mutex, INFINITE);
+        ctx->states_pending = false;
         ReleaseMutex(ctx->states_mutex);
 #else
+        pthread_mutex_lock(&ctx->states_mutex);
+        ctx->states_pending = false;
         pthread_mutex_unlock(&ctx->states_mutex);
 #endif
-        return AERO_WS_ERROR;
+        return AERO_WS_SEND_ERROR;
     }
 
-    // 等待响应（最多5秒）
-    int result = AERO_WS_ERROR;
-    int waited = 0;
-    const int timeout_ms = 5000;
-    const int poll_interval = 50;
-
-    while (waited < timeout_ms) {
+    if (ctx->running) {
 #ifdef _WIN32
-        DWORD wait_result = WaitForSingleObject(ctx->states_cv, poll_interval);
-        if (wait_result == WAIT_OBJECT_0) {
-            break;
+        DWORD wait_result = WaitForSingleObject(ctx->states_cv, 5000);
+        WaitForSingleObject(ctx->states_mutex, INFINITE);
+        if (wait_result != WAIT_OBJECT_0) {
+            ctx->states_pending = false;
+            ReleaseMutex(ctx->states_mutex);
+            set_error("get_states timeout");
+            return AERO_WS_TIMEOUT;
         }
+        int parsed = parse_states_response(ctx->states_response, states, max_count);
+        ReleaseMutex(ctx->states_mutex);
 #else
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = poll_interval * 1000;
-
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(ctx->sock, &fds);
-        int sel = select(ctx->sock + 1, &fds, NULL, NULL, &tv);
-
-        if (sel > 0) {
-            // 有数据可读，尝试接收
-            char tmp[4096];
-            int r = recv(ctx->sock, tmp, sizeof(tmp) - 1, 0);
-            if (r > 0) {
-                tmp[r] = '\0';
-                // 检查是否是 states_response 类型
-                if (strstr(tmp, "\"type\"") && strstr(tmp, "\"states_response\"")) {
-                    // 追加到响应缓冲区
-                    int copy_len = r < (int)sizeof(ctx->states_response) - ctx->states_response_len - 1
-                                   ? r : (int)sizeof(ctx->states_response) - ctx->states_response_len - 1;
-                    memcpy(ctx->states_response + ctx->states_response_len, tmp, copy_len);
-                    ctx->states_response_len += copy_len;
-                    ctx->states_response[ctx->states_response_len] = '\0';
-                }
-            }
-        }
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 5;
 
         pthread_mutex_lock(&ctx->states_mutex);
-        if (!ctx->states_pending) {
-            pthread_mutex_unlock(&ctx->states_mutex);
-            break;
+        int wait_result = 0;
+        while (ctx->states_pending && wait_result == 0) {
+            wait_result = pthread_cond_timedwait(&ctx->states_cv, &ctx->states_mutex, &deadline);
         }
+        if (ctx->states_pending) {
+            ctx->states_pending = false;
+            pthread_mutex_unlock(&ctx->states_mutex);
+            set_error("get_states timeout");
+            return AERO_WS_TIMEOUT;
+        }
+        int parsed = parse_states_response(ctx->states_response, states, max_count);
         pthread_mutex_unlock(&ctx->states_mutex);
 #endif
+        if (parsed < 0) {
+            set_error("Failed to parse states response");
+            return AERO_WS_ERROR;
+        }
+        return parsed;
+    }
+
+    char buffer[4096];
+    int waited = 0;
+    const int timeout_ms = 5000;
+    const int poll_interval = 100;
+
+    while (waited < timeout_ms) {
+        int len = websocket_recv(ctx->sock, buffer, sizeof(buffer) - 1, poll_interval);
+        if (len < 0) {
+#ifdef _WIN32
+            WaitForSingleObject(ctx->states_mutex, INFINITE);
+            ctx->states_pending = false;
+            ReleaseMutex(ctx->states_mutex);
+#else
+            pthread_mutex_lock(&ctx->states_mutex);
+            ctx->states_pending = false;
+            pthread_mutex_unlock(&ctx->states_mutex);
+#endif
+            set_error("get_states receive failed");
+            return AERO_WS_RECV_ERROR;
+        }
+        if (len > 0) {
+            if (strstr(buffer, "\"type\"") && strstr(buffer, "\"states_response\"")) {
+                int parsed = parse_states_response(buffer, states, max_count);
+#ifdef _WIN32
+                WaitForSingleObject(ctx->states_mutex, INFINITE);
+                ctx->states_pending = false;
+                ReleaseMutex(ctx->states_mutex);
+#else
+                pthread_mutex_lock(&ctx->states_mutex);
+                ctx->states_pending = false;
+                pthread_mutex_unlock(&ctx->states_mutex);
+#endif
+                if (parsed < 0) {
+                    set_error("Failed to parse states response");
+                    return AERO_WS_ERROR;
+                }
+                return parsed;
+            }
+            if (ctx->message_cb) {
+                ctx->message_cb(buffer, ctx->message_userdata);
+            }
+        }
         waited += poll_interval;
     }
 
-    if (ctx->states_pending && waited >= timeout_ms) {
-        // 超时，取消等待
-        ctx->states_pending = false;
 #ifdef _WIN32
-        ReleaseMutex(ctx->states_mutex);
-#else
-        pthread_mutex_unlock(&ctx->states_mutex);
-#endif
-        set_error("get_states timeout");
-        return AERO_WS_ERROR;
-    }
-
-    // 解析响应
-    if (ctx->states_response_len > 0) {
-        result = parse_states_response(ctx->states_response, states, max_count);
-        if (result < 0) {
-            set_error("Failed to parse states response");
-            result = AERO_WS_ERROR;
-        }
-    } else {
-        set_error("No states response received");
-        result = AERO_WS_ERROR;
-    }
-
-#ifdef _WIN32
+    WaitForSingleObject(ctx->states_mutex, INFINITE);
+    ctx->states_pending = false;
     ReleaseMutex(ctx->states_mutex);
 #else
+    pthread_mutex_lock(&ctx->states_mutex);
+    ctx->states_pending = false;
     pthread_mutex_unlock(&ctx->states_mutex);
 #endif
+    set_error("get_states timeout");
+    return AERO_WS_TIMEOUT;
+}
 
-    return result;
+void aero_ws_free_states(AeroStates* states) {
+    if (states == NULL) return;
+    free(states->joints);
+    states->joints = NULL;
+    states->count = 0;
 }
 
 int aero_ws_homing(AeroWSHandle handle) {
@@ -1023,8 +1109,38 @@ static void* receive_thread(void* param) {
 
     while (ctx->running && ctx->connected) {
         int len = websocket_recv(ctx->sock, buffer, sizeof(buffer) - 1, 100);
-        if (len > 0 && ctx->message_cb) {
-            ctx->message_cb(buffer, ctx->message_userdata);
+        if (len > 0) {
+            int handled_states = 0;
+            if (strstr(buffer, "\"type\"") && strstr(buffer, "\"states_response\"")) {
+#ifdef _WIN32
+                WaitForSingleObject(ctx->states_mutex, INFINITE);
+                if (ctx->states_pending) {
+                    int copy_len = len < (int)sizeof(ctx->states_response) - 1 ? len : (int)sizeof(ctx->states_response) - 1;
+                    memcpy(ctx->states_response, buffer, copy_len);
+                    ctx->states_response[copy_len] = '\0';
+                    ctx->states_response_len = copy_len;
+                    ctx->states_pending = false;
+                    SetEvent(ctx->states_cv);
+                    handled_states = 1;
+                }
+                ReleaseMutex(ctx->states_mutex);
+#else
+                pthread_mutex_lock(&ctx->states_mutex);
+                if (ctx->states_pending) {
+                    int copy_len = len < (int)sizeof(ctx->states_response) - 1 ? len : (int)sizeof(ctx->states_response) - 1;
+                    memcpy(ctx->states_response, buffer, copy_len);
+                    ctx->states_response[copy_len] = '\0';
+                    ctx->states_response_len = copy_len;
+                    ctx->states_pending = false;
+                    pthread_cond_signal(&ctx->states_cv);
+                    handled_states = 1;
+                }
+                pthread_mutex_unlock(&ctx->states_mutex);
+#endif
+            }
+            if (!handled_states && ctx->message_cb) {
+                ctx->message_cb(buffer, ctx->message_userdata);
+            }
         } else if (len < 0) {
             break;
         }
