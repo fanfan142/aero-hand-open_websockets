@@ -8,10 +8,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -130,34 +133,41 @@ fun ConnectionPanel(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                when (selectedTab) {
-                    0 -> WifiConnectionContent(
-                        host = host,
-                        port = port,
-                        connected = wifiConnected,
-                        connectedServer = connectedServer,
-                        wifiConfig = wifiConfig,
-                        onHostChange = onHostChange,
-                        onPortChange = onPortChange,
-                        onConnect = onConnect,
-                        onDisconnect = onDisconnect,
-                        onStaSsidChange = onStaSsidChange,
-                        onStaPasswordChange = onStaPasswordChange,
-                        onStaStaticIpChange = onStaStaticIpChange,
-                        onStaGatewayChange = onStaGatewayChange,
-                        onStaSubnetChange = onStaSubnetChange,
-                        onStaDns1Change = onStaDns1Change,
-                        onStaDns2Change = onStaDns2Change,
-                        onScanWifi = onScanWifi,
-                        onApplyStaConfig = onApplyStaConfig,
-                        onSwitchToAp = onSwitchToAp,
-                        onClearStaConfig = onClearStaConfig
-                    )
-                    1 -> UsbConnectionContent(
-                        connected = usbConnected,
-                        onConnect = onConnect,
-                        onDisconnect = onDisconnect
-                    )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    when (selectedTab) {
+                        0 -> WifiConnectionContent(
+                            host = host,
+                            port = port,
+                            connected = wifiConnected,
+                            connectedServer = connectedServer,
+                            wifiConfig = wifiConfig,
+                            onHostChange = onHostChange,
+                            onPortChange = onPortChange,
+                            onConnect = onConnect,
+                            onDisconnect = onDisconnect,
+                            onStaSsidChange = onStaSsidChange,
+                            onStaPasswordChange = onStaPasswordChange,
+                            onStaStaticIpChange = onStaStaticIpChange,
+                            onStaGatewayChange = onStaGatewayChange,
+                            onStaSubnetChange = onStaSubnetChange,
+                            onStaDns1Change = onStaDns1Change,
+                            onStaDns2Change = onStaDns2Change,
+                            onScanWifi = onScanWifi,
+                            onApplyStaConfig = onApplyStaConfig,
+                            onSwitchToAp = onSwitchToAp,
+                            onClearStaConfig = onClearStaConfig
+                        )
+                        1 -> UsbConnectionContent(
+                            connected = usbConnected,
+                            onConnect = onConnect,
+                            onDisconnect = onDisconnect
+                        )
+                    }
                 }
             }
         }
