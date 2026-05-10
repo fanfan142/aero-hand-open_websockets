@@ -96,9 +96,9 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private var gestureControlReady = false
 
     companion object {
-        private const val GESTURE_SEND_INTERVAL_MS = 80L
+        private const val GESTURE_SEND_INTERVAL_MS = 40L
         private const val GESTURE_MIN_DELTA = 1.5f
-        private const val GESTURE_MAX_STEP = 10f
+        private const val GESTURE_MAX_STEP = 15f
     }
 
     init {

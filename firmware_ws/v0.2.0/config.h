@@ -51,7 +51,7 @@
 #define WS_MAX_CLIENTS 4
 
 // 指令处理间隔 (ms)
-#define COMMAND_INTERVAL_MS 20
+#define COMMAND_INTERVAL_MS 1
 
 // ============================================
 // 串口配置 (与舵机通信)
@@ -104,7 +104,7 @@ enum JointID {
 // 调试配置
 // ============================================
 
-#define ENABLE_DEBUG
+// #define ENABLE_DEBUG
 #define DEBUG_BAUD_RATE 115200
 
 #ifdef ENABLE_DEBUG

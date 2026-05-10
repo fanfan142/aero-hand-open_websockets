@@ -279,6 +279,11 @@ sealed class ConnectionState {
     data class Error(val message: String) : ConnectionState()
 }
 
+enum class ControlTransport {
+    ACTUATOR,
+    MULTI_JOINT,
+}
+
 sealed class LogEntry {
     abstract val message: String
     abstract val timestamp: String
@@ -345,7 +350,7 @@ fun compactStateOf(values: List<Float>): Map<String, Float> {
     return ids.zip(values).toMap()
 }
 
-fun buildMultiJointControlPayload(
+fun buildActuatorControlPayload(
     compactState: Map<String, Float>,
     durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS
 ): String {
@@ -362,24 +367,55 @@ fun buildMultiJointControlPayload(
     }.toString()
 }
 
+fun buildMultiJointControlPayload(
+    compactState: Map<String, Float>,
+    durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS
+): String {
+    return JSONObject().apply {
+        put("type", "multi_joint_control")
+        put("timestamp", System.currentTimeMillis())
+        put(
+            "data",
+            JSONObject().apply {
+                put("joints", buildProtocolJoints(compactState))
+                put("duration_ms", durationMs)
+            }
+        )
+    }.toString()
+}
+
 fun buildActuatorTargets(compactState: Map<String, Float>): JSONArray {
     return JSONArray().apply {
         compactStateToActuations(compactState).forEachIndexed { index, actuation ->
             put(JSONObject().apply {
                 put("id", index)
-                put("angle", actuation)
+                put("angle", actuation.toDouble())
             })
         }
     }
 }
 
-fun buildProtocolPreview(compactState: Map<String, Float>): String {
+fun buildProtocolPreview(
+    compactState: Map<String, Float>,
+    transport: ControlTransport = ControlTransport.ACTUATOR
+): String {
     return JSONObject().apply {
-        put("type", "actuator_control")
-        put("data", JSONObject().apply {
-            put("actuators", buildActuatorTargets(compactState))
-            put("duration_ms", ControlDefinitions.DEFAULT_DURATION_MS)
-        })
+        when (transport) {
+            ControlTransport.ACTUATOR -> {
+                put("type", "actuator_control")
+                put("data", JSONObject().apply {
+                    put("actuators", buildActuatorTargets(compactState))
+                    put("duration_ms", ControlDefinitions.DEFAULT_DURATION_MS)
+                })
+            }
+            ControlTransport.MULTI_JOINT -> {
+                put("type", "multi_joint_control")
+                put("data", JSONObject().apply {
+                    put("joints", buildProtocolJoints(compactState))
+                    put("duration_ms", ControlDefinitions.DEFAULT_DURATION_MS)
+                })
+            }
+        }
     }.toString(2)
 }
 
@@ -425,18 +461,15 @@ fun buildSerialHomingFrame(): ByteArray = buildSerialFrame(SerialCommands.HOMING
 fun buildSerialGetPositionsFrame(): ByteArray = buildSerialFrame(SerialCommands.GET_POS)
 
 fun compactStateToActuations(compactState: Map<String, Float>): List<Float> {
-    val positions = compactStateToJointPositions(compactState)
-
     val thumbCmcAbd = mapRange(
-        positions[14],
+        compactState["thumb_cmc_abd"] ?: 0f,
         0f,
         100f,
         ControlDefinitions.THUMB_ROTATION_MIN,
         ControlDefinitions.THUMB_ROTATION_MAX
     )
-    val thumbCmcFlex = positions[0]
-    val thumbMcp = positions[0]
-    val thumbIp = positions[1]
+    val thumbCmcFlex = compactState["thumb_cmc_flex"] ?: 0f
+    val thumbMcpIp = compactState["thumb_mcp_ip"] ?: 0f
 
     val thumbCmcAbdActuation = thumbCmcAbd
     val thumbCmcFlexActuation = (
@@ -446,18 +479,16 @@ fun compactStateToActuations(compactState: Map<String, Float>): List<Float> {
     val thumbTendonActuation = (
         THUMB_IP_CMC_ABD_COEFF * thumbCmcAbd -
             THUMB_IP_CMC_FLEX_COEFF * thumbCmcFlex +
-            THUMB_IP_MCP_COEFF * thumbMcp +
-            THUMB_IP_IP_COEFF * thumbIp
+            THUMB_IP_MCP_COEFF * thumbMcpIp +
+            THUMB_IP_IP_COEFF * thumbMcpIp
         ) / MOTOR_PULLEY_RADIUS
 
-    val fingerActuations = listOf(2, 5, 8, 11).map { offset ->
-        val mcp = positions[offset]
-        val pip = positions[offset + 1]
-        val dip = positions[offset + 2]
+    val fingerActuations = listOf("index", "middle", "ring", "pinky").map { finger ->
+        val flexion = compactState["${finger}_flexion"] ?: 0f
         (
-            FINGER_MCP_FLEX_COEFF * mcp +
-                FINGER_PIP_COEFF * pip +
-                FINGER_DIP_COEFF * dip
+            FINGER_MCP_FLEX_COEFF * flexion +
+                FINGER_PIP_COEFF * flexion +
+                FINGER_DIP_COEFF * flexion
             ) / MOTOR_PULLEY_RADIUS
     }
 
@@ -659,7 +690,7 @@ private fun buildSerialFrame(opcode: Int, payload: List<Int> = List(7) { 0 }): B
 private fun jointJson(jointId: String, angle: Float): JSONObject {
     return JSONObject().apply {
         put("joint_id", jointId)
-        put("angle", angle)
+        put("angle", angle.toDouble())
     }
 }
 

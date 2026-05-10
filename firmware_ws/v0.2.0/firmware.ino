@@ -14,6 +14,7 @@
 #include <Wire.h>
 #include <HLSCL.h>
 #include <Preferences.h>
+#include <math.h>
 #include "HandConfig.h"
 #include "Homing.h"
 
@@ -70,17 +71,27 @@ static uint8_t g_serialFrameIndex = 0;
 
 // 当前关节角度记录 (用于get_states命令)
 static float g_jointAngles[JOINT_COUNT] = {0};
+static float g_targetJointAngles[JOINT_COUNT] = {0};
 static float g_actuatorAngles[SERVO_COUNT] = {0};
+static float g_targetActuatorAngles[SERVO_COUNT] = {0};
+static volatile bool g_wsTargetDirty = false;
+static volatile bool g_useActuatorTargets = false;
+static uint32_t g_lastServoWriteMs = 0;
+static constexpr uint32_t WS_SERVO_WRITE_INTERVAL_MS = 20;
+static constexpr float WS_SMOOTHING_ALPHA = 0.35f;
+static constexpr float WS_SERVO_RAW_EPSILON = 2.0f;
 
 static constexpr size_t WS_JSON_DOC_CAPACITY = 4096;
 static constexpr size_t WS_RESPONSE_DOC_CAPACITY = 2048;
 static constexpr size_t WS_STATE_DOC_CAPACITY = 3072;
 
 // LED引脚
+#ifndef STATUS_LED
 #ifdef LED_BUILTIN
 #define STATUS_LED LED_BUILTIN
 #else
 #define STATUS_LED 48
+#endif
 #endif
 
 // ---- UART pins to the servo bus (ESP32-S3 XIAO: RX=2, TX=3) ----
@@ -373,11 +384,12 @@ static uint16_t mapActuationToRaw(uint8_t servoIndex, float actuationDeg) {
 static uint16_t computeServoRawTarget(uint8_t servoIndex, const float jointAngles[JOINT_COUNT]) {
   const float thumbAbdDeg = jointAngles[JOINT_THUMB_ROTATION];
   const float thumbFlexDeg = jointAngles[JOINT_THUMB_PROXIMAL];
+  const float thumbMcpDeg = jointAngles[JOINT_THUMB_DISTAL];
   const float thumbIpDeg = jointAngles[JOINT_THUMB_DISTAL];
 
   const float thumbAbdAct = thumbAbdDeg;
   const float thumbFlexAct = (THUMB_FLEX_ABD_COEFF * thumbAbdDeg + THUMB_FLEX_COEFF * thumbFlexDeg) / MOTOR_PULLEY_RADIUS;
-  const float thumbTendonAct = (THUMB_IP_ABD_COEFF * thumbAbdDeg - THUMB_IP_FLEX_COEFF * thumbFlexDeg + THUMB_IP_MCP_COEFF * thumbFlexDeg + THUMB_IP_COEFF * thumbIpDeg) / MOTOR_PULLEY_RADIUS;
+  const float thumbTendonAct = (THUMB_IP_ABD_COEFF * thumbAbdDeg - THUMB_IP_FLEX_COEFF * thumbFlexDeg + THUMB_IP_MCP_COEFF * thumbMcpDeg + THUMB_IP_COEFF * thumbIpDeg) / MOTOR_PULLEY_RADIUS;
 
   const auto fingerActuation = [&](uint8_t p, uint8_t m, uint8_t d) -> float {
     const float proximal = jointAngles[p];
@@ -431,6 +443,106 @@ static void markControlActivity(ControlSource source) {
   } else if (source == CONTROL_SOURCE_SERIAL) {
     g_lastSerialActivity = now;
   }
+}
+
+static void copyCurrentJointAnglesToTargets() {
+  for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+    g_targetJointAngles[i] = g_jointAngles[i];
+  }
+}
+
+static void copyCurrentActuatorAnglesToTargets() {
+  for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+    g_targetActuatorAngles[i] = g_actuatorAngles[i];
+  }
+}
+
+static void prepareJointTargetsForWsUpdate() {
+  if (g_useActuatorTargets || !g_wsTargetDirty) {
+    copyCurrentJointAnglesToTargets();
+  }
+}
+
+static void prepareActuatorTargetsForWsUpdate() {
+  if (!g_useActuatorTargets || !g_wsTargetDirty) {
+    copyCurrentActuatorAnglesToTargets();
+  }
+}
+
+static void cancelPendingWsTarget() {
+  g_wsTargetDirty = false;
+  g_useActuatorTargets = false;
+  copyCurrentJointAnglesToTargets();
+  copyCurrentActuatorAnglesToTargets();
+}
+
+static void buildServoTargetsFromActuatorAngles(const float actuatorAngles[SERVO_COUNT], int16_t pos[SERVO_COUNT]) {
+  for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+    pos[i] = (int16_t)mapActuationToRaw(i, actuatorAngles[i]);
+  }
+}
+
+static void applyPendingWsTarget() {
+  uint32_t now = millis();
+  if (!g_wsTargetDirty || now - g_lastServoWriteMs < WS_SERVO_WRITE_INTERVAL_MS) return;
+  if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) return;
+  if (HOMING_isBusy()) return;
+
+  int16_t writePos[SERVO_COUNT];
+  bool settled = true;
+  float nextJointAngles[JOINT_COUNT];
+  if (g_useActuatorTargets) {
+    buildServoTargetsFromActuatorAngles(g_targetActuatorAngles, writePos);
+  } else {
+    for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+      float delta = g_targetJointAngles[i] - g_jointAngles[i];
+      nextJointAngles[i] = g_jointAngles[i] + (delta * WS_SMOOTHING_ALPHA);
+    }
+
+    int16_t targetPos[SERVO_COUNT];
+    buildServoTargetsFromJointAngles(nextJointAngles, writePos);
+    buildServoTargetsFromJointAngles(g_targetJointAngles, targetPos);
+
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+      if (fabsf((float)targetPos[i] - (float)writePos[i]) > WS_SERVO_RAW_EPSILON) {
+        settled = false;
+        break;
+      }
+    }
+    if (settled) {
+      for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+        writePos[i] = targetPos[i];
+      }
+    }
+  }
+
+  uint16_t torque_eff[SERVO_COUNT];
+  for (int i = 0; i < SERVO_COUNT; ++i) {
+    torque_eff[i] = g_torque[i];
+    if (isHot((uint8_t)i)) {
+      torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
+    }
+  }
+
+  if (gBusMux && xSemaphoreTake(gBusMux, 0) != pdTRUE) return;
+  if (g_currentMode != MODE_POS) {
+    for (int i = 0; i < SERVO_COUNT; ++i) {
+      hlscl.ServoMode(SERVO_IDS[i]);
+    }
+    g_currentMode = MODE_POS;
+  }
+  hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, writePos, g_speed, g_accel, torque_eff);
+  if (gBusMux) xSemaphoreGive(gBusMux);
+
+  if (g_useActuatorTargets) {
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) g_actuatorAngles[i] = g_targetActuatorAngles[i];
+    g_wsTargetDirty = false;
+  } else {
+    for (uint8_t i = 0; i < JOINT_COUNT; ++i) g_jointAngles[i] = settled ? g_targetJointAngles[i] : nextJointAngles[i];
+    if (settled) g_wsTargetDirty = false;
+  }
+  markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+  g_lastServoWriteMs = now;
 }
 
 // ---- Helper Functions for u16, Decode to sign and copy values in u16 format----
@@ -670,10 +782,15 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       if (!canAcceptControl(CONTROL_SOURCE_SERIAL)) {
         return true;
       }
+      cancelPendingWsTarget();
       int16_t pos[SERVO_COUNT];
       for (int i = 0; i < SERVO_COUNT; ++i) {
         uint16_t u16 = (uint16_t)payload[2 * i] | ((uint16_t)payload[2 * i + 1] << 8);
         pos[i] = mapU16ToRaw((uint8_t)i, u16);
+        float lower = ACTUATION_LOWER_LIMITS[i];
+        float upper = ACTUATION_UPPER_LIMITS[i];
+        g_actuatorAngles[i] = lower + (((float)u16 / 65535.0f) * (upper - lower));
+        g_targetActuatorAngles[i] = g_actuatorAngles[i];
       }
 
       uint16_t torque_eff[SERVO_COUNT];
@@ -703,6 +820,7 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       if (!canAcceptControl(CONTROL_SOURCE_SERIAL)) {
         return true;
       }
+      cancelPendingWsTarget();
       int16_t torque_cmd[SERVO_COUNT];
       for (int i = 0; i < SERVO_COUNT; ++i) {
         uint16_t mag = (uint16_t)payload[2 * i] | ((uint16_t)payload[2 * i + 1] << 8);
@@ -742,13 +860,16 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       if (!canAcceptControl(CONTROL_SOURCE_SERIAL)) {
         return true;
       }
+      cancelPendingWsTarget();
       HOMING_start();
       saveExtendsToNVS();
       for (int i = 0; i < JOINT_COUNT; ++i) {
         g_jointAngles[i] = 0.0f;
+        g_targetJointAngles[i] = 0.0f;
       }
       for (int i = 0; i < SERVO_COUNT; ++i) {
         g_actuatorAngles[i] = 0.0f;
+        g_targetActuatorAngles[i] = 0.0f;
       }
       sendAckFrame(HOMING, nullptr, 0);
       markControlActivity(CONTROL_SOURCE_SERIAL);
@@ -1104,7 +1225,6 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
 
         const char* jointId = doc["data"]["joint_id"].as<const char*>();
         float angle = doc["data"]["angle"].as<float>();
-        int duration = doc["data"]["duration_ms"].as<int>();
 
         uint8_t jointNum = getJointNumber(jointId);
         if (jointNum >= JOINT_COUNT) {
@@ -1112,40 +1232,11 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             return;
         }
 
-        float nextJointAngles[JOINT_COUNT];
-        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
-            nextJointAngles[i] = g_jointAngles[i];
-        }
-        float clampedAngle = clampJointAngleDegrees(jointNum, angle);
-        nextJointAngles[jointNum] = clampedAngle;
-
-        if (g_currentMode != MODE_POS) {
-            if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-            for (int i = 0; i < SERVO_COUNT; ++i) {
-                hlscl.ServoMode(SERVO_IDS[i]);
-            }
-            g_currentMode = MODE_POS;
-            if (gBusMux) xSemaphoreGive(gBusMux);
-        }
-
-        int16_t pos[SERVO_COUNT];
-        buildServoTargetsFromJointAngles(nextJointAngles, pos);
-        uint16_t torque_eff[SERVO_COUNT];
-        for (int i = 0; i < SERVO_COUNT; ++i) {
-            torque_eff[i] = g_torque[i];
-            if (isHot((uint8_t)i)) {
-                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
-            }
-        }
-
-        if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-        hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, pos, g_speed, g_accel, torque_eff);
-        if (gBusMux) xSemaphoreGive(gBusMux);
-
-        g_jointAngles[jointNum] = clampedAngle;
+        prepareJointTargetsForWsUpdate();
+        g_targetJointAngles[jointNum] = clampJointAngleDegrees(jointNum, angle);
+        g_useActuatorTargets = false;
+        g_wsTargetDirty = true;
         markControlActivity(CONTROL_SOURCE_WEBSOCKET);
-        DEBUG_PRINTF("[CMD] Joint %s -> %.1f°\n", jointId, clampedAngle);
-        sendWsResponse(clientNum, true, "Joint controlled");
 
     } else if (strcmp(type, "actuator_control") == 0) {
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
@@ -1158,11 +1249,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         JsonArrayConst actuators = doc["data"]["actuators"].as<JsonArrayConst>();
-        int16_t pos[SERVO_COUNT];
-        for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
-            pos[i] = (int16_t)mapActuationToRaw(i, g_actuatorAngles[i]);
-        }
-
+        prepareActuatorTargetsForWsUpdate();
         int validCount = 0;
         for (JsonObjectConst actuator : actuators) {
             if (!actuator["id"].is<int>() || !actuator["angle"].is<float>()) {
@@ -1173,8 +1260,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
                 continue;
             }
             float angle = actuator["angle"].as<float>();
-            g_actuatorAngles[id] = constrain(angle, ACTUATION_LOWER_LIMITS[id], ACTUATION_UPPER_LIMITS[id]);
-            pos[id] = (int16_t)mapActuationToRaw((uint8_t)id, g_actuatorAngles[id]);
+            g_targetActuatorAngles[id] = constrain(angle, ACTUATION_LOWER_LIMITS[id], ACTUATION_UPPER_LIMITS[id]);
             validCount++;
         }
 
@@ -1184,30 +1270,13 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
+            g_targetJointAngles[i] = 0.0f;
             g_jointAngles[i] = 0.0f;
         }
 
-        uint16_t torque_eff[SERVO_COUNT];
-        for (int i = 0; i < SERVO_COUNT; ++i) {
-            torque_eff[i] = g_torque[i];
-            if (isHot((uint8_t)i)) {
-                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
-            }
-        }
-
-        if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-        if (g_currentMode != MODE_POS) {
-            for (int i = 0; i < SERVO_COUNT; ++i) {
-                hlscl.ServoMode(SERVO_IDS[i]);
-            }
-            g_currentMode = MODE_POS;
-        }
-        hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, pos, g_speed, g_accel, torque_eff);
-        if (gBusMux) xSemaphoreGive(gBusMux);
-
+        g_useActuatorTargets = true;
+        g_wsTargetDirty = true;
         markControlActivity(CONTROL_SOURCE_WEBSOCKET);
-        DEBUG_PRINTF("[CMD] Actuator control: %d actuators\n", validCount);
-        sendWsResponse(clientNum, true, "Actuator control executed");
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
@@ -1220,22 +1289,8 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         JsonArrayConst joints = doc["data"]["joints"].as<JsonArrayConst>();
-        int duration = doc["data"]["duration_ms"].as<int>();
 
-        if (g_currentMode != MODE_POS) {
-            if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-            for (int i = 0; i < SERVO_COUNT; ++i) {
-                hlscl.ServoMode(SERVO_IDS[i]);
-            }
-            g_currentMode = MODE_POS;
-            if (gBusMux) xSemaphoreGive(gBusMux);
-        }
-
-        float nextJointAngles[JOINT_COUNT];
-        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
-            nextJointAngles[i] = g_jointAngles[i];
-        }
-
+        prepareJointTargetsForWsUpdate();
         int validCount = 0;
         for (JsonObjectConst joint : joints) {
             if (!joint["joint_id"].is<const char*>() || !joint["angle"].is<float>()) {
@@ -1248,7 +1303,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             uint8_t jointNum = getJointNumber(jId);
             if (jointNum >= JOINT_COUNT) continue;
 
-            nextJointAngles[jointNum] = clampJointAngleDegrees(jointNum, angle);
+            g_targetJointAngles[jointNum] = clampJointAngleDegrees(jointNum, angle);
             validCount++;
         }
 
@@ -1257,26 +1312,9 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             return;
         }
 
-        int16_t pos[SERVO_COUNT];
-        buildServoTargetsFromJointAngles(nextJointAngles, pos);
-        uint16_t torque_eff[SERVO_COUNT];
-        for (int i = 0; i < SERVO_COUNT; ++i) {
-            torque_eff[i] = g_torque[i];
-            if (isHot((uint8_t)i)) {
-                torque_eff[i] = u16_min(torque_eff[i], HOT_TORQUE_LIMIT);
-            }
-        }
-
-        if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
-        hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, pos, g_speed, g_accel, torque_eff);
-        if (gBusMux) xSemaphoreGive(gBusMux);
-
-        for (uint8_t i = 0; i < JOINT_COUNT; ++i) {
-            g_jointAngles[i] = nextJointAngles[i];
-        }
+        g_useActuatorTargets = false;
+        g_wsTargetDirty = true;
         markControlActivity(CONTROL_SOURCE_WEBSOCKET);
-        DEBUG_PRINTF("[CMD] Multi-joint control: %d joints\n", validCount);
-        sendWsResponse(clientNum, true, "Multi-joint control received");
 
     } else if (strcmp(type, "get_states") == 0) {
         // 获取状态
@@ -1292,10 +1330,13 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             saveExtendsToNVS();
             for (int i = 0; i < JOINT_COUNT; i++) {
                 g_jointAngles[i] = 0;
+                g_targetJointAngles[i] = 0;
             }
             for (int i = 0; i < SERVO_COUNT; i++) {
                 g_actuatorAngles[i] = 0;
+                g_targetActuatorAngles[i] = 0;
             }
+            g_wsTargetDirty = false;
             markControlActivity(CONTROL_SOURCE_WEBSOCKET);
             DEBUG_PRINTLN("[CMD] Homing executed");
             sendWsResponse(clientNum, true, "Homing executed");
@@ -1432,35 +1473,32 @@ void broadcastJointStates() {
 }
 
 void loop() {
-  // Process WebSocket events
   wsServer.loop();
 
-  // Collect serial frame bytes
-  while (Serial.available() > 0) {
+  uint8_t serialBytes = 0;
+  while (Serial.available() > 0 && serialBytes < sizeof(g_serialFrameBuffer)) {
     int ch = Serial.read();
     if (ch < 0) {
       g_serialFrameIndex = 0;
       break;
     }
+    ++serialBytes;
     g_serialFrameBuffer[g_serialFrameIndex++] = (uint8_t)ch;
     if (g_serialFrameIndex < sizeof(g_serialFrameBuffer)) {
-      yield();  // Prevent serial loop from starving other tasks
       continue;
     }
 
-    // Full 16-byte frame received - dispatch to handler
-    // handleHostFrame() has its own canAcceptControl() checks per command type
     uint8_t op = g_serialFrameBuffer[0];
     if (!HOMING_isBusy()) {
       const uint8_t* payload = &g_serialFrameBuffer[2];
       handleHostFrame(op, payload);
     }
     g_serialFrameIndex = 0;
+    wsServer.loop();
   }
 
-  wsServer.loop();  // Keep WebSocket alive after serial processing
   updateLEDBlink();
+  applyPendingWsTarget();
   checkAndEnforceSoftLimits();
-
-  delay(COMMAND_INTERVAL_MS);
+  vTaskDelay(pdMS_TO_TICKS(COMMAND_INTERVAL_MS));
 }

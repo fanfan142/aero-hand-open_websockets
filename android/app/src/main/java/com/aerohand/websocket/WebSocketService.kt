@@ -137,19 +137,26 @@ class WebSocketService {
 
     fun sendCompactState(
         compactState: Map<String, Float>,
-        durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS
+        durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS,
+        transport: ControlTransport = ControlTransport.ACTUATOR
     ): Boolean {
-        return sendInternal(buildMultiJointControlPayload(compactState, durationMs))
+        val payload = when (transport) {
+            ControlTransport.ACTUATOR -> buildActuatorControlPayload(compactState, durationMs)
+            ControlTransport.MULTI_JOINT -> buildMultiJointControlPayload(compactState, durationMs)
+        }
+        return sendInternal(payload, logPayload = false)
     }
 
     fun clearLogs() {
         _logs.value = emptyList()
     }
 
-    private fun sendInternal(json: String): Boolean {
+    private fun sendInternal(json: String, logPayload: Boolean = true): Boolean {
         val sent = webSocket?.send(json) ?: false
         if (sent) {
-            addLog(LogEntry.Send(sanitizeLogMessage(json), timestamp()))
+            if (logPayload) {
+                addLog(LogEntry.Send(sanitizeLogMessage(json), timestamp()))
+            }
         } else {
             addLog(LogEntry.Error("Send failed: socket not ready", timestamp()))
         }

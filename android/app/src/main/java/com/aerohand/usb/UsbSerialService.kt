@@ -133,7 +133,7 @@ class UsbSerialService(context: Context) {
     fun sendCompactState(compactState: Map<String, Float>) {
         ioScope.launch {
             val frame = buildSerialPositionControlFrame(compactState)
-            sendFrame(frame, frame.toHexString())
+            sendFrame(frame, frame.toHexString(), logPayload = false)
         }
     }
 
@@ -241,13 +241,13 @@ class UsbSerialService(context: Context) {
         }
     }
 
-    private fun sendFrame(frame: ByteArray, logMessage: String) {
+    private fun sendFrame(frame: ByteArray, logMessage: String, logPayload: Boolean = true) {
         synchronized(portMux) {
-            sendFrameLocked(frame, logMessage)
+            sendFrameLocked(frame, logMessage, logPayload)
         }
     }
 
-    private fun sendFrameLocked(frame: ByteArray, logMessage: String): Boolean {
+    private fun sendFrameLocked(frame: ByteArray, logMessage: String, logPayload: Boolean = true): Boolean {
         val currentPort = port
         if (currentPort == null) {
             addLog(LogEntry.Error("Send failed: USB socket not ready", timestamp()))
@@ -256,7 +256,9 @@ class UsbSerialService(context: Context) {
 
         return try {
             currentPort.write(frame, 200)
-            addLog(LogEntry.Send(logMessage, timestamp()))
+            if (logPayload) {
+                addLog(LogEntry.Send(logMessage, timestamp()))
+            }
             true
         } catch (e: Exception) {
             _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 发送失败")
