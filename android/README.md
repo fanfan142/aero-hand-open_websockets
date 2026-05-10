@@ -133,7 +133,7 @@ CI 预览构建默认使用：
 ### WiFi 模式
 
 1. 确保 ESP32 已烧录 WebSocket 固件并运行
-2. 手机连接 ESP32 的 WiFi 热点（默认 `AeroHand_WIFI`）
+2. 手机连接 ESP32 的 WiFi 热点（右手默认 `AeroHand_Right`，左手默认 `AeroHand_Left`）
 3. 打开应用，选择 WiFi 模式
 4. 输入 ESP32 的 IP 地址和端口（默认 `192.168.4.1:8765`）
 5. 点击“连接 WiFi”开始控制
