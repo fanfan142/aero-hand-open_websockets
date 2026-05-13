@@ -1,5 +1,9 @@
 package com.aerohand.ui.pages
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -264,6 +269,12 @@ fun LogPage(
     onClearLog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val recentLogs = logs.takeLast(50)
+    val copiedLogText = recentLogs.joinToString(separator = "\n") { entry ->
+        "[${entry.timestamp}] ${entry.message}"
+    }
+
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -291,11 +302,26 @@ fun LogPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                OutlinedButton(
-                    onClick = onClearLog,
-                    shape = RoundedCornerShape(12.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Clear", fontSize = 12.sp)
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Aero Hand logs", copiedLogText))
+                            Toast.makeText(context, "已复制日志", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = recentLogs.isNotEmpty()
+                    ) {
+                        Text("复制", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onClearLog,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Clear", fontSize = 12.sp)
+                    }
                 }
             }
 
@@ -320,7 +346,7 @@ fun LogPage(
                             color = Color(0xFF64748B)
                         )
                     } else {
-                        logs.takeLast(50).forEach { entry ->
+                        recentLogs.forEach { entry ->
                             val color = when (entry) {
                                 is LogEntry.Send -> Color(0xFF38BDF8)
                                 is LogEntry.Receive -> Color(0xFF34D399)

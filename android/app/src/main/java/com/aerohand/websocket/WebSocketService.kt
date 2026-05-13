@@ -144,7 +144,11 @@ class WebSocketService {
             ControlTransport.ACTUATOR -> buildActuatorControlPayload(compactState, durationMs)
             ControlTransport.MULTI_JOINT -> buildMultiJointControlPayload(compactState, durationMs)
         }
-        return sendInternal(payload, logPayload = false)
+        val sent = sendInternal(payload, logPayload = false)
+        if (sent) {
+            addLog(LogEntry.Send(controlLogMessage(transport, compactState, durationMs), timestamp()))
+        }
+        return sent
     }
 
     fun clearLogs() {
@@ -176,6 +180,22 @@ class WebSocketService {
         } catch (_: Exception) {
             message
         }
+    }
+
+    private fun controlLogMessage(
+        transport: ControlTransport,
+        compactState: Map<String, Float>,
+        durationMs: Int
+    ): String {
+        val commandType = when (transport) {
+            ControlTransport.ACTUATOR -> "actuator_control"
+            ControlTransport.MULTI_JOINT -> "multi_joint_control"
+        }
+        val values = ControlDefinitions.COMPACT_CONTROLS.joinToString(",") { control ->
+            val value = compactState[control.id] ?: control.defaultValue
+            "${control.id}=${value.toInt()}"
+        }
+        return "Sent $commandType duration=${durationMs}ms values=$values"
     }
 
     private fun timestamp(): String {
