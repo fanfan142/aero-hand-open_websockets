@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.sin
 
 /**
  * Compact 7DoF control definition for Aero Hand Open.
@@ -58,204 +59,164 @@ object SerialCommands {
 }
 
 object PresetActions {
-    private fun pose(vararg values: Float): Map<String, Float> = compactStateOf(values.toList())
+    private val relaxedOpen = floatArrayOf(10f, 10f, 10f, 10f, 10f, 10f, 10f)
+    private val naturalOpen = floatArrayOf(15f, 10f, 10f, 10f, 10f, 10f, 10f)
+    private val powerFist = floatArrayOf(85f, 50f, 85f, 85f, 85f, 85f, 85f)
+    private val rpsScissors = floatArrayOf(20f, 10f, 85f, 10f, 10f, 10f, 10f)
+    private val victoryPose = floatArrayOf(30f, 15f, 10f, 10f, 10f, 80f, 80f)
+    private val thumbUpPose = floatArrayOf(80f, 55f, 20f, 10f, 10f, 10f, 10f)
+    private val okPose = floatArrayOf(40f, 25f, 60f, 60f, 10f, 10f, 10f)
+    private val graspPose = floatArrayOf(100f, 55f, 30f, 60f, 60f, 60f, 60f)
+
+    private fun pose(values: FloatArray): Map<String, Float> {
+        return ControlDefinitions.COMPACT_CONTROLS.mapIndexed { index, control ->
+            val value = values.getOrElse(index) { control.defaultValue }
+            control.id to value.coerceIn(control.min, control.max)
+        }.toMap()
+    }
+
+    private fun step(durationMs: Int, values: FloatArray): PresetStep = PresetStep(pose(values), durationMs)
+
+    private fun fingerPose(
+        thumbAbd: Float = 15f,
+        thumbFlex: Float = 15f,
+        thumb: Float = 15f,
+        index: Float = 15f,
+        middle: Float = 15f,
+        ring: Float = 15f,
+        pinky: Float = 15f
+    ): FloatArray = floatArrayOf(thumbAbd, thumbFlex, thumb, index, middle, ring, pinky)
+
+    private fun pinchPose(fingerIndex: Int): FloatArray {
+        val positions = FloatArray(7) { 15f }
+        positions[0] = 70f
+        positions[1] = 35f
+        positions[2] = 80f
+        positions[fingerIndex] = 75f
+        return positions
+    }
+
+    private fun buildRpsSteps(): List<PresetStep> = listOf(
+        step(1500, powerFist),
+        step(800, rpsScissors),
+        step(1500, naturalOpen),
+        step(500, naturalOpen),
+        step(350, relaxedOpen)
+    )
+
+    private fun buildWaveMeetSteps(): List<PresetStep> = buildList {
+        val steps = 60
+        val delayMs = 50
+        val baseAngle = 30.0
+        val amplitude = 55.0
+        val phaseOffset = 0.7
+        for (index in 0 until steps) {
+            val t = (2.0 * PI * index) / (steps - 1).coerceAtLeast(1)
+            val positions = DoubleArray(7) { baseAngle }
+
+            for (joint in 3..6) {
+                val phase = (joint - 3) * phaseOffset
+                positions[joint] = baseAngle + amplitude * sin(t + phase)
+            }
+            for (joint in 3 downTo 0) {
+                val phase = (3 - joint) * phaseOffset
+                positions[joint] = baseAngle + amplitude * sin(t + phase)
+            }
+
+            add(step(delayMs, positions.map { it.toFloat() }.toFloatArray()))
+        }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildFanOpenSteps(): List<PresetStep> = listOf(
+        step(400, FloatArray(7) { 75f }),
+        step(400, floatArrayOf(10f, 10f, 10f, 75f, 75f, 75f, 75f)),
+        step(400, floatArrayOf(10f, 10f, 10f, 10f, 75f, 75f, 75f)),
+        step(400, floatArrayOf(10f, 10f, 10f, 10f, 10f, 75f, 75f)),
+        step(400, floatArrayOf(10f, 10f, 10f, 10f, 10f, 10f, 75f)),
+        step(800, naturalOpen),
+        step(400, FloatArray(7) { 75f }),
+        step(350, relaxedOpen)
+    )
+
+    private fun buildCountingSteps(): List<PresetStep> = listOf(
+        step(500, FloatArray(7) { 80f }),
+        step(500, floatArrayOf(80f, 80f, 80f, 10f, 80f, 80f, 80f)),
+        step(500, floatArrayOf(80f, 80f, 80f, 10f, 10f, 80f, 80f)),
+        step(500, floatArrayOf(80f, 80f, 80f, 10f, 10f, 10f, 80f)),
+        step(500, floatArrayOf(80f, 80f, 80f, 10f, 10f, 10f, 10f)),
+        step(500, naturalOpen),
+        step(300, naturalOpen),
+        step(300, relaxedOpen)
+    )
+
+    private fun buildPrecisionPinchSteps(): List<PresetStep> = listOf(
+        step(1000, floatArrayOf(40f, 25f, 35f, 40f, 10f, 10f, 10f)),
+        step(400, naturalOpen),
+        step(1000, floatArrayOf(60f, 40f, 50f, 60f, 10f, 10f, 10f)),
+        step(400, naturalOpen),
+        step(1000, floatArrayOf(80f, 55f, 75f, 80f, 10f, 10f, 10f)),
+        step(400, naturalOpen),
+        step(300, relaxedOpen)
+    )
+
+    private fun buildPinchPracticeSteps(): List<PresetStep> = buildList {
+        listOf(3, 4, 5, 6).forEach { fingerIndex ->
+            add(step(250, fingerPose()))
+            add(step(600, pinchPose(fingerIndex)))
+        }
+        add(step(250, fingerPose()))
+        listOf(5, 4, 3).forEach { fingerIndex ->
+            add(step(250, fingerPose()))
+            add(step(600, pinchPose(fingerIndex)))
+        }
+        add(step(350, fingerPose()))
+    }
+
+    private fun buildFistReleaseSteps(): List<PresetStep> = buildList {
+        add(step(600, FloatArray(7) { 80f }))
+        listOf(6, 5, 4, 3, 2, 1).forEach { fingerIndex ->
+            val positions = FloatArray(7) { 80f }
+            positions[fingerIndex] = 5f
+            add(step(300, positions))
+        }
+        add(step(300, FloatArray(7) { 5f }))
+        add(step(500, naturalOpen))
+    }
+
+    private fun buildTypingSteps(): List<PresetStep> = buildList {
+        val patterns = listOf(
+            listOf(3, 4, 3, 4, 5, 4, 3),
+            listOf(4, 5, 6, 5, 4, 3, 4),
+            listOf(3, 4, 5, 3, 4, 5, 6),
+            listOf(6, 5, 4, 3, 4, 5, 4)
+        )
+        patterns.forEach { pattern ->
+            pattern.forEach { fingerIndex ->
+                val positions = FloatArray(7) { 15f }
+                positions[fingerIndex] = 70f
+                add(step(120, positions))
+                add(step(80, FloatArray(7) { 15f }))
+            }
+            add(step(400, FloatArray(7) { 15f }))
+        }
+        add(step(300, relaxedOpen))
+    }
 
     val all = listOf(
-        PresetAction("open_palm", "张开", "自然张手", listOf(PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 450))),
-        PresetAction("power_grasp", "抓握", "力量抓取", listOf(PresetStep(pose(100f, 55f, 30f, 60f, 60f, 60f, 60f), 500))),
-        PresetAction("precision_pinch", "捏取", "精细夹捏", listOf(PresetStep(pose(60f, 40f, 50f, 60f, 10f, 10f, 10f), 450))),
-        PresetAction("ok_gesture", "OK", "手势识别", listOf(PresetStep(pose(40f, 25f, 60f, 60f, 10f, 10f, 10f), 450))),
-        PresetAction("victory", "剪刀手", "Victory", listOf(PresetStep(pose(30f, 15f, 10f, 10f, 10f, 80f, 80f), 450))),
-        PresetAction("thumb_up", "点赞", "Thumbs up", listOf(PresetStep(pose(80f, 55f, 20f, 10f, 10f, 10f, 10f), 450))),
-        PresetAction("rock", "石头", "Rock", listOf(PresetStep(pose(85f, 50f, 85f, 85f, 85f, 85f, 85f), 420))),
-        PresetAction("paper", "布", "Paper", listOf(PresetStep(pose(15f, 10f, 10f, 10f, 10f, 10f, 10f), 420))),
-        PresetAction("scissors", "剪刀", "Scissors", listOf(PresetStep(pose(20f, 10f, 85f, 10f, 10f, 10f, 10f), 420))),
-        PresetAction(
-            "counting",
-            "数数",
-            "逐指展开",
-            listOf(
-                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 260),
-                PresetStep(pose(80f, 80f, 80f, 10f, 80f, 80f, 80f), 260),
-                PresetStep(pose(80f, 80f, 80f, 10f, 10f, 80f, 80f), 260),
-                PresetStep(pose(80f, 80f, 80f, 10f, 10f, 10f, 80f), 260),
-                PresetStep(pose(80f, 80f, 80f, 10f, 10f, 10f, 10f), 260),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 260)
-            )
-        ),
-        PresetAction(
-            "fan_open",
-            "扇形展开",
-            "从拇指到小指",
-            listOf(
-                PresetStep(pose(75f, 75f, 75f, 75f, 75f, 75f, 75f), 220),
-                PresetStep(pose(10f, 10f, 75f, 75f, 75f, 75f, 75f), 220),
-                PresetStep(pose(10f, 10f, 10f, 75f, 75f, 75f, 75f), 220),
-                PresetStep(pose(10f, 10f, 10f, 10f, 75f, 75f, 75f), 220),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 75f, 75f), 220),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 220)
-            )
-        ),
-        PresetAction(
-            "piano",
-            "钢琴",
-            "逐指弹奏",
-            listOf(
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150),
-                PresetStep(pose(15f, 15f, 70f, 15f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 70f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 70f, 15f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150)
-            )
-        ),
-        PresetAction(
-            "wave_meet",
-            "波浪汇聚",
-            "双向波浪交汇",
-            listOf(
-                // t=0: all flat
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                // t=π/4: index/middle up, ring/pinky down
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                // t=π/2: ring/pinky up, index/middle down
-                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
-                // t=3π/4: index/middle up again
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                // t=π: all flat
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                // t=5π/4: ring/pinky up, index/middle down
-                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
-                // t=3π/2: index/middle up, ring/pinky down
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                // t=7π/4: all flat
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                // t=2π: back to flat
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200)
-            )
-        ),
-        PresetAction(
-            "finger_count_10",
-            "数到10",
-            "完整伸展计数",
-            listOf(
-                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 300),
-                PresetStep(pose(80f, 80f, 10f, 80f, 80f, 80f, 80f), 300),
-                PresetStep(pose(80f, 80f, 10f, 10f, 80f, 80f, 80f), 300),
-                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 80f, 80f), 300),
-                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 10f, 80f), 300),
-                PresetStep(pose(80f, 80f, 10f, 10f, 10f, 10f, 10f), 300),
-                PresetStep(pose(80f, 80f, 80f, 10f, 10f, 10f, 10f), 300),
-                PresetStep(pose(80f, 80f, 80f, 80f, 10f, 10f, 10f), 300),
-                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 10f, 10f), 300),
-                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 10f), 300),
-                PresetStep(pose(80f, 80f, 80f, 80f, 80f, 80f, 80f), 300),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 300)
-            )
-        ),
-        PresetAction(
-            "typing",
-            "打字",
-            "模拟打字节奏",
-            listOf(
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 70f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 70f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 15f, 70f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 80),
-                PresetStep(pose(15f, 15f, 15f, 70f, 15f, 15f, 15f), 120),
-                PresetStep(pose(15f, 15f, 15f, 15f, 15f, 15f, 15f), 150)
-            )
-        ),
-        PresetAction(
-            "conducting",
-            "指挥家",
-            "模拟指挥动作",
-            listOf(
-                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 500),
-                PresetStep(pose(50f, 25f, 50f, 60f, 60f, 60f, 60f), 300),
-                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
-                PresetStep(pose(20f, 10f, 20f, 30f, 50f, 50f, 50f), 300),
-                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
-                PresetStep(pose(20f, 10f, 20f, 50f, 30f, 50f, 50f), 300),
-                PresetStep(pose(30f, 15f, 30f, 40f, 40f, 40f, 40f), 300),
-                PresetStep(pose(20f, 10f, 20f, 20f, 20f, 20f, 20f), 300),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 800)
-            )
-        ),
-        PresetAction(
-            "rps",
-            "猜拳",
-            "石头剪刀布循环",
-            listOf(
-                // Rock
-                PresetStep(pose(85f, 50f, 85f, 85f, 85f, 85f, 85f), 1500),
-                // Scissors
-                PresetStep(pose(20f, 10f, 85f, 10f, 10f, 10f, 10f), 800),
-                // Paper
-                PresetStep(pose(15f, 10f, 10f, 10f, 10f, 10f, 10f), 1500),
-                // Scissors
-                PresetStep(pose(20f, 10f, 85f, 10f, 10f, 10f, 10f), 800),
-                // Back to neutral
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 500)
-            )
-        ),
-        PresetAction(
-            "spiral",
-            "螺旋",
-            "手指螺旋收放",
-            listOf(
-                PresetStep(pose(75f, 45f, 75f, 75f, 75f, 75f, 90f), 150),
-                PresetStep(pose(45f, 30f, 45f, 55f, 60f, 70f, 90f), 150),
-                PresetStep(pose(20f, 15f, 20f, 35f, 45f, 60f, 85f), 150),
-                PresetStep(pose(15f, 10f, 15f, 20f, 30f, 50f, 75f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 15f, 35f, 60f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 20f, 45f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 30f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200),
-                PresetStep(pose(20f, 15f, 20f, 20f, 15f, 20f, 15f), 150),
-                PresetStep(pose(35f, 25f, 35f, 35f, 30f, 35f, 30f), 150),
-                PresetStep(pose(55f, 35f, 55f, 55f, 50f, 55f, 50f), 150),
-                PresetStep(pose(75f, 45f, 75f, 75f, 70f, 75f, 70f), 150),
-                PresetStep(pose(85f, 50f, 85f, 85f, 85f, 85f, 85f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 300)
-            )
-        ),
-        PresetAction(
-            "finger_dance",
-            "手指舞",
-            "波浪组合动作",
-            listOf(
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                PresetStep(pose(30f, 30f, 10f, 10f, 85f, 85f, 85f), 100),
-                PresetStep(pose(30f, 30f, 85f, 85f, 10f, 10f, 10f), 100),
-                PresetStep(pose(30f, 30f, 30f, 30f, 30f, 30f, 30f), 100),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200),
-                PresetStep(pose(60f, 40f, 60f, 60f, 60f, 60f, 60f), 150),
-                PresetStep(pose(30f, 20f, 30f, 30f, 30f, 30f, 30f), 150),
-                PresetStep(pose(60f, 40f, 60f, 60f, 60f, 60f, 60f), 150),
-                PresetStep(pose(10f, 10f, 10f, 10f, 10f, 10f, 10f), 200)
-            )
-        )
+        PresetAction("open_palm", "张开", "自然张手", listOf(step(450, naturalOpen))),
+        PresetAction("power_grasp", "抓握", "力量抓取", listOf(step(500, graspPose), step(350, relaxedOpen))),
+        PresetAction("victory", "剪刀手", "标准 V 字手型", listOf(step(500, victoryPose), step(300, relaxedOpen))),
+        PresetAction("thumb_up", "点赞", "拇指上举", listOf(step(500, thumbUpPose), step(300, relaxedOpen))),
+        PresetAction("ok_gesture", "OK", "拇指食指成环", listOf(step(500, okPose), step(300, relaxedOpen))),
+        PresetAction("precision_pinch", "三段捏取", "轻捏到紧捏", buildPrecisionPinchSteps()),
+        PresetAction("pinch_practice", "轮指捏合", "拇指依次捏四指", buildPinchPracticeSteps()),
+        PresetAction("rps", "猜拳", "石头剪刀布一轮", buildRpsSteps()),
+        PresetAction("wave_meet", "波浪汇聚", "参考 SDK 60 帧波浪", buildWaveMeetSteps()),
+        PresetAction("fan_open", "扇形开合", "从拇指扫到小指", buildFanOpenSteps()),
+        PresetAction("counting", "手指数数", "从 1 到 5 展开", buildCountingSteps()),
+        PresetAction("fist_release", "逐指松拳", "握拳后逐个松开", buildFistReleaseSteps()),
+        PresetAction("typing", "打字节奏", "四组键击模式", buildTypingSteps())
     )
 
     fun find(id: String): PresetAction? = all.firstOrNull { it.id == id }

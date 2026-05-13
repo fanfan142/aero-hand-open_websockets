@@ -295,12 +295,19 @@ fun HandControlScreen() {
                             presets = uiState.presetActions,
                             activePresetId = uiState.activePresetId,
                             isRunning = uiState.isPresetRunning,
+                            isMacroRunning = uiState.isMacroRunning,
                             isConnected = when (uiState.connectionMode) {
                                 ConnectionMode.WIFI -> uiState.wifiConnected
                                 ConnectionMode.USB -> uiState.usbConnected
                             },
+                            presetRepeatCounts = uiState.presetRepeatCounts,
+                            macroPresetIds = uiState.macroPresetIds,
                             onHoming = viewModel::sendHoming,
-                            onRunPreset = viewModel::runPreset
+                            onRunPreset = viewModel::runPreset,
+                            onCyclePresetRepeat = viewModel::cyclePresetRepeat,
+                            onTogglePresetInMacro = viewModel::togglePresetInMacro,
+                            onRunMacro = viewModel::runMacro,
+                            onClearMacro = viewModel::clearMacro
                         )
                         1 -> JointControlPage(
                             controlValues = uiState.controlValues,

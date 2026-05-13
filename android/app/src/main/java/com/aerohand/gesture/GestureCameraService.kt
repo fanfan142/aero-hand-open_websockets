@@ -46,13 +46,15 @@ class GestureCameraService(
         private const val FPS_WINDOW = 10
         private const val VIDEO_FRAME_INTERVAL_MS = 33L
         private const val UI_STATE_INTERVAL_MS = 100L
-        private val ANALYSIS_TARGET_SIZE = Size(640, 480)
+        private val ANALYSIS_TARGET_SIZE = Size(480, 360)
         private const val CALIB_SCHEMA = 2
         private const val MIN_FINGER_RANGE = 12f
         private const val MIN_THUMB_SWING_RANGE = 10f
         private const val MAX_LOST_FRAME_MS = 300L
-        private val EMA_ALPHA = floatArrayOf(0.7f, 0.7f, 0.72f, 0.78f, 0.78f, 0.78f, 0.78f)
-        private val DEADBAND = floatArrayOf(0.8f, 0.8f, 0.9f, 1f, 1f, 1f, 1f)
+        private val EMA_ALPHA = floatArrayOf(0.78f, 0.78f, 0.8f, 0.82f, 0.82f, 0.82f, 0.82f)
+        private val DEADBAND = floatArrayOf(0.25f, 0.25f, 0.3f, 0.35f, 0.35f, 0.35f, 0.35f)
+        private const val THUMB_SWING_ALPHA = 0.65f
+        private const val THUMB_SWING_DEADBAND = 0.75f
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences("gesture_calib", Context.MODE_PRIVATE)
@@ -242,7 +244,7 @@ class GestureCameraService(
         }
 
         val rawMpHand = result.handedness().firstOrNull()?.firstOrNull()?.categoryName().orEmpty()
-        val actualHand = normalizeHandedness(rawMpHand)
+        val actualHand = resolveHandedness(rawMpHand)
         val targetMatched = targetHand.matches(actualHand)
         val rawAngles = computeFingerAngles(landmarks[0], actualHand)
         val smoothed = applySmoothing(rawAngles)
@@ -341,7 +343,6 @@ class GestureCameraService(
 
     fun toggleCamera(): Boolean {
         useFrontCamera = !useFrontCamera
-        invalidateCalibrationForContext()
         cameraProvider?.unbindAll()
         cameraPreviewView?.let { setupImageAnalysis(it) }
         return useFrontCamera
@@ -351,7 +352,6 @@ class GestureCameraService(
 
     fun setTargetHand(targetHand: GestureTargetHand) {
         this.targetHand = targetHand
-        invalidateCalibrationForContext()
         val matched = targetHand.matches(_state.value.handedness)
         _state.value = _state.value.copy(
             targetHand = targetHand,
@@ -365,18 +365,53 @@ class GestureCameraService(
         )
     }
 
-    private fun normalizeHandedness(mpHand: String): String {
-        val hand = when {
+    private fun canonicalHandedness(mpHand: String): String {
+        return when {
             mpHand.equals("Left", true) -> "Left"
             mpHand.equals("Right", true) -> "Right"
             else -> ""
         }
+    }
+
+    private fun swapHandedness(hand: String): String {
+        return when (hand) {
+            "Left" -> "Right"
+            "Right" -> "Left"
+            else -> ""
+        }
+    }
+
+    private fun resolveHandedness(mpHand: String): String {
+        val hand = canonicalHandedness(mpHand)
         if (hand.isBlank()) return ""
-        return if (currentMirror() == GestureMirrorMode.NORMAL) {
-            if (hand == "Left") "Right" else "Left"
+
+        val preferredByCamera = if (currentMirror() == GestureMirrorMode.NORMAL) {
+            swapHandedness(hand)
         } else {
             hand
         }
+        val alternate = swapHandedness(preferredByCamera)
+        val preferredScore = handednessScore(preferredByCamera, preferredByCamera)
+        val alternateScore = handednessScore(alternate, preferredByCamera)
+        return if (alternateScore > preferredScore) alternate else preferredByCamera
+    }
+
+    private fun handednessScore(candidate: String, preferredByCamera: String): Int {
+        if (candidate.isBlank()) return Int.MIN_VALUE
+
+        var score = 0
+        if (targetHand != GestureTargetHand.AUTO) {
+            score += if (targetHand.matches(candidate)) 8 else -8
+        }
+        profile?.let { saved ->
+            if (saved.matchesHand(candidate)) {
+                score += 6
+            }
+        }
+        if (candidate == preferredByCamera) {
+            score += 1
+        }
+        return score
     }
 
     private fun currentFacing(): GestureCameraFacing = if (useFrontCamera) GestureCameraFacing.FRONT else GestureCameraFacing.BACK
@@ -462,8 +497,9 @@ class GestureCameraService(
             }
         }
         val swingDiff = abs(angles.thumbSwing - smoothedThumbSwing)
-        if (needsInitialUpdate || swingDiff >= 2f) {
-            smoothedThumbSwing = 0.45f * angles.thumbSwing + 0.55f * smoothedThumbSwing
+        if (needsInitialUpdate || swingDiff >= THUMB_SWING_DEADBAND) {
+            smoothedThumbSwing =
+                THUMB_SWING_ALPHA * angles.thumbSwing + (1 - THUMB_SWING_ALPHA) * smoothedThumbSwing
         }
         needsInitialUpdate = false
         return anglesFromArray(smoothedValues, smoothedThumbSwing)
@@ -582,7 +618,7 @@ class GestureCameraService(
 
     private fun activeCalibrationState(hand: String): CalibrationState {
         val p = profile ?: return _state.value.calibrationState.takeIf { it != CalibrationState.CALIBRATED } ?: CalibrationState.NOT_CALIBRATED
-        return if (hand.isNotBlank() && p.matches(hand, currentFacing(), currentMirror())) {
+        return if (hand.isNotBlank() && p.matchesHand(hand)) {
             CalibrationState.CALIBRATED
         } else if (_state.value.calibrationState != CalibrationState.CALIBRATED) {
             _state.value.calibrationState
@@ -595,15 +631,11 @@ class GestureCameraService(
         val p = profile ?: return "未校准，请先完成三步标定"
         return if (hand.isBlank()) {
             "已保存标定，请将${handLabel(p.handSide)}放入画面"
-        } else if (!p.matches(hand, currentFacing(), currentMirror())) {
-            "当前为${handLabel(hand)} ${currentFacing().label}，历史标定属于${handLabel(p.handSide)} ${p.cameraFacing.label}，请重新校准"
+        } else if (!p.matchesHand(hand)) {
+            "当前为${handLabel(hand)}，历史标定属于${handLabel(p.handSide)}，请切换目标手后再控制"
+        } else if (!p.matchesContext(hand, currentFacing(), currentMirror())) {
+            "已沿用${handLabel(p.handSide)}标定（历史${p.cameraFacing.label}，当前${currentFacing().label}）"
         } else ""
-    }
-
-    private fun invalidateCalibrationForContext() {
-        if (_state.value.calibrationState == CalibrationState.CALIBRATED) {
-            _state.value = _state.value.copy(calibrationState = CalibrationState.NOT_CALIBRATED)
-        }
     }
 
     private fun sameCalibrationContext(hand: String): Boolean {
@@ -669,8 +701,8 @@ class GestureCameraService(
             profile = loaded
             _state.value = _state.value.copy(
                 calibrationProfile = loaded,
-                calibrationState = if (loaded.matches(hand, currentFacing(), currentMirror())) CalibrationState.CALIBRATED else CalibrationState.NOT_CALIBRATED,
-                feedbackMessage = "已加载${handLabel(hand)} ${loaded.cameraFacing.label}标定"
+                calibrationState = if (loaded.matchesHand(hand)) CalibrationState.CALIBRATED else CalibrationState.NOT_CALIBRATED,
+                feedbackMessage = "已加载${handLabel(hand)}标定（记录于${loaded.cameraFacing.label}）"
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse calibration data, reset required", e)

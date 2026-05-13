@@ -33,9 +33,10 @@ data class GestureCalibrationProfile(
     val openThumbSwing: Float = 0f,
     val thumbInSwing: Float = 0f
 ) {
-    @Suppress("UNUSED_PARAMETER")
-    fun matches(hand: String, facing: GestureCameraFacing, mirror: GestureMirrorMode): Boolean {
-        return handSide.equals(hand, ignoreCase = true)
+    fun matchesHand(hand: String): Boolean = handSide.equals(hand, ignoreCase = true)
+
+    fun matchesContext(hand: String, facing: GestureCameraFacing, mirror: GestureMirrorMode): Boolean {
+        return matchesHand(hand) && cameraFacing == facing && mirrorMode == mirror
     }
 }
 

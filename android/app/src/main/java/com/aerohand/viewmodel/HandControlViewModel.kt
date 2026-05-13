@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.coroutines.coroutineContext
 
 data class WifiConfigUiState(
     val staSsid: String = "",
@@ -68,6 +69,9 @@ data class HandControlUiState(
     val presetActions: List<PresetAction> = PresetActions.all,
     val activePresetId: String? = null,
     val isPresetRunning: Boolean = false,
+    val isMacroRunning: Boolean = false,
+    val presetRepeatCounts: Map<String, Int> = emptyMap(),
+    val macroPresetIds: List<String> = emptyList(),
     val gestureTargetHand: GestureTargetHand = GestureTargetHand.AUTO,
     val gestureCameraState: GestureCameraState = GestureCameraState()
 )
@@ -97,11 +101,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private var gestureControlReady = false
 
     companion object {
-        private const val GESTURE_SEND_INTERVAL_MS = 25L
+        private const val GESTURE_SEND_INTERVAL_MS = 16L
         private const val GESTURE_UI_UPDATE_INTERVAL_MS = 100L
-        private const val GESTURE_DURATION_MS = 60
-        private const val GESTURE_MIN_DELTA = 0.8f
-        private const val GESTURE_MAX_STEP = 40f
+        private const val GESTURE_DURATION_MS = 24
+        private const val GESTURE_MIN_DELTA = 0.35f
     }
 
     init {
@@ -303,8 +306,9 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     fun disconnect() {
         presetJob?.cancel()
+        presetJob = null
         resetGestureSendState()
-        mutateState { copy(isPresetRunning = false, activePresetId = null) }
+        mutateState { copy(isPresetRunning = false, isMacroRunning = false, activePresetId = null) }
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.disconnect()
             ConnectionMode.USB -> usbSerialService.disconnect()
@@ -438,20 +442,57 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "请先连接再执行预设动作") }
             return
         }
+        val repeatCount = _uiState.value.presetRepeatCounts[presetId] ?: 1
+        runPresetSequence(listOf(preset to repeatCount), isMacro = false)
+    }
 
-        presetJob?.cancel()
-        presetJob = viewModelScope.launch {
-            mutateState { copy(activePresetId = preset.id, isPresetRunning = true, statusMessage = "执行预设：${preset.label}") }
-            try {
-                preset.steps.forEach { step ->
-                    mutateState { copy(controlValues = step.values) }
-                    sendState(step.values, step.durationMs)
-                    delay(step.durationMs.toLong())
+    fun cyclePresetRepeat(presetId: String) {
+        mutateState {
+            val nextCount = ((presetRepeatCounts[presetId] ?: 1) % 3) + 1
+            copy(
+                presetRepeatCounts = presetRepeatCounts.toMutableMap().apply {
+                    this[presetId] = nextCount
                 }
-                mutateState { copy(statusMessage = "预设完成：${preset.label}") }
-            } finally {
-                mutateState { copy(activePresetId = null, isPresetRunning = false) }
+            )
+        }
+    }
+
+    fun togglePresetInMacro(presetId: String) {
+        mutateState {
+            val nextMacroPresetIds = if (macroPresetIds.contains(presetId)) {
+                macroPresetIds.filterNot { it == presetId }
+            } else {
+                macroPresetIds + presetId
             }
+            copy(macroPresetIds = nextMacroPresetIds)
+        }
+    }
+
+    fun runMacro() {
+        if (!isConnected()) {
+            mutateState { copy(statusMessage = "请先连接再执行宏动作") }
+            return
+        }
+
+        val state = _uiState.value
+        val sequence = state.macroPresetIds.mapNotNull { presetId ->
+            PresetActions.find(presetId)?.let { preset ->
+                preset to (state.presetRepeatCounts[presetId] ?: 1)
+            }
+        }
+        if (sequence.isEmpty()) {
+            mutateState { copy(statusMessage = "请先勾选至少一个常规动作") }
+            return
+        }
+        runPresetSequence(sequence, isMacro = true)
+    }
+
+    fun clearMacro() {
+        mutateState {
+            copy(
+                macroPresetIds = emptyList(),
+                statusMessage = if (macroPresetIds.isEmpty()) statusMessage else "已清空宏队列"
+            )
         }
     }
 
@@ -467,17 +508,84 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         sendState(_uiState.value.controlValues, ControlDefinitions.DEFAULT_DURATION_MS)
     }
 
-    private fun sendState(values: Map<String, Float>, durationMs: Int, logControl: Boolean = true) {
+    private fun runPresetSequence(sequence: List<Pair<PresetAction, Int>>, isMacro: Boolean) {
+        if (sequence.isEmpty()) {
+            return
+        }
+
+        presetJob?.cancel()
+        val initialStatus = if (isMacro) {
+            "执行宏动作：${sequence.size} 项"
+        } else {
+            "执行预设：${sequence.first().first.label}"
+        }
+        val job = viewModelScope.launch {
+            mutateState {
+                copy(
+                    activePresetId = sequence.first().first.id,
+                    isPresetRunning = true,
+                    isMacroRunning = isMacro,
+                    statusMessage = initialStatus
+                )
+            }
+            try {
+                sequence.forEachIndexed { actionIndex, (preset, repeatCount) ->
+                    repeat(repeatCount) { round ->
+                        mutateState {
+                            copy(
+                                activePresetId = preset.id,
+                                statusMessage = if (isMacro) {
+                                    "宏 ${actionIndex + 1}/${sequence.size} · ${preset.label} x${round + 1}/$repeatCount"
+                                } else {
+                                    "执行预设：${preset.label} x${round + 1}/$repeatCount"
+                                }
+                            )
+                        }
+                        preset.steps.forEach { step ->
+                            mutateState { copy(controlValues = step.values) }
+                            sendState(step.values, step.durationMs)
+                            delay(step.durationMs.toLong())
+                        }
+                    }
+                }
+                mutateState {
+                    copy(
+                        statusMessage = if (isMacro) "宏动作执行完成" else "预设完成：${sequence.first().first.label}"
+                    )
+                }
+            } finally {
+                val currentJob = coroutineContext[Job]
+                if (presetJob === currentJob) {
+                    presetJob = null
+                    mutateState {
+                        copy(
+                            activePresetId = null,
+                            isPresetRunning = false,
+                            isMacroRunning = false
+                        )
+                    }
+                }
+            }
+        }
+        presetJob = job
+    }
+
+    private fun sendState(values: Map<String, Float>, durationMs: Int, logControl: Boolean = true): Boolean {
         val state = _uiState.value
-        when (state.connectionMode) {
+        return when (state.connectionMode) {
             ConnectionMode.WIFI -> {
                 if (state.wifiConnected) {
                     webSocketService.sendCompactState(values, durationMs, logControl = logControl)
+                } else {
+                    false
                 }
             }
             ConnectionMode.USB -> {
                 if (state.usbConnected) {
                     usbSerialService.sendCompactState(values)
+                    true
+                } else {
+                    false
                 }
             }
         }
@@ -571,14 +679,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     fun updateControlValuesFromGesture(angles: FingerAngles) {
         val rawCompactState = fingerAnglesToCompactState(angles)
         val previous = lastGestureCompactState
-        val compactState = if (previous == null) {
-            rawCompactState
-        } else {
-            rawCompactState.mapValues { (key, value) ->
-                val old = previous[key] ?: value
-                (old + (value - old).coerceIn(-GESTURE_MAX_STEP, GESTURE_MAX_STEP)).coerceIn(0f, 100f)
-            }
-        }
+        val compactState = rawCompactState
         val now = System.currentTimeMillis()
         val changedEnough = previous == null || compactState.any { (key, value) ->
             abs((previous[key] ?: value) - value) >= GESTURE_MIN_DELTA
@@ -596,13 +697,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        gestureControlReady = true
-        lastGestureCompactState = compactState
-        lastGestureSendTimeMs = now
-        if (now - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
-            lastGestureUiUpdateTimeMs = now
-            updateControlValues(compactState)
+        if (sendState(compactState, GESTURE_DURATION_MS, logControl = false)) {
+            gestureControlReady = true
+            lastGestureCompactState = compactState
+            lastGestureSendTimeMs = now
+            if (now - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
+                lastGestureUiUpdateTimeMs = now
+                updateControlValues(compactState)
+            }
         }
-        sendState(compactState, GESTURE_DURATION_MS, logControl = false)
     }
 }

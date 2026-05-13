@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,11 +35,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aerohand.websocket.ControlDefinitions
@@ -57,11 +60,24 @@ fun HomePage(
     presets: List<PresetAction>,
     activePresetId: String?,
     isRunning: Boolean,
+    isMacroRunning: Boolean,
     isConnected: Boolean,
+    presetRepeatCounts: Map<String, Int>,
+    macroPresetIds: List<String>,
     onHoming: () -> Unit,
     onRunPreset: (String) -> Unit,
+    onCyclePresetRepeat: (String) -> Unit,
+    onTogglePresetInMacro: (String) -> Unit,
+    onRunMacro: () -> Unit,
+    onClearMacro: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val macroSummary = macroPresetIds.mapNotNull { presetId ->
+        presets.firstOrNull { it.id == presetId }?.let { preset ->
+            "${preset.label} X${presetRepeatCounts[presetId] ?: 1}"
+        }
+    }.joinToString("  ->  ")
+
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -91,39 +107,152 @@ fun HomePage(
             }
 
             Text(
-                "预设动作",
+                "常规动作",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
 
-            // 预设动作网格
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 presets.forEach { preset ->
-                    val active = activePresetId == preset.id
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable(enabled = !isRunning || active && isConnected) { onRunPreset(preset.id) },
-                        shape = RoundedCornerShape(18.dp),
-                        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                    PresetActionTile(
+                        preset = preset,
+                        repeatCount = presetRepeatCounts[preset.id] ?: 1,
+                        selectedForMacro = macroPresetIds.contains(preset.id),
+                        active = activePresetId == preset.id,
+                        isRunning = isRunning,
+                        isConnected = isConnected,
+                        onRunPreset = { onRunPreset(preset.id) },
+                        onCyclePresetRepeat = { onCyclePresetRepeat(preset.id) },
+                        onTogglePresetInMacro = { onTogglePresetInMacro(preset.id) }
+                    )
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "宏队列",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (macroSummary.isBlank()) {
+                            "未选择动作"
+                        } else {
+                            "已选 ${macroPresetIds.size} 项：$macroSummary"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                            Text(
-                                preset.label,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                preset.subtitle,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        OutlinedButton(
+                            onClick = onClearMacro,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            enabled = macroPresetIds.isNotEmpty() && !isRunning
+                        ) {
+                            Text("清空", fontSize = 12.sp)
+                        }
+                        Button(
+                            onClick = onRunMacro,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            enabled = isConnected && macroPresetIds.isNotEmpty() && !isRunning
+                        ) {
+                            Text(if (isMacroRunning) "执行中" else "执行宏", fontSize = 12.sp)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetActionTile(
+    preset: PresetAction,
+    repeatCount: Int,
+    selectedForMacro: Boolean,
+    active: Boolean,
+    isRunning: Boolean,
+    isConnected: Boolean,
+    onRunPreset: () -> Unit,
+    onCyclePresetRepeat: () -> Unit,
+    onTogglePresetInMacro: () -> Unit
+) {
+    val containerColor = when {
+        active -> MaterialTheme.colorScheme.primaryContainer
+        selectedForMacro -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+
+    Surface(
+        modifier = Modifier
+            .heightIn(min = 118.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = isConnected && !isRunning, onClick = onRunPreset),
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .heightIn(min = 118.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    preset.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    preset.subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = onCyclePresetRepeat,
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isRunning,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                ) {
+                    Text("X$repeatCount", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onTogglePresetInMacro,
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isRunning,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                ) {
+                    Text(if (selectedForMacro) "已加宏" else "加入宏", fontSize = 11.sp)
                 }
             }
         }
