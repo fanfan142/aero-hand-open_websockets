@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      BASE_VERSION_NAME: 1.1.2
+      BASE_VERSION_NAME: 1.4.12
 
     steps:
       - name: Checkout

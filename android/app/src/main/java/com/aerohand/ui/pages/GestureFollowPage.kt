@@ -80,6 +80,7 @@ fun GestureFollowPage(
 
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
+    var showSkeletonOverlay by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -105,11 +106,12 @@ fun GestureFollowPage(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Skeleton overlay
-                    SkeletonOverlay(
-                        landmarks = cameraState.landmarks,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    if (showSkeletonOverlay) {
+                        SkeletonOverlay(
+                            landmarks = cameraState.landmarks,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
                     Box(
                         modifier = Modifier
@@ -159,6 +161,19 @@ fun GestureFollowPage(
                             ) {
                                 Text(
                                     text = if (showStatusOverlay) "隐藏状态" else "显示状态",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+
+                            Surface(
+                                modifier = Modifier.clickable { showSkeletonOverlay = !showSkeletonOverlay },
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color.Black.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = if (showSkeletonOverlay) "骨架开" else "骨架关",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
@@ -355,7 +370,7 @@ private fun CameraPreview(
     // Create a visible PreviewView
     val previewView = remember {
         PreviewView(context).apply {
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }

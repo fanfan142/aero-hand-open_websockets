@@ -93,12 +93,15 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private var latestUsbLogs: List<LogEntry> = emptyList()
     private var lastGestureCompactState: Map<String, Float>? = null
     private var lastGestureSendTimeMs: Long = 0L
+    private var lastGestureUiUpdateTimeMs: Long = 0L
     private var gestureControlReady = false
 
     companion object {
-        private const val GESTURE_SEND_INTERVAL_MS = 40L
-        private const val GESTURE_MIN_DELTA = 1.5f
-        private const val GESTURE_MAX_STEP = 15f
+        private const val GESTURE_SEND_INTERVAL_MS = 25L
+        private const val GESTURE_UI_UPDATE_INTERVAL_MS = 100L
+        private const val GESTURE_DURATION_MS = 60
+        private const val GESTURE_MIN_DELTA = 0.8f
+        private const val GESTURE_MAX_STEP = 40f
     }
 
     init {
@@ -464,12 +467,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         sendState(_uiState.value.controlValues, ControlDefinitions.DEFAULT_DURATION_MS)
     }
 
-    private fun sendState(values: Map<String, Float>, durationMs: Int) {
+    private fun sendState(values: Map<String, Float>, durationMs: Int, logControl: Boolean = true) {
         val state = _uiState.value
         when (state.connectionMode) {
             ConnectionMode.WIFI -> {
                 if (state.wifiConnected) {
-                    webSocketService.sendCompactState(values, durationMs)
+                    webSocketService.sendCompactState(values, durationMs, logControl = logControl)
                 }
             }
             ConnectionMode.USB -> {
@@ -552,6 +555,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     fun resetGestureSendState() {
         lastGestureCompactState = null
         lastGestureSendTimeMs = 0L
+        lastGestureUiUpdateTimeMs = 0L
         gestureControlReady = false
     }
 
@@ -560,6 +564,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             gestureControlReady = true
             lastGestureCompactState = null
             lastGestureSendTimeMs = 0L
+            lastGestureUiUpdateTimeMs = 0L
         }
     }
 
@@ -594,7 +599,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         gestureControlReady = true
         lastGestureCompactState = compactState
         lastGestureSendTimeMs = now
-        updateControlValues(compactState)
-        sendCurrentState()
+        if (now - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
+            lastGestureUiUpdateTimeMs = now
+            updateControlValues(compactState)
+        }
+        sendState(compactState, GESTURE_DURATION_MS, logControl = false)
     }
 }

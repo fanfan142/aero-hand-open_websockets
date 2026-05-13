@@ -118,15 +118,21 @@ fun HandControlScreen() {
             // Camera will be started by GestureFollowPage composable
         } else {
             gestureService.stopCamera()
+            viewModel.resetGestureSendState()
         }
     }
 
-    // Collect gesture state and update viewmodel
-    LaunchedEffect(gestureService.state, selectedControlPage) {
+    // Collect throttled gesture UI state.
+    LaunchedEffect(gestureService.state) {
         gestureService.state.collect { state ->
             viewModel.updateGestureCameraState(state)
+        }
+    }
+
+    // Keep real-time control independent from Compose UI refresh rate.
+    LaunchedEffect(gestureService.controlFrame, selectedControlPage) {
+        gestureService.controlFrame.collect { frame ->
             if (selectedControlPage == 2) {
-                val frame = gestureService.getControlFrame()
                 if (frame.allowed) {
                     viewModel.markGestureControlReady()
                     viewModel.updateControlValuesFromGesture(frame.angles)

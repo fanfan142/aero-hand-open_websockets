@@ -15,6 +15,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class WebSocketService {
+    companion object {
+        private const val REALTIME_MAX_QUEUE_BYTES = 4096L
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
@@ -23,6 +27,7 @@ class WebSocketService {
 
     private var webSocket: WebSocket? = null
     private val connectionToken = AtomicInteger(0)
+    private var serialBusyHintLogged = false
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -45,6 +50,7 @@ class WebSocketService {
 
         val url = "ws://$host:$port/"
         val token = connectionToken.incrementAndGet()
+        serialBusyHintLogged = false
         _connectionState.value = ConnectionState.Connecting
         addLog(LogEntry.Info("Connecting to $url...", timestamp()))
 
@@ -63,6 +69,7 @@ class WebSocketService {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (!isCurrent()) return
                 addLog(LogEntry.Receive(sanitizeLogMessage(text), timestamp()))
+                maybeLogSerialBusyHint(text)
                 parseHandInfo(text)?.let { handType ->
                     val current = _connectionState.value
                     if (current is ConnectionState.Connected) {
@@ -138,14 +145,18 @@ class WebSocketService {
     fun sendCompactState(
         compactState: Map<String, Float>,
         durationMs: Int = ControlDefinitions.DEFAULT_DURATION_MS,
-        transport: ControlTransport = ControlTransport.ACTUATOR
+        transport: ControlTransport = ControlTransport.ACTUATOR,
+        logControl: Boolean = true
     ): Boolean {
+        if (!logControl && (webSocket?.queueSize() ?: 0L) > REALTIME_MAX_QUEUE_BYTES) {
+            return false
+        }
         val payload = when (transport) {
             ControlTransport.ACTUATOR -> buildActuatorControlPayload(compactState, durationMs)
             ControlTransport.MULTI_JOINT -> buildMultiJointControlPayload(compactState, durationMs)
         }
         val sent = sendInternal(payload, logPayload = false)
-        if (sent) {
+        if (sent && logControl) {
             addLog(LogEntry.Send(controlLogMessage(transport, compactState, durationMs), timestamp()))
         }
         return sent
@@ -180,6 +191,19 @@ class WebSocketService {
         } catch (_: Exception) {
             message
         }
+    }
+
+    private fun maybeLogSerialBusyHint(message: String) {
+        if (serialBusyHintLogged || !message.contains("Control busy: serial source active")) {
+            return
+        }
+        serialBusyHintLogged = true
+        addLog(
+            LogEntry.Info(
+                "提示：固件检测到电脑 USB 串口仍在控制，请关闭电脑端 UI/串口监视器后重启设备，再用 WiFi 控制",
+                timestamp()
+            )
+        )
     }
 
     private fun controlLogMessage(

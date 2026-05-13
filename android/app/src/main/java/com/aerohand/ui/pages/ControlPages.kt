@@ -2,7 +2,11 @@ package com.aerohand.ui.pages
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +44,10 @@ import androidx.compose.ui.unit.sp
 import com.aerohand.websocket.ControlDefinitions
 import com.aerohand.websocket.LogEntry
 import com.aerohand.websocket.PresetAction
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 // ============== Page 1: Home (归位 + 预设动作) ==============
 
@@ -271,9 +279,8 @@ fun LogPage(
 ) {
     val context = LocalContext.current
     val recentLogs = logs.takeLast(50)
-    val copiedLogText = recentLogs.joinToString(separator = "\n") { entry ->
-        "[${entry.timestamp}] ${entry.message}"
-    }
+    val copiedLogText = formatLogText(recentLogs)
+    val exportedLogText = formatLogText(logs)
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -305,6 +312,20 @@ fun LogPage(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    OutlinedButton(
+                        onClick = {
+                            val result = runCatching { exportLogsToDownloads(context, exportedLogText) }
+                            result.onSuccess { path ->
+                                Toast.makeText(context, "已导出: $path", Toast.LENGTH_LONG).show()
+                            }.onFailure { error ->
+                                Toast.makeText(context, "导出失败: ${error.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = logs.isNotEmpty()
+                    ) {
+                        Text("导出", fontSize = 12.sp)
+                    }
                     OutlinedButton(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -366,4 +387,43 @@ fun LogPage(
             }
         }
     }
+}
+
+private fun formatLogText(logs: List<LogEntry>): String {
+    return logs.joinToString(separator = "\n") { entry ->
+        "[${entry.timestamp}] ${entry.message}"
+    }
+}
+
+private fun exportLogsToDownloads(context: Context, logText: String): String {
+    val fileName = "aero-hand-log-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.md"
+    val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/aero"
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "text/markdown")
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("无法创建日志文件")
+        resolver.openOutputStream(uri)?.use { output ->
+            output.write(logText.toByteArray(Charsets.UTF_8))
+        } ?: error("无法写入日志文件")
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return "Download/aero/$fileName"
+    }
+
+    @Suppress("DEPRECATION")
+    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "aero")
+    if (!dir.exists() && !dir.mkdirs()) {
+        error("无法创建 Download/aero")
+    }
+    val file = File(dir, fileName)
+    file.writeText(logText, Charsets.UTF_8)
+    return file.absolutePath
 }
