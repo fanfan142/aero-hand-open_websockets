@@ -282,59 +282,65 @@ fun HandControlScreen() {
                     }
                 }
 
-                // Scrollable content for each page
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(top = 12.dp)
-                ) {
-                    when (selectedControlPage) {
-                        0 -> HomePage(
-                            presets = uiState.presetActions,
-                            activePresetId = uiState.activePresetId,
-                            isRunning = uiState.isPresetRunning,
-                            isMacroRunning = uiState.isMacroRunning,
-                            isConnected = when (uiState.connectionMode) {
-                                ConnectionMode.WIFI -> uiState.wifiConnected
-                                ConnectionMode.USB -> uiState.usbConnected
-                            },
-                            presetRepeatCounts = uiState.presetRepeatCounts,
-                            macroPresetIds = uiState.macroPresetIds,
-                            onHoming = viewModel::sendHoming,
-                            onRunPreset = viewModel::runPreset,
-                            onCyclePresetRepeat = viewModel::cyclePresetRepeat,
-                            onTogglePresetInMacro = viewModel::togglePresetInMacro,
-                            onRunMacro = viewModel::runMacro,
-                            onClearMacro = viewModel::clearMacro
-                        )
-                        1 -> JointControlPage(
-                            controlValues = uiState.controlValues,
-                            protocolPreview = uiState.protocolPreview,
-                            onControlChange = viewModel::updateControlValue,
-                            onAllZeros = viewModel::sendAllZeros,
-                            onGetStates = viewModel::requestStates,
-                            isConnected = when (uiState.connectionMode) {
-                                ConnectionMode.WIFI -> uiState.wifiConnected
-                                ConnectionMode.USB -> uiState.usbConnected
-                            }
-                        )
-                        2 -> GestureFollowPage(
-                            gestureService = gestureService,
-                            cameraState = uiState.gestureCameraState,
-                            onTargetHandChange = {
-                                gestureService.setTargetHand(it)
-                                viewModel.setGestureTargetHand(it)
-                            },
-                            onStartCalibration = { gestureService.startCalibration() },
-                            onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
-                            onCameraFlip = { viewModel.resetGestureSendState() }
-                        )
-                        3 -> LogPage(
-                            logs = uiState.logs,
-                            onClearLog = viewModel::clearLogs
-                        )
+                if (selectedControlPage == 0) {
+                    HomePage(
+                        presets = uiState.presetActions,
+                        activePresetId = uiState.activePresetId,
+                        isRunning = uiState.isPresetRunning,
+                        isMacroRunning = uiState.isMacroRunning,
+                        isConnected = when (uiState.connectionMode) {
+                            ConnectionMode.WIFI -> uiState.wifiConnected
+                            ConnectionMode.USB -> uiState.usbConnected
+                        },
+                        presetRepeatCounts = uiState.presetRepeatCounts,
+                        macroPresetIds = uiState.macroPresetIds,
+                        onHoming = viewModel::sendHoming,
+                        onRunPreset = viewModel::runPreset,
+                        onCyclePresetRepeat = viewModel::cyclePresetRepeat,
+                        onTogglePresetInMacro = viewModel::togglePresetInMacro,
+                        onRunMacro = viewModel::runMacro,
+                        onClearMacro = viewModel::clearMacro,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(top = 12.dp)
+                    ) {
+                        when (selectedControlPage) {
+                            1 -> JointControlPage(
+                                controlValues = uiState.controlValues,
+                                protocolPreview = uiState.protocolPreview,
+                                onControlChange = viewModel::updateControlValue,
+                                onAllZeros = viewModel::sendAllZeros,
+                                onGetStates = viewModel::requestStates,
+                                isConnected = when (uiState.connectionMode) {
+                                    ConnectionMode.WIFI -> uiState.wifiConnected
+                                    ConnectionMode.USB -> uiState.usbConnected
+                                }
+                            )
+                            2 -> GestureFollowPage(
+                                gestureService = gestureService,
+                                cameraState = uiState.gestureCameraState,
+                                onTargetHandChange = {
+                                    gestureService.setTargetHand(it)
+                                    viewModel.setGestureTargetHand(it)
+                                },
+                                onStartCalibration = { gestureService.startCalibration() },
+                                onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
+                                onCameraFlip = { viewModel.resetGestureSendState() }
+                            )
+                            3 -> LogPage(
+                                logs = uiState.logs,
+                                onClearLog = viewModel::clearLogs
+                            )
+                        }
                     }
                 }
             }

@@ -11,8 +11,6 @@ import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,7 +52,6 @@ import java.util.Locale
 
 // ============== Page 1: Home (归位 + 预设动作) ==============
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomePage(
     presets: List<PresetAction>,
@@ -79,16 +76,17 @@ fun HomePage(
     }.joinToString("  ->  ")
 
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxSize(),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 归位按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -106,17 +104,18 @@ fun HomePage(
                 }
             }
 
-            Text(
-                "常规动作",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Text(
+                    "常规动作",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 presets.forEach { preset ->
                     PresetActionTile(
                         preset = preset,
@@ -204,56 +203,44 @@ private fun PresetActionTile(
 
     Surface(
         modifier = Modifier
-            .heightIn(min = 118.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .clickable(enabled = isConnected && !isRunning, onClick = onRunPreset),
         shape = RoundedCornerShape(18.dp),
         color = containerColor
     ) {
-        Column(
+        Row(
             modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 10.dp)
-                .heightIn(min = 118.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.weight(1f, fill = false),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            Text(
+                preset.label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            OutlinedButton(
+                onClick = onCyclePresetRepeat,
+                modifier = Modifier.height(32.dp),
+                shape = RoundedCornerShape(12.dp),
+                enabled = !isRunning,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
             ) {
-                Text(
-                    preset.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    preset.subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text("X$repeatCount", fontSize = 12.sp)
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            OutlinedButton(
+                onClick = onTogglePresetInMacro,
+                modifier = Modifier.height(32.dp),
+                shape = RoundedCornerShape(12.dp),
+                enabled = !isRunning,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
             ) {
-                OutlinedButton(
-                    onClick = onCyclePresetRepeat,
-                    shape = RoundedCornerShape(12.dp),
-                    enabled = !isRunning,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                ) {
-                    Text("X$repeatCount", fontSize = 12.sp)
-                }
-                OutlinedButton(
-                    onClick = onTogglePresetInMacro,
-                    shape = RoundedCornerShape(12.dp),
-                    enabled = !isRunning,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                ) {
-                    Text(if (selectedForMacro) "已加宏" else "加入宏", fontSize = 11.sp)
-                }
+                Text(if (selectedForMacro) "宏中" else "加宏", fontSize = 11.sp)
             }
         }
     }

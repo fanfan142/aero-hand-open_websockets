@@ -50,6 +50,7 @@ import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraService
 import com.aerohand.gesture.GestureCameraState
+import com.aerohand.gesture.GestureMirrorMode
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.gesture.SkeletonOverlay
 
@@ -64,6 +65,13 @@ fun GestureFollowPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val hasVisibleSkeleton = cameraState.handDetected && cameraState.landmarks.size >= 21
+    val previewView = remember {
+        PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -80,7 +88,7 @@ fun GestureFollowPage(
 
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
-    var showSkeletonOverlay by remember { mutableStateOf(false) }
+    var showSkeletonOverlay by remember { mutableStateOf(true) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -103,12 +111,17 @@ fun GestureFollowPage(
                 ) {
                     CameraPreview(
                         gestureService = gestureService,
+                        previewView = previewView,
                         modifier = Modifier.fillMaxSize()
                     )
 
                     if (showSkeletonOverlay) {
                         SkeletonOverlay(
                             landmarks = cameraState.landmarks,
+                            previewView = previewView,
+                            mirrorX = cameraState.mirrorMode == GestureMirrorMode.SELFIE,
+                            frameWidth = cameraState.frameWidth,
+                            frameHeight = cameraState.frameHeight,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -245,7 +258,7 @@ fun GestureFollowPage(
                     )
                 }
                 Text(
-                    "FPS: ${"%.1f".format(cameraState.fps)}",
+                    if (hasVisibleSkeleton) "FPS: ${"%.1f".format(cameraState.fps)}" else "FPS: --",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -363,19 +376,9 @@ fun GestureFollowPage(
 @Composable
 private fun CameraPreview(
     gestureService: GestureCameraService,
+    previewView: PreviewView,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-
-    // Create a visible PreviewView
-    val previewView = remember {
-        PreviewView(context).apply {
-            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-        }
-    }
-
-    // Start camera with visible preview
     LaunchedEffect(previewView) {
         gestureService.startCamera(previewView)
     }

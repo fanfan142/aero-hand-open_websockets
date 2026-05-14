@@ -5,7 +5,9 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.random.Random
 
 /**
  * Compact 7DoF control definition for Aero Hand Open.
@@ -59,14 +61,29 @@ object SerialCommands {
 }
 
 object PresetActions {
+    private val flatOpen = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f)
+    private val sdkOpenPalm = floatArrayOf(10f, 10f, 10f, 10f, 10f, 10f, 10f)
     private val relaxedOpen = floatArrayOf(10f, 10f, 10f, 10f, 10f, 10f, 10f)
     private val naturalOpen = floatArrayOf(15f, 10f, 10f, 10f, 10f, 10f, 10f)
     private val powerFist = floatArrayOf(85f, 50f, 85f, 85f, 85f, 85f, 85f)
     private val rpsScissors = floatArrayOf(20f, 10f, 85f, 10f, 10f, 10f, 10f)
     private val victoryPose = floatArrayOf(30f, 15f, 10f, 10f, 10f, 80f, 80f)
+    private val peacePose = victoryPose.copyOf()
     private val thumbUpPose = floatArrayOf(80f, 55f, 20f, 10f, 10f, 10f, 10f)
+    private val thumbDownPose = floatArrayOf(80f, 55f, 80f, 10f, 10f, 10f, 10f)
     private val okPose = floatArrayOf(40f, 25f, 60f, 60f, 10f, 10f, 10f)
+    private val metalPose = floatArrayOf(20f, 10f, 10f, 10f, 80f, 80f, 10f)
     private val graspPose = floatArrayOf(100f, 55f, 30f, 60f, 60f, 60f, 60f)
+    private val helloPose = floatArrayOf(30f, 15f, 20f, 80f, 80f, 80f, 80f)
+    private val thanksPose = floatArrayOf(20f, 10f, 10f, 10f, 80f, 80f, 80f)
+    private val loveYouPose = floatArrayOf(50f, 30f, 20f, 20f, 80f, 80f, 80f)
+    private val screwGripPose = floatArrayOf(50f, 35f, 60f, 70f, 70f, 10f, 10f)
+    private val objectBallPose = floatArrayOf(30f, 20f, 50f, 50f, 50f, 50f, 50f)
+    private val objectPenPose = floatArrayOf(40f, 25f, 60f, 70f, 70f, 10f, 10f)
+    private val objectCardPose = floatArrayOf(50f, 35f, 30f, 80f, 80f, 80f, 80f)
+    private val magicVanishPose = floatArrayOf(50f, 35f, 30f, 80f, 80f, 80f, 80f)
+    private val magicAppearPose = floatArrayOf(20f, 10f, 10f, 20f, 20f, 20f, 20f)
+    private val magicPassPose = floatArrayOf(30f, 15f, 20f, 10f, 80f, 80f, 10f)
 
     private fun pose(values: FloatArray): Map<String, Float> {
         return ControlDefinitions.COMPACT_CONTROLS.mapIndexed { index, control ->
@@ -97,12 +114,46 @@ object PresetActions {
     }
 
     private fun buildRpsSteps(): List<PresetStep> = listOf(
-        step(1500, powerFist),
-        step(800, rpsScissors),
-        step(1500, naturalOpen),
-        step(500, naturalOpen),
+        step(240, sdkOpenPalm),
+        step(520, powerFist),
+        step(220, sdkOpenPalm),
+        step(520, rpsScissors),
+        step(220, sdkOpenPalm),
+        step(520, naturalOpen),
         step(350, relaxedOpen)
     )
+
+    private fun buildFingerTourSteps(): List<PresetStep> = listOf(
+        step(520, flatOpen),
+        step(420, floatArrayOf(100f, 35f, 23f, 0f, 0f, 0f, 50f)),
+        step(220, floatArrayOf(100f, 35f, 23f, 0f, 0f, 0f, 50f)),
+        step(420, floatArrayOf(100f, 42f, 23f, 0f, 0f, 52f, 0f)),
+        step(220, floatArrayOf(100f, 42f, 23f, 0f, 0f, 52f, 0f)),
+        step(420, floatArrayOf(83f, 42f, 23f, 0f, 50f, 0f, 0f)),
+        step(220, floatArrayOf(83f, 42f, 23f, 0f, 50f, 0f, 0f)),
+        step(420, floatArrayOf(75f, 25f, 30f, 50f, 0f, 0f, 0f)),
+        step(220, floatArrayOf(75f, 25f, 30f, 50f, 0f, 0f, 0f)),
+        step(320, flatOpen),
+        step(320, flatOpen),
+        step(420, peacePose),
+        step(900, peacePose),
+        step(320, flatOpen),
+        step(320, flatOpen),
+        step(420, floatArrayOf(0f, 0f, 0f, 0f, 90f, 90f, 0f)),
+        step(900, floatArrayOf(0f, 0f, 0f, 0f, 90f, 90f, 0f)),
+        step(420, flatOpen),
+        step(320, relaxedOpen)
+    )
+
+    private fun buildDemoRoutineSteps(): List<PresetStep> = buildList {
+        addAll(buildCountingSteps())
+        addAll(buildFistReleaseSteps())
+        addAll(buildPianoSteps())
+        addAll(buildPinchPracticeSteps())
+        addAll(buildTypingSteps())
+        addAll(buildRandomDanceSteps())
+        add(step(420, relaxedOpen))
+    }
 
     private fun buildWaveMeetSteps(): List<PresetStep> = buildList {
         val steps = 60
@@ -126,6 +177,29 @@ object PresetActions {
             add(step(delayMs, positions.map { it.toFloat() }.toFloatArray()))
         }
         add(step(300, relaxedOpen))
+    }
+
+    private fun buildWaveSteps(reverse: Boolean = false): List<PresetStep> = buildList {
+        val steps = 72
+        val delayMs = 40
+        val baseAngle = 25.0
+        val amplitude = 65.0
+        val phaseOffset = 0.8
+        for (index in 0 until steps) {
+            val t = (4.0 * PI * index) / (steps - 1).coerceAtLeast(1)
+            val positions = FloatArray(7) { joint ->
+                val phase = if (reverse) -joint * phaseOffset else joint * phaseOffset
+                val value = when (joint) {
+                    0 -> baseAngle + 75.0 * sin(t + phase)
+                    1 -> 20.0 + 20.0 * sin(t + phase)
+                    2 -> baseAngle + 60.0 * sin(t + phase)
+                    else -> baseAngle + amplitude * sin(t + phase)
+                }
+                value.toFloat()
+            }
+            add(step(delayMs, positions))
+        }
+        add(step(260, relaxedOpen))
     }
 
     private fun buildFanOpenSteps(): List<PresetStep> = listOf(
@@ -203,20 +277,493 @@ object PresetActions {
         add(step(300, relaxedOpen))
     }
 
+    private fun buildPianoSteps(): List<PresetStep> = buildList {
+        val sequence = listOf(3, 4, 5, 6, 5, 4, 3)
+        repeat(2) {
+            sequence.forEach { fingerIndex ->
+                val positions = FloatArray(7) { 10f }
+                positions[fingerIndex] = 70f
+                add(step(150, positions))
+                add(step(75, FloatArray(7) { 10f }))
+            }
+            add(step(220, naturalOpen))
+        }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildSpiralSteps(): List<PresetStep> = buildList {
+        val steps = 80
+        val delayMs = 60
+        for (index in 0 until steps) {
+            val t = (4 * PI * index) / (steps - 1).coerceAtLeast(1)
+            val phase = sin(t)
+            val centerAngle = 45 + 30 * phase
+            val spiralOffset = cos(t * 0.5) * 20
+            val positions = floatArrayOf(
+                (centerAngle + spiralOffset * 0.3).toFloat(),
+                (centerAngle * 0.6 + spiralOffset * 0.2).toFloat(),
+                (centerAngle + spiralOffset * 0.5).toFloat(),
+                (centerAngle + spiralOffset * 0.8).toFloat(),
+                (centerAngle + spiralOffset * 0.4).toFloat(),
+                (centerAngle + spiralOffset).toFloat(),
+                (centerAngle + spiralOffset * 1.2).toFloat()
+            ).mapIndexed { jointIndex, value ->
+                val control = ControlDefinitions.COMPACT_CONTROLS[jointIndex]
+                value.coerceIn(control.min, control.max)
+            }.toFloatArray()
+            add(step(delayMs, positions))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildClapSteps(): List<PresetStep> = listOf(
+        step(150, naturalOpen),
+        step(225, powerFist),
+        step(150, naturalOpen),
+        step(225, powerFist),
+        step(500, naturalOpen),
+        step(300, relaxedOpen)
+    )
+
+    private fun buildEmojiShowcaseSteps(): List<PresetStep> = listOf(
+        step(420, thumbUpPose),
+        step(180, naturalOpen),
+        step(420, thumbDownPose),
+        step(180, naturalOpen),
+        step(420, okPose),
+        step(180, naturalOpen),
+        step(420, victoryPose),
+        step(180, naturalOpen),
+        step(420, loveYouPose),
+        step(300, relaxedOpen)
+    )
+
+    private fun buildConductingSteps(): List<PresetStep> = buildList {
+        val conductingPose = floatArrayOf(30f, 15f, 30f, 40f, 40f, 40f, 40f)
+        val beatPoses = listOf(
+            floatArrayOf(50f, 25f, 50f, 60f, 60f, 60f, 60f),
+            floatArrayOf(20f, 10f, 20f, 30f, 50f, 50f, 50f),
+            floatArrayOf(20f, 10f, 20f, 50f, 30f, 50f, 50f),
+            floatArrayOf(20f, 10f, 20f, 20f, 20f, 20f, 20f)
+        )
+        repeat(2) {
+            add(step(500, conductingPose))
+            beatPoses.forEach { pose ->
+                add(step(300, pose))
+                add(step(90, conductingPose))
+            }
+            add(step(450, naturalOpen))
+        }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildGuitarStrumSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        listOf(2, 3, 4, 5, 6).forEach { fingerIndex ->
+            val positions = rest.copyOf()
+            positions[fingerIndex] = 60f
+            add(step(150, positions))
+        }
+        listOf(6, 5, 4, 3, 2).forEach { fingerIndex ->
+            val positions = rest.copyOf()
+            positions[fingerIndex] = 60f
+            add(step(150, positions))
+        }
+        add(step(300, floatArrayOf(30f, 20f, 40f, 70f, 70f, 70f, 70f)))
+        add(step(150, rest))
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildDrumRollSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        repeat(2) {
+            listOf(3, 4, 5, 6, 3, 4, 5, 6).forEach { fingerIndex ->
+                val positions = rest.copyOf()
+                positions[fingerIndex] = 70f
+                add(step(80, positions))
+            }
+            repeat(4) {
+                add(step(80, floatArrayOf(10f, 10f, 10f, 70f, 70f, 10f, 10f)))
+                add(step(80, floatArrayOf(10f, 10f, 10f, 10f, 10f, 70f, 70f)))
+            }
+            add(step(160, rest))
+        }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildFingerDanceSteps(): List<PresetStep> = buildList {
+        val segments = listOf(
+            Triple(2 * PI, 36, 0.0),
+            Triple(4 * PI, 36, 0.5),
+            Triple(3 * PI, 36, 1.0)
+        )
+        segments.forEachIndexed { segmentIndex, (maxT, count, phaseScale) ->
+            for (index in 0 until count) {
+                val t = maxT * index / (count - 1).coerceAtLeast(1)
+                val positions = FloatArray(7) { joint ->
+                    val value = when (segmentIndex) {
+                        0 -> 10 + 60 * sin(t - joint * 0.4).let { it * it }
+                        1 -> 45 + (30 + 20 * sin(t)) * sin(t + joint * phaseScale)
+                        else -> {
+                            val wave1 = sin(t + joint * 0.3)
+                            val wave2 = sin(2 * t + joint * 0.5) * 0.5
+                            val wave3 = sin(3 * t + joint * 0.7) * 0.3
+                            45 + 40 * (wave1 + wave2 + wave3)
+                        }
+                    }
+                    value.toFloat().coerceIn(0f, 90f)
+                }
+                add(step(40, positions))
+            }
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildScrewTwistSteps(): List<PresetStep> = buildList {
+        repeat(3) {
+            add(step(220, naturalOpen))
+            add(step(320, screwGripPose))
+            repeat(4) { turn ->
+                val phase = turn * PI / 2.0
+                add(step(140, floatArrayOf(
+                    50f,
+                    35f,
+                    (60 + 10 * sin(phase)).toFloat(),
+                    (70 + 10 * cos(phase)).toFloat(),
+                    70f,
+                    10f,
+                    10f
+                )))
+                add(step(140, floatArrayOf(
+                    50f,
+                    35f,
+                    (60 - 10 * sin(phase)).toFloat(),
+                    (70 - 10 * cos(phase)).toFloat(),
+                    70f,
+                    10f,
+                    10f
+                )))
+            }
+            add(step(260, naturalOpen))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildObjectGripSteps(): List<PresetStep> = buildList {
+        listOf(objectBallPose, objectPenPose, objectCardPose).forEach { grip ->
+            add(step(260, naturalOpen))
+            add(step(650, grip))
+            add(step(240, naturalOpen))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildRandomDanceSteps(): List<PresetStep> = buildList {
+        val random = Random(42)
+        val current = FloatArray(7) { 30f }
+        repeat(8) {
+            val target = FloatArray(7) { index ->
+                when (index) {
+                    0 -> 15f + random.nextFloat() * 75f
+                    1 -> 5f + random.nextFloat() * 45f
+                    else -> 10f + random.nextFloat() * 70f
+                }
+            }
+            repeat(3) {
+                for (joint in current.indices) {
+                    current[joint] += (target[joint] - current[joint]) * 0.45f
+                }
+                add(step(90, current.copyOf()))
+            }
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildMagicTrickSteps(): List<PresetStep> = listOf(
+        step(520, naturalOpen),
+        step(260, magicVanishPose),
+        step(260, naturalOpen),
+        step(520, powerFist),
+        step(320, magicAppearPose),
+        step(520, magicPassPose),
+        step(280, naturalOpen),
+        step(300, relaxedOpen)
+    )
+
+    private fun buildMorseSosSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        val tap = rest.copyOf().also { it[3] = 70f }
+
+        fun dot() {
+            add(step(150, tap))
+            add(step(180, rest))
+        }
+
+        fun dash() {
+            add(step(420, tap))
+            add(step(220, rest))
+        }
+
+        repeat(3) { dot() }
+        add(step(320, rest))
+        repeat(3) { dash() }
+        add(step(420, rest))
+        repeat(3) { dot() }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildJointIsolationSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        ControlDefinitions.COMPACT_CONTROLS.forEachIndexed { jointIndex, control ->
+            val positions = rest.copyOf()
+            positions[jointIndex] = (control.max * 0.7f).coerceIn(control.min, control.max)
+            add(step(180, rest))
+            add(step(420, positions))
+            add(step(220, rest))
+        }
+        add(step(260, FloatArray(7) { 60f }))
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildRangeMotionSteps(): List<PresetStep> = buildList {
+        ControlDefinitions.COMPACT_CONTROLS.forEachIndexed { jointIndex, control ->
+            for (stepIndex in 0..5) {
+                val progress = stepIndex / 5f
+                val positions = FloatArray(7) { control.min }
+                positions[jointIndex] = control.min + (control.max - control.min) * progress
+                add(step(60, positions))
+            }
+            for (stepIndex in 4 downTo 0) {
+                val progress = stepIndex / 5f
+                val positions = FloatArray(7) { control.min }
+                positions[jointIndex] = control.min + (control.max - control.min) * progress
+                add(step(60, positions))
+            }
+        }
+        add(step(250, naturalOpen))
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildSpeedCalibrationSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        val allFast = FloatArray(7) { 70f }
+        listOf(160, 100, 60, 35).forEach { delayMs ->
+            repeat(3) {
+                val positions = rest.copyOf()
+                positions[3] = 70f
+                add(step(delayMs, positions))
+                add(step(delayMs, rest))
+            }
+        }
+        listOf(160, 100, 60, 35).forEach { delayMs ->
+            repeat(3) {
+                add(step(delayMs, allFast))
+                add(step(delayMs, rest))
+            }
+        }
+        add(step(300, relaxedOpen))
+    }
+
+    private fun buildSignLanguageShowcaseSteps(): List<PresetStep> = buildList {
+        repeat(2) {
+            add(step(520, helloPose))
+            add(step(180, naturalOpen))
+            add(step(520, thanksPose))
+            add(step(180, naturalOpen))
+            add(step(520, loveYouPose))
+            add(step(260, naturalOpen))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildMemorySequenceSteps(): List<PresetStep> = buildList {
+        val sequence = listOf(
+            powerFist,
+            victoryPose,
+            naturalOpen,
+            thumbUpPose,
+            okPose,
+            powerFist
+        )
+        sequence.forEachIndexed { index, pose ->
+            val hold = if (index < 2) 520 else if (index < 4) 430 else 360
+            add(step(hold, pose))
+            add(step(180, relaxedOpen))
+        }
+        sequence.forEach { pose ->
+            add(step(260, pose))
+            add(step(120, relaxedOpen))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildReactionPulseSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        val reactionGrip = floatArrayOf(80f, 55f, 80f, 60f, 60f, 60f, 60f)
+        listOf(480, 360, 280, 220, 180).forEach { waitMs ->
+            add(step(waitMs, rest))
+            add(step(140, reactionGrip))
+            add(step(120, rest))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildWhackAMoleSteps(): List<PresetStep> = buildList {
+        val rest = FloatArray(7) { 10f }
+        val targets = listOf(3, 4, 5, 6, 4, 3, 6, 5)
+        targets.forEach { fingerIndex ->
+            val raise = rest.copyOf().also { it[fingerIndex] = 72f }
+            add(step(220, raise))
+            add(step(120, rest))
+            val strike = rest.copyOf().also { it[fingerIndex] = 88f }
+            add(step(130, strike))
+            add(step(120, rest))
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun chainRoutines(vararg routines: List<PresetStep>): List<PresetStep> = buildList {
+        val validRoutines = routines.filter { it.isNotEmpty() }
+        validRoutines.forEachIndexed { index, routine ->
+            addAll(routine)
+            if (index != validRoutines.lastIndex) {
+                add(step(220, naturalOpen))
+            }
+        }
+        add(step(320, relaxedOpen))
+    }
+
+    private fun buildFlexPackSteps(): List<PresetStep> = chainRoutines(
+        buildRpsSteps(),
+        buildFingerTourSteps(),
+        buildWaveSteps(),
+        buildWaveSteps(reverse = true),
+        buildWaveMeetSteps(),
+        buildFanOpenSteps(),
+        buildCountingSteps(),
+        buildFistReleaseSteps(),
+        buildTypingSteps(),
+        buildPianoSteps(),
+        buildSpiralSteps(),
+        buildRandomDanceSteps()
+    )
+
+    private fun buildGesturePackSteps(): List<PresetStep> = chainRoutines(
+        buildSignLanguageShowcaseSteps(),
+        buildEmojiShowcaseSteps(),
+        buildClapSteps()
+    )
+
+    private fun buildPrecisionPackSteps(): List<PresetStep> = chainRoutines(
+        buildPrecisionPinchSteps(),
+        buildPinchPracticeSteps(),
+        buildObjectGripSteps(),
+        buildScrewTwistSteps()
+    )
+
+    private fun buildArtPackSteps(): List<PresetStep> = chainRoutines(
+        buildConductingSteps(),
+        buildFingerDanceSteps(),
+        buildMagicTrickSteps()
+    )
+
+    private fun buildSportsPackSteps(): List<PresetStep> = chainRoutines(
+        buildDrumRollSteps(),
+        buildGuitarStrumSteps(),
+        buildMorseSosSteps()
+    )
+
+    private fun buildSciencePackSteps(): List<PresetStep> = chainRoutines(
+        buildJointIsolationSteps(),
+        buildRangeMotionSteps(),
+        buildSpeedCalibrationSteps()
+    )
+
+    private fun buildGamePackSteps(): List<PresetStep> = chainRoutines(
+        buildReactionPulseSteps(),
+        buildWhackAMoleSteps(),
+        buildMemorySequenceSteps()
+    )
+
+    private fun buildAllDemosOnceSteps(): List<PresetStep> = chainRoutines(
+        buildFlexPackSteps(),
+        buildGesturePackSteps(),
+        buildPrecisionPackSteps(),
+        buildArtPackSteps(),
+        buildSportsPackSteps(),
+        buildSciencePackSteps(),
+        buildGamePackSteps()
+    )
+
     val all = listOf(
+        PresetAction("flat_open", "平掌", "五指完全张开", listOf(step(450, flatOpen), step(250, relaxedOpen))),
+        PresetAction("sdk_open", "SDK 张手", "对齐 SDK examples 的开手姿态", listOf(step(450, sdkOpenPalm), step(250, relaxedOpen))),
+        PresetAction("rest_pose", "待机", "放松待机手型", listOf(step(450, relaxedOpen))),
         PresetAction("open_palm", "张开", "自然张手", listOf(step(450, naturalOpen))),
+        PresetAction("rock_pose", "石头", "SDK 猜拳单动作", listOf(step(520, powerFist), step(300, relaxedOpen))),
+        PresetAction("scissors_pose", "剪刀", "SDK 猜拳单动作", listOf(step(520, rpsScissors), step(300, relaxedOpen))),
+        PresetAction("paper_pose", "布", "SDK 猜拳单动作", listOf(step(520, naturalOpen), step(300, relaxedOpen))),
+        PresetAction("power_fist", "握拳", "标准握拳", listOf(step(500, powerFist), step(300, relaxedOpen))),
         PresetAction("power_grasp", "抓握", "力量抓取", listOf(step(500, graspPose), step(350, relaxedOpen))),
+        PresetAction("peace", "比耶", "和平手势", listOf(step(500, peacePose), step(300, relaxedOpen))),
         PresetAction("victory", "剪刀手", "标准 V 字手型", listOf(step(500, victoryPose), step(300, relaxedOpen))),
         PresetAction("thumb_up", "点赞", "拇指上举", listOf(step(500, thumbUpPose), step(300, relaxedOpen))),
+        PresetAction("thumb_down", "拇指向下", "参考 emoji 示例", listOf(step(500, thumbDownPose), step(300, relaxedOpen))),
         PresetAction("ok_gesture", "OK", "拇指食指成环", listOf(step(500, okPose), step(300, relaxedOpen))),
+        PresetAction("metal", "金属手势", "参考 emoji 示例", listOf(step(500, metalPose), step(300, relaxedOpen))),
+        PresetAction("pinch_index", "食指捏", "拇指食指捏合", listOf(step(500, pinchPose(3)), step(300, relaxedOpen))),
+        PresetAction("pinch_middle", "中指捏", "拇指中指捏合", listOf(step(500, pinchPose(4)), step(300, relaxedOpen))),
+        PresetAction("pinch_ring", "无名捏", "拇指无名指捏合", listOf(step(500, pinchPose(5)), step(300, relaxedOpen))),
+        PresetAction("pinch_pinky", "小指捏", "拇指小指捏合", listOf(step(500, pinchPose(6)), step(300, relaxedOpen))),
         PresetAction("precision_pinch", "三段捏取", "轻捏到紧捏", buildPrecisionPinchSteps()),
         PresetAction("pinch_practice", "轮指捏合", "拇指依次捏四指", buildPinchPracticeSteps()),
+        PresetAction("flex_pack", "灵活组", "参考 flexibility_moves 全套组合", buildFlexPackSteps()),
+        PresetAction("gesture_pack", "手势组", "参考 creative_moves 手势互动分类", buildGesturePackSteps()),
+        PresetAction("precision_pack", "精细组", "参考 creative_moves 精细操作分类", buildPrecisionPackSteps()),
+        PresetAction("art_pack", "艺术组", "参考 creative_moves 艺术创意分类", buildArtPackSteps()),
+        PresetAction("sports_pack", "运动组", "参考 creative_moves 运动技能分类", buildSportsPackSteps()),
+        PresetAction("science_pack", "科学组", "参考 creative_moves 科学演示分类", buildSciencePackSteps()),
+        PresetAction("game_pack", "游戏组", "参考 creative_moves 游戏互动分类", buildGamePackSteps()),
+        PresetAction("all_demos_once", "全套演示", "参考 run_all_demos 一次跑完", buildAllDemosOnceSteps()),
         PresetAction("rps", "猜拳", "石头剪刀布一轮", buildRpsSteps()),
+        PresetAction("finger_tour", "触指巡游", "参考 SDK run_sequence", buildFingerTourSteps()),
+        PresetAction("demo_routine", "综合演示", "参考 SDK demo_routine", buildDemoRoutineSteps()),
+        PresetAction("wave", "波浪", "参考 SDK wave_motion", buildWaveSteps()),
+        PresetAction("reverse_wave", "逆波浪", "参考 SDK reverse_wave_motion", buildWaveSteps(reverse = true)),
         PresetAction("wave_meet", "波浪汇聚", "参考 SDK 60 帧波浪", buildWaveMeetSteps()),
         PresetAction("fan_open", "扇形开合", "从拇指扫到小指", buildFanOpenSteps()),
         PresetAction("counting", "手指数数", "从 1 到 5 展开", buildCountingSteps()),
         PresetAction("fist_release", "逐指松拳", "握拳后逐个松开", buildFistReleaseSteps()),
-        PresetAction("typing", "打字节奏", "四组键击模式", buildTypingSteps())
+        PresetAction("typing", "打字节奏", "四组键击模式", buildTypingSteps()),
+        PresetAction("piano", "钢琴", "按 SDK 钢琴顺序敲击", buildPianoSteps()),
+        PresetAction("spiral", "螺旋", "手指螺旋收放", buildSpiralSteps()),
+        PresetAction("clap", "拍手", "快速开合两次", buildClapSteps()),
+        PresetAction("emoji_showcase", "表情组", "参考 SDK gesture_emoji_imitation", buildEmojiShowcaseSteps()),
+        PresetAction("conducting", "指挥", "四拍指挥手势", buildConductingSteps()),
+        PresetAction("guitar_strum", "扫弦", "从拇指到小指往返扫弦", buildGuitarStrumSteps()),
+        PresetAction("drum_roll", "滚奏", "四指连续敲击", buildDrumRollSteps()),
+        PresetAction("finger_dance", "手指舞", "三段式波形组合", buildFingerDanceSteps()),
+        PresetAction("random_dance", "随机舞蹈", "参考 SDK random_dance", buildRandomDanceSteps()),
+        PresetAction("ball_grip", "球抓", "SDK 物体抓取：球体", listOf(step(260, naturalOpen), step(650, objectBallPose), step(240, naturalOpen), step(320, relaxedOpen))),
+        PresetAction("pen_grip", "笔抓", "SDK 物体抓取：笔", listOf(step(260, naturalOpen), step(650, objectPenPose), step(240, naturalOpen), step(320, relaxedOpen))),
+        PresetAction("card_grip", "卡抓", "SDK 物体抓取：卡片", listOf(step(260, naturalOpen), step(650, objectCardPose), step(240, naturalOpen), step(320, relaxedOpen))),
+        PresetAction("magic_vanish", "消失", "SDK 魔术单动作", listOf(step(520, naturalOpen), step(260, magicVanishPose), step(260, naturalOpen), step(300, relaxedOpen))),
+        PresetAction("magic_appear", "出现", "SDK 魔术单动作", listOf(step(520, powerFist), step(320, magicAppearPose), step(260, naturalOpen), step(300, relaxedOpen))),
+        PresetAction("magic_pass", "穿越", "SDK 魔术单动作", listOf(step(520, magicPassPose), step(280, naturalOpen), step(300, relaxedOpen))),
+        PresetAction("magic_trick", "魔术", "参考 SDK artistic_magic_tricks", buildMagicTrickSteps()),
+        PresetAction("morse_sos", "摩斯 SOS", "参考 SDK sports_morse_code", buildMorseSosSteps()),
+        PresetAction("sign_showcase", "手语组", "参考 SDK gesture_sign_language_basic", buildSignLanguageShowcaseSteps()),
+        PresetAction("memory_sequence", "记忆序列", "参考 SDK game_memory_sequence", buildMemorySequenceSteps()),
+        PresetAction("reaction_pulse", "反应测试", "参考 SDK game_reaction_game", buildReactionPulseSteps()),
+        PresetAction("whack_a_mole", "打地鼠", "参考 SDK game_whack_a_mole", buildWhackAMoleSteps()),
+        PresetAction("joint_isolation", "单关节", "参考 SDK demo_joint_isolation_test", buildJointIsolationSteps()),
+        PresetAction("range_motion", "活动范围", "参考 SDK demo_range_of_motion", buildRangeMotionSteps()),
+        PresetAction("speed_burst", "速度测试", "参考 SDK demo_speed_calibration", buildSpeedCalibrationSteps()),
+        PresetAction("screw_twist", "拧螺丝", "参考 SDK precision_screw_twist", buildScrewTwistSteps()),
+        PresetAction("object_grip", "物体抓取", "参考 SDK precision_object_manipulation", buildObjectGripSteps()),
+        PresetAction("hello", "你好", "参考 SDK 基础手语", listOf(step(500, helloPose), step(300, relaxedOpen))),
+        PresetAction("thanks", "谢谢", "参考 SDK 基础手语", listOf(step(500, thanksPose), step(300, relaxedOpen))),
+        PresetAction("love_you", "我爱你", "参考 SDK 基础手语", listOf(step(500, loveYouPose), step(300, relaxedOpen)))
     )
 
     fun find(id: String): PresetAction? = all.firstOrNull { it.id == id }

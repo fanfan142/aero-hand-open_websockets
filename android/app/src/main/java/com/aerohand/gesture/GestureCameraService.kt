@@ -2,10 +2,9 @@ package com.aerohand.gesture
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Bitmap
-import android.graphics.Matrix
-import android.util.Size
+import android.media.Image
 import android.util.Log
+import android.util.Size
 import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -15,15 +14,17 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.framework.image.MediaImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -39,15 +40,16 @@ class GestureCameraService(
     companion object {
         private const val TAG = "GestureCameraService"
         private const val NUM_HANDS = 1
-        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.5f
-        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.5f
-        private const val MIN_TRACKING_CONFIDENCE = 0.5f
+        private const val MIN_HAND_DETECTION_CONFIDENCE = 0.45f
+        private const val MIN_HAND_PRESENCE_CONFIDENCE = 0.25f
+        private const val MIN_TRACKING_CONFIDENCE = 0.25f
         private const val HAND_LANDMARKER_MODEL_ASSET = "hand_landmarker.task"
         private const val FPS_WINDOW = 10
         private const val VIDEO_FRAME_INTERVAL_MS = 33L
-        private const val UI_STATE_INTERVAL_MS = 100L
-        private val ANALYSIS_TARGET_SIZE = Size(480, 360)
-        private const val CALIB_SCHEMA = 2
+        private const val UI_STATE_INTERVAL_MS = 33L
+        private val FRONT_ANALYSIS_TARGET_SIZE = Size(320, 240)
+        private val BACK_ANALYSIS_TARGET_SIZE = Size(320, 240)
+        private const val CALIB_SCHEMA = 3
         private const val MIN_FINGER_RANGE = 12f
         private const val MIN_THUMB_SWING_RANGE = 10f
         private const val MAX_LOST_FRAME_MS = 300L
@@ -80,14 +82,16 @@ class GestureCameraService(
     private var smoothedValues = FloatArray(7) { 0f }
     private var smoothedThumbSwing = 0f
     private var needsInitialUpdate = true
-    private var lastFrameTime = System.nanoTime()
     private var lastHandDetectedMs = 0L
     private var lastUiStatePublishMs = 0L
-    private var frameTimeBuffer = mutableListOf<Long>()
+    private var lastResultTimeNs = 0L
+    private var resultFrameTimeBuffer = mutableListOf<Long>()
     private val videoTimestampMs = AtomicLong(0L)
     private var targetHand: GestureTargetHand = GestureTargetHand.AUTO
     private var useFrontCamera: Boolean = true
     private var cameraPreviewView: PreviewView? = null
+    private var latestProcessingFps = 0f
+    private var currentDelegate: Delegate? = null
 
     init {
         loadCalibration()
@@ -107,15 +111,21 @@ class GestureCameraService(
     @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun setupImageAnalysis(previewView: PreviewView) {
         val provider = cameraProvider ?: return
-        val preview = Preview.Builder().build().also {
+        resetDetectionLoop()
+        val targetSize = analysisTargetSize()
+        val targetRotation = previewView.display.rotation
+        val preview = Preview.Builder()
+            .setTargetResolution(targetSize)
+            .setTargetRotation(targetRotation)
+            .build()
+            .also {
             it.setSurfaceProvider(previewView.surfaceProvider)
         }
 
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-            .setTargetResolution(ANALYSIS_TARGET_SIZE)
-            .setTargetRotation(previewView.display.rotation)
+            .setTargetResolution(targetSize)
+            .setTargetRotation(targetRotation)
             .build()
             .also { analysis ->
                 analysis.setAnalyzer(cameraExecutor) { imageProxy -> processImage(imageProxy) }
@@ -141,112 +151,114 @@ class GestureCameraService(
 
     @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun processImage(imageProxy: ImageProxy) {
+        var mpImage: MPImage? = null
+        val frameSize = resolvedFrameSize(imageProxy)
         try {
-            val currentTime = System.nanoTime()
-            val delta = (currentTime - lastFrameTime) / 1_000_000f
-            lastFrameTime = currentTime
-            frameTimeBuffer.add(delta.toLong())
-            if (frameTimeBuffer.size > FPS_WINDOW) frameTimeBuffer.removeAt(0)
-            val avgDelta = frameTimeBuffer.average().toFloat()
-            val fps = if (avgDelta > 0) 1000f / avgDelta else 0f
-
-            val bitmap = imageProxyToBitmap(imageProxy)
-            if (bitmap != null) {
-                detectHand(BitmapImageBuilder(bitmap).build(), fps, imageProxy.imageInfo.timestamp / 1_000_000L)
+            if (handLandmarker == null) {
+                initializeHandLandmarker()
+                if (handLandmarker == null) {
+                    markNoHand(latestProcessingFps, "MediaPipe 初始化失败", frameSize.width, frameSize.height)
+                    return
+                }
             }
+
+            val detector = handLandmarker ?: run {
+                markNoHand(latestProcessingFps, "手势识别器未就绪", frameSize.width, frameSize.height)
+                return
+            }
+            mpImage = imageProxyToMpImage(imageProxy)
+            val processingOptions = ImageProcessingOptions.builder()
+                .setRotationDegrees(imageProxy.imageInfo.rotationDegrees)
+                .build()
+            val result = detector.detectForVideo(
+                mpImage,
+                processingOptions,
+                nextVideoTimestamp(imageProxy.imageInfo.timestamp / 1_000_000L)
+            )
+            val fps = updateProcessingFps()
+            processResult(result, fps, frameSize.width, frameSize.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame processing failed", e)
-            markNoHand(0f, "图像处理失败")
+            val recovered = fallbackToCpu("同步视频检测异常")
+            markNoHand(
+                latestProcessingFps,
+                if (recovered) "检测器异常，已切换 CPU，请将手掌完整放入画面" else "图像处理失败",
+                frameSize.width,
+                frameSize.height
+            )
         } finally {
+            runCatching { mpImage?.close() }
             imageProxy.close()
         }
     }
 
-    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
-        return try {
-            val bitmap = rgbaImageProxyToBitmap(imageProxy)
-            val rotation = imageProxy.imageInfo.rotationDegrees
-            val matrix = Matrix()
-            if (rotation != 0) matrix.postRotate(rotation.toFloat())
-            if (useFrontCamera) matrix.postScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f)
-            if (rotation != 0 || useFrontCamera) Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true) else bitmap
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to convert image to bitmap", e)
-            null
+    private fun imageProxyToMpImage(imageProxy: ImageProxy): MPImage {
+        val mediaImage = imageProxy.image
+            ?: throw IllegalStateException("CameraX image unavailable")
+        return mediaImageToMpImage(mediaImage)
+    }
+
+    private fun mediaImageToMpImage(mediaImage: Image): MPImage {
+        return MediaImageBuilder(mediaImage).build()
+    }
+
+    private fun nextVideoTimestamp(frameTimestampMs: Long): Long {
+        return if (frameTimestampMs > 0) {
+            val prev = videoTimestampMs.get()
+            val next = if (frameTimestampMs > prev) frameTimestampMs else prev + VIDEO_FRAME_INTERVAL_MS
+            videoTimestampMs.set(next)
+            next
+        } else {
+            videoTimestampMs.addAndGet(VIDEO_FRAME_INTERVAL_MS)
         }
     }
 
-    private fun rgbaImageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
-        val plane = imageProxy.planes[0]
-        val buffer = plane.buffer
-        buffer.rewind()
-
-        val width = imageProxy.width
-        val height = imageProxy.height
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-
-        if (pixelStride == 4 && rowStride == width * 4) {
-            bitmap.copyPixelsFromBuffer(buffer)
-            return bitmap
-        }
-
-        val packed = ByteArray(width * height * 4)
-        var dst = 0
-        for (row in 0 until height) {
-            val rowStart = row * rowStride
-            if (rowStart >= buffer.limit()) break
-            buffer.position(rowStart)
-            for (col in 0 until width) {
-                val src = rowStart + col * pixelStride
-                if (src + 3 >= buffer.limit() || dst + 3 >= packed.size) break
-                packed[dst++] = buffer.get(src)
-                packed[dst++] = buffer.get(src + 1)
-                packed[dst++] = buffer.get(src + 2)
-                packed[dst++] = buffer.get(src + 3)
+    private fun updateProcessingFps(): Float {
+        val now = System.nanoTime()
+        if (lastResultTimeNs != 0L) {
+            val deltaMs = ((now - lastResultTimeNs) / 1_000_000L).coerceAtLeast(1L)
+            resultFrameTimeBuffer.add(deltaMs)
+            if (resultFrameTimeBuffer.size > FPS_WINDOW) {
+                resultFrameTimeBuffer.removeAt(0)
             }
+            val avgDelta = resultFrameTimeBuffer.average().toFloat()
+            latestProcessingFps = if (avgDelta > 0f) 1000f / avgDelta else latestProcessingFps
         }
-        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(packed))
-        return bitmap
+        lastResultTimeNs = now
+        return latestProcessingFps
     }
 
-    private fun detectHand(mpImage: MPImage, fps: Float, frameTimestampMs: Long) {
-        if (handLandmarker == null) {
-            initializeHandLandmarker()
-            if (handLandmarker == null) {
-                markNoHand(fps, "MediaPipe 初始化失败")
-                return
-            }
+    private fun resolvedFrameSize(imageProxy: ImageProxy): Size {
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val rotated = rotation == 90 || rotation == 270
+        return if (rotated) {
+            Size(imageProxy.height, imageProxy.width)
+        } else {
+            Size(imageProxy.width, imageProxy.height)
         }
-        val result = try {
-            val ts = if (frameTimestampMs > 0) {
-                val prev = videoTimestampMs.get()
-                val next = if (frameTimestampMs > prev) frameTimestampMs else prev + VIDEO_FRAME_INTERVAL_MS
-                videoTimestampMs.set(next)
-                next
-            } else {
-                videoTimestampMs.addAndGet(VIDEO_FRAME_INTERVAL_MS)
-            }
-            handLandmarker?.detectForVideo(mpImage, ts)
-        } catch (e: Exception) {
-            Log.e(TAG, "Hand detection failed", e)
-            null
-        }
-        if (result != null) processResult(result, fps) else markNoHand(fps, "未检测到手")
     }
 
-    private fun processResult(result: HandLandmarkerResult, fps: Float) {
+    private fun processResult(result: HandLandmarkerResult, fps: Float, frameWidth: Int, frameHeight: Int) {
         val landmarks = result.landmarks()
         if (landmarks.isEmpty()) {
-            markNoHand(fps, "未检测到手，请将目标手完整放入画面")
+            markNoHand(
+                fps,
+                "未检测到手，请将目标手完整放入画面",
+                frameWidth,
+                frameHeight
+            )
+            return
+        }
+        val firstHandLandmarks = landmarks.firstOrNull()
+        if (firstHandLandmarks == null || firstHandLandmarks.size < 21) {
+            markNoHand(fps, "骨架点数量不足，请将整只手放入画面", frameWidth, frameHeight)
             return
         }
 
         val rawMpHand = result.handedness().firstOrNull()?.firstOrNull()?.categoryName().orEmpty()
         val actualHand = resolveHandedness(rawMpHand)
         val targetMatched = targetHand.matches(actualHand)
-        val rawAngles = computeFingerAngles(landmarks[0], actualHand)
+        val rawAngles = computeFingerAngles(firstHandLandmarks, actualHand)
         val smoothed = applySmoothing(rawAngles)
         val calibrationState = activeCalibrationState(actualHand)
         val calibrated = if (calibrationState == CalibrationState.CALIBRATED) remapByCalibration(smoothedValues) else smoothed
@@ -277,7 +289,9 @@ class GestureCameraService(
             cameraFacing = currentFacing(),
             mirrorMode = currentMirror(),
             fps = fps,
-            landmarks = landmarks[0]
+            frameWidth = frameWidth,
+            frameHeight = frameHeight,
+            landmarks = firstHandLandmarks
         )
         publishUiState(
             nextState,
@@ -286,23 +300,40 @@ class GestureCameraService(
                 oldState.calibrationState != calibrationState ||
                 oldState.cameraFacing != currentFacing() ||
                 oldState.mirrorMode != currentMirror() ||
-                oldState.feedbackMessage != feedback
+                oldState.feedbackMessage != feedback ||
+                oldState.frameWidth != frameWidth ||
+                oldState.frameHeight != frameHeight
         )
     }
 
-    private fun markNoHand(fps: Float, message: String) {
+    private fun markNoHand(
+        fps: Float,
+        message: String,
+        frameWidth: Int = _state.value.frameWidth,
+        frameHeight: Int = _state.value.frameHeight
+    ) {
         val now = System.currentTimeMillis()
         val keepLastAngles = now - lastHandDetectedMs < MAX_LOST_FRAME_MS
         val oldState = _state.value
-        _controlFrame.value = GestureControlFrame(false, message = message)
+        val retainedAngles = if (keepLastAngles) oldState.calibratedAngles else FingerAngles()
+        val keepControl = keepLastAngles &&
+            oldState.targetHandMatched &&
+            oldState.calibrationState == CalibrationState.CALIBRATED
+        _controlFrame.value = if (keepControl) {
+            GestureControlFrame(true, retainedAngles, message)
+        } else {
+            GestureControlFrame(false, message = message)
+        }
         publishUiState(oldState.copy(
             handDetected = false,
             handedness = "",
             targetHand = targetHand,
             targetHandMatched = targetHand == GestureTargetHand.AUTO,
             feedbackMessage = message,
-            calibratedAngles = if (keepLastAngles) _state.value.calibratedAngles else FingerAngles(),
+            calibratedAngles = retainedAngles,
             fps = fps,
+            frameWidth = frameWidth,
+            frameHeight = frameHeight,
             landmarks = emptyList()
         ), force = oldState.handDetected || oldState.feedbackMessage != message)
     }
@@ -315,40 +346,73 @@ class GestureCameraService(
         }
     }
 
-    private fun initializeHandLandmarker() {
-        try {
-            val optionsBuilder = HandLandmarker.HandLandmarkerOptions.builder()
+    private fun initializeHandLandmarker(preferredDelegate: Delegate? = null) {
+        handLandmarker?.close()
+        handLandmarker = null
+        currentDelegate = null
+
+        val hasModelAsset = runCatching {
+            context.assets.open(HAND_LANDMARKER_MODEL_ASSET).use { true }
+        }.getOrElse { false }
+
+        val delegatesToTry = when (preferredDelegate) {
+            Delegate.CPU -> listOf(Delegate.CPU, Delegate.GPU)
+            Delegate.GPU -> listOf(Delegate.GPU, Delegate.CPU)
+            else -> listOf(Delegate.GPU, Delegate.CPU)
+        }
+
+        for (delegate in delegatesToTry) {
+            val detector = createHandLandmarker(hasModelAsset, delegate) ?: continue
+            handLandmarker = detector
+            currentDelegate = delegate
+            break
+        }
+    }
+
+    private fun createHandLandmarker(
+        hasModelAsset: Boolean,
+        delegate: Delegate
+    ): HandLandmarker? {
+        return try {
+            val baseOptionsBuilder = BaseOptions.builder()
+                .setDelegate(delegate)
+            if (hasModelAsset) {
+                baseOptionsBuilder.setModelAssetPath(HAND_LANDMARKER_MODEL_ASSET)
+            }
+
+            val options = HandLandmarker.HandLandmarkerOptions.builder()
+                .setBaseOptions(baseOptionsBuilder.build())
                 .setRunningMode(RunningMode.VIDEO)
                 .setNumHands(NUM_HANDS)
                 .setMinHandDetectionConfidence(MIN_HAND_DETECTION_CONFIDENCE)
                 .setMinHandPresenceConfidence(MIN_HAND_PRESENCE_CONFIDENCE)
                 .setMinTrackingConfidence(MIN_TRACKING_CONFIDENCE)
-            val hasModelAsset = runCatching {
-                context.assets.open(HAND_LANDMARKER_MODEL_ASSET).use { true }
-            }.getOrElse { false }
-            if (hasModelAsset) {
-                optionsBuilder.setBaseOptions(
-                    com.google.mediapipe.tasks.core.BaseOptions.builder()
-                        .setModelAssetPath(HAND_LANDMARKER_MODEL_ASSET)
-                        .build()
-                )
+                .build()
+
+            HandLandmarker.createFromOptions(context, options).also {
+                Log.i(TAG, "Hand landmarker initialized (delegate=$delegate, customModel=$hasModelAsset)")
             }
-            handLandmarker = HandLandmarker.createFromOptions(context, optionsBuilder.build())
-            Log.i(TAG, "Hand landmarker initialized (customModel=$hasModelAsset)")
         } catch (e: Exception) {
-            Log.e(TAG, "Hand landmarker initialization failed", e)
-            handLandmarker = null
+            Log.w(TAG, "Hand landmarker init failed with delegate=$delegate", e)
+            null
         }
     }
 
     fun toggleCamera(): Boolean {
         useFrontCamera = !useFrontCamera
+        resetDetectionLoop()
         cameraProvider?.unbindAll()
         cameraPreviewView?.let { setupImageAnalysis(it) }
         return useFrontCamera
     }
 
     fun isFrontCamera(): Boolean = useFrontCamera
+
+    private fun analysisTargetSize(): Size = if (useFrontCamera) {
+        FRONT_ANALYSIS_TARGET_SIZE
+    } else {
+        BACK_ANALYSIS_TARGET_SIZE
+    }
 
     fun setTargetHand(targetHand: GestureTargetHand) {
         this.targetHand = targetHand
@@ -385,31 +449,25 @@ class GestureCameraService(
         val hand = canonicalHandedness(mpHand)
         if (hand.isBlank()) return ""
 
-        val preferredByCamera = if (currentMirror() == GestureMirrorMode.NORMAL) {
-            swapHandedness(hand)
-        } else {
-            hand
-        }
-        val alternate = swapHandedness(preferredByCamera)
-        val preferredScore = handednessScore(preferredByCamera, preferredByCamera)
-        val alternateScore = handednessScore(alternate, preferredByCamera)
-        return if (alternateScore > preferredScore) alternate else preferredByCamera
+        // CameraX analyzer 喂给检测器的是未镜像原始帧，优先保留 MediaPipe 原始手别。
+        val preferredByInput = hand
+        val alternate = swapHandedness(preferredByInput)
+        val preferredScore = handednessScore(preferredByInput, preferredByInput)
+        val alternateScore = handednessScore(alternate, preferredByInput)
+        return if (alternateScore > preferredScore) alternate else preferredByInput
     }
 
     private fun handednessScore(candidate: String, preferredByCamera: String): Int {
         if (candidate.isBlank()) return Int.MIN_VALUE
 
         var score = 0
-        if (targetHand != GestureTargetHand.AUTO) {
-            score += if (targetHand.matches(candidate)) 8 else -8
-        }
         profile?.let { saved ->
             if (saved.matchesHand(candidate)) {
                 score += 6
             }
         }
         if (candidate == preferredByCamera) {
-            score += 1
+            score += 2
         }
         return score
     }
@@ -736,7 +794,7 @@ class GestureCameraService(
 
     fun stopCamera() {
         cameraProvider?.unbindAll()
-        videoTimestampMs.set(0L)
+        resetDetectionLoop()
         _controlFrame.value = GestureControlFrame(false, message = "相机未运行")
         publishUiState(_state.value.copy(isRunning = false), force = true)
     }
@@ -746,5 +804,21 @@ class GestureCameraService(
         handLandmarker?.close()
         handLandmarker = null
         cameraExecutor.shutdown()
+    }
+
+    private fun fallbackToCpu(reason: String): Boolean {
+        if (currentDelegate != Delegate.GPU) {
+            return false
+        }
+        Log.w(TAG, "$reason，尝试切换到 CPU delegate")
+        initializeHandLandmarker(preferredDelegate = Delegate.CPU)
+        return currentDelegate == Delegate.CPU
+    }
+
+    private fun resetDetectionLoop() {
+        videoTimestampMs.set(0L)
+        lastResultTimeNs = 0L
+        resultFrameTimeBuffer.clear()
+        latestProcessingFps = 0f
     }
 }

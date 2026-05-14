@@ -61,6 +61,8 @@ data class GestureCameraState(
     val cameraFacing: GestureCameraFacing = GestureCameraFacing.FRONT,
     val mirrorMode: GestureMirrorMode = GestureMirrorMode.SELFIE,
     val fps: Float = 0f,
+    val frameWidth: Int = 0,
+    val frameHeight: Int = 0,
     val landmarks: List<NormalizedLandmark> = emptyList()
 )
 

@@ -66,4 +66,30 @@ class ProtocolTest {
         assertEquals("multi_joint_control", payload.getString("type"))
         assertEquals(15, payload.getJSONObject("data").getJSONArray("joints").length())
     }
+
+    @Test
+    fun presetActions_haveValidUniqueStepsInsideCompactRanges() {
+        val ids = PresetActions.all.map { it.id }
+        assertEquals(ids.size, ids.toSet().size)
+
+        val controlsById = ControlDefinitions.COMPACT_CONTROLS.associateBy { it.id }
+        PresetActions.all.forEach { preset ->
+            assertTrue("${preset.id} should have at least one step", preset.steps.isNotEmpty())
+            preset.steps.forEachIndexed { index, step ->
+                assertTrue("${preset.id}[$index] duration must be positive", step.durationMs > 0)
+                assertEquals(
+                    "${preset.id}[$index] should command every compact control",
+                    controlsById.keys,
+                    step.values.keys
+                )
+                step.values.forEach { (controlId, value) ->
+                    val control = controlsById.getValue(controlId)
+                    assertTrue(
+                        "${preset.id}[$index].$controlId=$value outside ${control.min}..${control.max}",
+                        value in control.min..control.max
+                    )
+                }
+            }
+        }
+    }
 }

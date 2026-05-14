@@ -59,6 +59,10 @@ htmlcov/
 # Build artifacts (generated during build process)
 firmware_ws_build/
 release_assets/
+android_ci_artifacts/
+firmware_release/
+release_downloads/
+.playwright-mcp/
 
 # Claude / AI / local agent context (auto-generated, do not commit)
 .claude/
