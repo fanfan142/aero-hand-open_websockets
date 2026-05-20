@@ -8,7 +8,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import kotlin.math.hypot
 
 private val HAND_CONNECTIONS = listOf(
@@ -21,7 +20,7 @@ private val HAND_CONNECTIONS = listOf(
 )
 
 private fun mapWithOutputTransform(
-    landmarks: List<NormalizedLandmark>,
+    landmarks: List<GestureLandmark>,
     previewView: PreviewView?
 ): List<Offset>? {
     val transform = previewView
@@ -31,8 +30,8 @@ private fun mapWithOutputTransform(
 
     val mapped = FloatArray(landmarks.size * 2)
     landmarks.forEachIndexed { index, landmark ->
-        mapped[index * 2] = landmark.x()
-        mapped[index * 2 + 1] = landmark.y()
+        mapped[index * 2] = landmark.x
+        mapped[index * 2 + 1] = landmark.y
     }
     transform.mapPoints(mapped)
     val points = landmarks.indices.map { index ->
@@ -44,7 +43,7 @@ private fun mapWithOutputTransform(
 }
 
 private fun mapWithFitCenter(
-    landmarks: List<NormalizedLandmark>,
+    landmarks: List<GestureLandmark>,
     canvasWidth: Float,
     canvasHeight: Float,
     frameWidth: Int,
@@ -60,22 +59,22 @@ private fun mapWithFitCenter(
     val offsetY = (canvasHeight - contentHeight) * 0.5f
     return landmarks.map { landmark ->
         Offset(
-            x = offsetX + (if (mirrorX) 1f - landmark.x() else landmark.x()) * contentWidth,
-            y = offsetY + landmark.y() * contentHeight
+            x = offsetX + (if (mirrorX) 1f - landmark.x else landmark.x) * contentWidth,
+            y = offsetY + landmark.y * contentHeight
         )
     }
 }
 
 private fun mapWithCanvasNormalized(
-    landmarks: List<NormalizedLandmark>,
+    landmarks: List<GestureLandmark>,
     canvasWidth: Float,
     canvasHeight: Float,
     mirrorX: Boolean
 ): List<Offset> {
     return landmarks.map { landmark ->
         Offset(
-            x = (if (mirrorX) 1f - landmark.x() else landmark.x()) * canvasWidth,
-            y = landmark.y() * canvasHeight
+            x = (if (mirrorX) 1f - landmark.x else landmark.x) * canvasWidth,
+            y = landmark.y * canvasHeight
         )
     }
 }
@@ -126,7 +125,7 @@ private fun scoreMappedPoints(
 }
 
 private fun pickBestMappedPoints(
-    landmarks: List<NormalizedLandmark>,
+    landmarks: List<GestureLandmark>,
     previewView: PreviewView?,
     canvasWidth: Float,
     canvasHeight: Float,
@@ -144,7 +143,7 @@ private fun pickBestMappedPoints(
 
 @Composable
 fun SkeletonOverlay(
-    landmarks: List<NormalizedLandmark>,
+    landmarks: List<GestureLandmark>,
     previewView: PreviewView? = null,
     mirrorX: Boolean = false,
     frameWidth: Int = 0,

@@ -52,6 +52,8 @@ import com.aerohand.gesture.GestureCameraService
 import com.aerohand.gesture.GestureCameraState
 import com.aerohand.gesture.GestureMirrorMode
 import com.aerohand.gesture.GestureTargetHand
+import com.aerohand.gesture.GestureTuningChannel
+import com.aerohand.gesture.GestureTuningProfile
 import com.aerohand.gesture.SkeletonOverlay
 
 @Composable
@@ -89,6 +91,7 @@ fun GestureFollowPage(
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
     var showSkeletonOverlay by remember { mutableStateOf(true) }
+    var selectedTuningChannel by remember { mutableStateOf(GestureTuningChannel.THUMB_ABD) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -285,6 +288,9 @@ fun GestureFollowPage(
                     append(" · 控制目标：${cameraState.targetHand.label}")
                     append(" · ${cameraState.cameraFacing.label}")
                     append(" · ${cameraState.mirrorMode.label}")
+                    if (cameraState.trackerBackend.isNotBlank()) {
+                        append(" · ${cameraState.trackerBackend}")
+                    }
                     cameraState.calibrationProfile?.let { profile ->
                         append(" · 标定：${handLabel(profile.handSide)} ${profile.cameraFacing.label}")
                     }
@@ -316,6 +322,24 @@ fun GestureFollowPage(
             FingerStatusBars(
                 angles = if (cameraState.calibrationState == CalibrationState.CALIBRATED)
                     cameraState.calibratedAngles else cameraState.smoothedAngles
+            )
+
+            TuningPanel(
+                tuningProfile = cameraState.tuningProfile,
+                selectedChannel = selectedTuningChannel,
+                onPreviousChannel = {
+                    selectedTuningChannel = previousTuningChannel(selectedTuningChannel)
+                },
+                onNextChannel = {
+                    selectedTuningChannel = nextTuningChannel(selectedTuningChannel)
+                },
+                onGainDelta = { delta ->
+                    gestureService.adjustTuning(selectedTuningChannel, gainDelta = delta)
+                },
+                onOffsetDelta = { delta ->
+                    gestureService.adjustTuning(selectedTuningChannel, offsetDelta = delta)
+                },
+                onReset = { gestureService.resetTuning() }
             )
 
             // Calibration buttons
@@ -407,6 +431,107 @@ private fun handLabel(hand: String): String {
         "Left" -> "左手"
         "Right" -> "右手"
         else -> "未识别"
+    }
+}
+
+private fun previousTuningChannel(channel: GestureTuningChannel): GestureTuningChannel {
+    val entries = GestureTuningChannel.entries
+    val index = (channel.ordinal - 1 + entries.size) % entries.size
+    return entries[index]
+}
+
+private fun nextTuningChannel(channel: GestureTuningChannel): GestureTuningChannel {
+    val entries = GestureTuningChannel.entries
+    val index = (channel.ordinal + 1) % entries.size
+    return entries[index]
+}
+
+@Composable
+private fun TuningPanel(
+    tuningProfile: GestureTuningProfile,
+    selectedChannel: GestureTuningChannel,
+    onPreviousChannel: () -> Unit,
+    onNextChannel: () -> Unit,
+    onGainDelta: (Float) -> Unit,
+    onOffsetDelta: (Float) -> Unit,
+    onReset: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(onClick = onPreviousChannel, shape = RoundedCornerShape(12.dp)) {
+                    Text("上一项")
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        selectedChannel.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "增益 ${"%.2f".format(tuningProfile.gainAt(selectedChannel))} · 偏移 ${
+                            "%.1f".format(tuningProfile.offsetAt(selectedChannel))
+                        }",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(onClick = onNextChannel, shape = RoundedCornerShape(12.dp)) {
+                    Text("下一项")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onGainDelta(-0.05f) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("增益-")
+                }
+                OutlinedButton(
+                    onClick = { onGainDelta(0.05f) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("增益+")
+                }
+                OutlinedButton(
+                    onClick = { onOffsetDelta(-2f) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("偏移-")
+                }
+                OutlinedButton(
+                    onClick = { onOffsetDelta(2f) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("偏移+")
+                }
+            }
+            OutlinedButton(
+                onClick = onReset,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("重置微调")
+            }
+        }
     }
 }
 
