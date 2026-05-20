@@ -7,6 +7,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -122,7 +123,7 @@ class GestureCameraService(
             .build()
             .also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-        imageAnalysis = ImageAnalysis.Builder()
+        val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .setTargetResolution(analysisTargetSize())
@@ -131,6 +132,7 @@ class GestureCameraService(
             .also { analysis ->
                 analysis.setAnalyzer(cameraExecutor) { imageProxy -> processImage(imageProxy) }
             }
+        imageAnalysis = analysis
 
         val selector = if (useFrontCamera) {
             CameraSelector.DEFAULT_FRONT_CAMERA
@@ -140,7 +142,18 @@ class GestureCameraService(
 
         try {
             provider.unbindAll()
-            provider.bindToLifecycle(lifecycleOwner, selector, preview, imageAnalysis)
+            val viewPort = previewView.viewPort
+            if (viewPort == null) {
+                Log.w(TAG, "PreviewView viewport unavailable; binding camera without shared viewport")
+                provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+            } else {
+                val useCaseGroup = UseCaseGroup.Builder()
+                    .addUseCase(preview)
+                    .addUseCase(analysis)
+                    .setViewPort(viewPort)
+                    .build()
+                provider.bindToLifecycle(lifecycleOwner, selector, useCaseGroup)
+            }
             publishUiState(
                 _state.value.copy(
                     isRunning = true,

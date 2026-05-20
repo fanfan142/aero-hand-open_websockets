@@ -41,14 +41,25 @@ class GestureFrameConverter(
         val buffer = plane.buffer
         buffer.rewind()
 
-        val width = imageProxy.width
-        val height = imageProxy.height
+        val cropRect = imageProxy.cropRect
+        val width = cropRect.width().coerceAtLeast(1)
+        val height = cropRect.height().coerceAtLeast(1)
         val outputSize = detectionBitmapSize(width, height)
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
         val bitmap = Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
 
-        if (outputSize.width == width && outputSize.height == height && pixelStride == 4 && rowStride == width * 4) {
+        val usesFullBuffer = cropRect.left == 0 &&
+            cropRect.top == 0 &&
+            cropRect.width() == imageProxy.width &&
+            cropRect.height() == imageProxy.height
+        if (
+            usesFullBuffer &&
+            outputSize.width == width &&
+            outputSize.height == height &&
+            pixelStride == 4 &&
+            rowStride == width * 4
+        ) {
             bitmap.copyPixelsFromBuffer(buffer)
             return bitmap
         }
@@ -56,11 +67,13 @@ class GestureFrameConverter(
         val packed = ByteArray(outputSize.width * outputSize.height * 4)
         var dst = 0
         for (row in 0 until outputSize.height) {
-            val sourceY = (row.toFloat() * height / outputSize.height).toInt().coerceIn(0, height - 1)
+            val cropY = (row.toFloat() * height / outputSize.height).toInt().coerceIn(0, height - 1)
+            val sourceY = cropRect.top + cropY
             val rowStart = sourceY * rowStride
             if (rowStart >= buffer.limit()) break
             for (col in 0 until outputSize.width) {
-                val sourceX = (col.toFloat() * width / outputSize.width).toInt().coerceIn(0, width - 1)
+                val cropX = (col.toFloat() * width / outputSize.width).toInt().coerceIn(0, width - 1)
+                val sourceX = cropRect.left + cropX
                 val src = rowStart + sourceX * pixelStride
                 if (src + 3 >= buffer.limit() || dst + 3 >= packed.size) break
                 packed[dst++] = buffer.get(src)

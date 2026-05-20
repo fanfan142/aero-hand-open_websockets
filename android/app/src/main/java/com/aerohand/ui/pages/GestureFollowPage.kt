@@ -119,10 +119,9 @@ fun GestureFollowPage(
                     )
 
                     if (showSkeletonOverlay) {
+                        // Preview pixels and analysis pixels already share horizontal orientation.
                         SkeletonOverlay(
                             landmarks = cameraState.landmarks,
-                            previewView = previewView,
-                            mirrorX = cameraState.mirrorMode == GestureMirrorMode.SELFIE,
                             frameWidth = cameraState.frameWidth,
                             frameHeight = cameraState.frameHeight,
                             modifier = Modifier.fillMaxSize()
