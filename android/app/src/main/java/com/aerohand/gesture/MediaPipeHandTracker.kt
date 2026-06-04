@@ -33,7 +33,17 @@ class MediaPipeHandTracker private constructor(
                 if (landmarks.size < 21) return@mapIndexedNotNull null
                 val category = result.handedness().getOrNull(index)?.firstOrNull()
                 TrackedHand(
-                    landmarks = landmarks.map { GestureLandmark(it.x(), it.y(), it.z()) },
+                    landmarks = landmarks.map {
+                        val originalX = it.x()
+                        val originalY = it.y()
+                        val (rotatedX, rotatedY) = when (rotationDegrees) {
+                            90 -> Pair(1.0f - originalY, originalX)
+                            180 -> Pair(1.0f - originalX, 1.0f - originalY)
+                            270, -90 -> Pair(originalY, 1.0f - originalX)
+                            else -> Pair(originalX, originalY)
+                        }
+                        GestureLandmark(rotatedX, rotatedY, it.z())
+                    },
                     handedness = GestureAngleEstimator.canonicalHandedness(category?.categoryName().orEmpty()),
                     confidence = category?.score() ?: 0f
                 )
