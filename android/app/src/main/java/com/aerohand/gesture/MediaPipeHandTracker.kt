@@ -37,9 +37,9 @@ class MediaPipeHandTracker private constructor(
                         val originalX = it.x()
                         val originalY = it.y()
                         val (rotatedX, rotatedY) = when (rotationDegrees) {
-                            90 -> Pair(1.0f - originalY, originalX)
+                            90 -> Pair(originalY, 1.0f - originalX)
                             180 -> Pair(1.0f - originalX, 1.0f - originalY)
-                            270, -90 -> Pair(originalY, 1.0f - originalX)
+                            270, -90 -> Pair(1.0f - originalY, originalX)
                             else -> Pair(originalX, originalY)
                         }
                         GestureLandmark(rotatedX, rotatedY, it.z())
