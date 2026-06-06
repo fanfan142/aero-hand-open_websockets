@@ -7,6 +7,45 @@ import org.junit.Test
 class GestureAngleEstimatorTest {
     @Test
     fun estimateReportsStraightAndBentFingers() {
+        val landmarks = sampleLandmarks()
+
+        val angles = GestureAngleEstimator.estimate(landmarks, "Right")
+
+        assertTrue(angles.indexTendon in 85f..90f)
+        assertTrue(angles.middleTendon < 2f)
+        assertTrue(angles.ringTendon in 85f..90f)
+        assertTrue(angles.pinkyTendon < 2f)
+    }
+
+    @Test
+    fun previewRotationDoesNotChangeControlAngleContract() {
+        val rawLandmarks = sampleLandmarks()
+        val previewLandmarks = GestureLandmarkTransforms.forPreview(
+            landmarks = rawLandmarks,
+            rotationDegrees = 90,
+            mirrorMode = GestureMirrorMode.SELFIE
+        )
+
+        val rawAngles = GestureAngleEstimator.estimate(rawLandmarks, "Right")
+
+        assertTrue(previewLandmarks != rawLandmarks)
+        assertTrue(rawAngles.indexTendon in 85f..90f)
+        assertTrue(rawAngles.middleTendon < 2f)
+        assertTrue(rawAngles.ringTendon in 85f..90f)
+        assertTrue(rawAngles.pinkyTendon < 2f)
+    }
+
+    @Test
+    fun tuningProfileAppliesGainAndOffsetWithinChannelLimits() {
+        val profile = GestureTuningProfile.default()
+            .withAdjustment(GestureTuningChannel.INDEX_TENDON, gainDelta = 0.5f, offsetDelta = 20f)
+
+        val tuned = profile.applyTo(FingerAngles(indexTendon = 80f))
+
+        assertEquals(90f, tuned.indexTendon, 0.001f)
+    }
+
+    private fun sampleLandmarks(): MutableList<GestureLandmark> {
         val landmarks = MutableList(21) { GestureLandmark(0f, 0f, 0f) }
 
         landmarks[0] = GestureLandmark(0f, -1f)
@@ -35,21 +74,6 @@ class GestureAngleEstimatorTest {
         landmarks[19] = GestureLandmark(2f, 3f)
         landmarks[20] = GestureLandmark(3f, 3f)
 
-        val angles = GestureAngleEstimator.estimate(landmarks, "Right")
-
-        assertTrue(angles.indexTendon in 85f..90f)
-        assertTrue(angles.middleTendon < 2f)
-        assertTrue(angles.ringTendon in 85f..90f)
-        assertTrue(angles.pinkyTendon < 2f)
-    }
-
-    @Test
-    fun tuningProfileAppliesGainAndOffsetWithinChannelLimits() {
-        val profile = GestureTuningProfile.default()
-            .withAdjustment(GestureTuningChannel.INDEX_TENDON, gainDelta = 0.5f, offsetDelta = 20f)
-
-        val tuned = profile.applyTo(FingerAngles(indexTendon = 80f))
-
-        assertEquals(90f, tuned.indexTendon, 0.001f)
+        return landmarks
     }
 }
