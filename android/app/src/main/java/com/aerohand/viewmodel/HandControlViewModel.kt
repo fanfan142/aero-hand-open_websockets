@@ -431,9 +431,6 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
         }
     }
-            mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
-        }
-    }
 
     fun switchDeviceToAp() {
         val state = _uiState.value
