@@ -35,6 +35,15 @@ String g_staDns1 = STA_DNS1;
 String g_staDns2 = STA_DNS2;
 uint8_t g_wifiModeSetting = WIFI_MODE;
 
+enum PendingWifiAction {
+    WIFI_ACTION_NONE = 0,
+    WIFI_ACTION_CONNECT_STA = 1,
+    WIFI_ACTION_START_AP = 2,
+    WIFI_ACTION_CLEAR_STA = 3,
+};
+static volatile uint8_t g_pendingWifiAction = WIFI_ACTION_NONE;
+static uint32_t g_pendingWifiActionAt = 0;
+
 // 关节名称定义
 const char* const JOINT_NAMES[JOINT_COUNT] = {
     "thumb_proximal",
@@ -86,6 +95,8 @@ const char* getWifiModeName();
 String getCurrentIp();
 void setupWiFi();
 void blinkLED(int times);
+void scheduleWifiAction(PendingWifiAction action);
+void processPendingWifiAction();
 
 // ============================================
 // 初始化
@@ -144,6 +155,7 @@ void setup() {
 void loop() {
     // 处理WebSocket事件
     wsServer.loop();
+    processPendingWifiAction();
 
     // 其他周期性任务可以添加在这里
     delay(COMMAND_INTERVAL_MS);
@@ -298,6 +310,35 @@ void setupWiFi() {
         connectToSta(true);
     } else {
         DEBUG_PRINTF("[WIFI] Starting AP mode: %s\n", AP_SSID);
+        startApMode();
+    }
+}
+
+void scheduleWifiAction(PendingWifiAction action) {
+    g_pendingWifiAction = action;
+    g_pendingWifiActionAt = millis() + 500;
+}
+
+void processPendingWifiAction() {
+    if (g_pendingWifiAction == WIFI_ACTION_NONE) return;
+    uint32_t now = millis();
+    if ((int32_t)(now - g_pendingWifiActionAt) < 0) return;
+
+    PendingWifiAction action = (PendingWifiAction)g_pendingWifiAction;
+    g_pendingWifiAction = WIFI_ACTION_NONE;
+
+    if (action == WIFI_ACTION_CONNECT_STA) {
+        bool connected = connectToSta(true);
+        if (connected) {
+            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+            saveWiFiConfig();
+        }
+    } else if (action == WIFI_ACTION_START_AP) {
+        g_wifiModeSetting = AH_WIFI_MODE_AP;
+        saveWiFiConfig();
+        startApMode();
+    } else if (action == WIFI_ACTION_CLEAR_STA) {
+        clearWiFiConfig();
         startApMode();
     }
 }
@@ -509,28 +550,19 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         sendWifiStatus(clientNum);
 
     } else if (strcmp(type, "wifi_connect_sta") == 0) {
-        bool connected = connectToSta(true);
-        if (connected) {
-            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
-            saveWiFiConfig();
-            sendResponse(clientNum, true, "STA connected");
-        } else {
-            sendResponse(clientNum, false, "STA connection failed");
-        }
+        sendResponse(clientNum, true, "STA switch scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_CONNECT_STA);
 
     } else if (strcmp(type, "wifi_start_ap") == 0) {
-        g_wifiModeSetting = AH_WIFI_MODE_AP;
-        saveWiFiConfig();
-        startApMode();
-        sendResponse(clientNum, true, "AP started");
+        sendResponse(clientNum, true, "AP switch scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_START_AP);
 
     } else if (strcmp(type, "wifi_clear_sta") == 0) {
-        clearWiFiConfig();
-        startApMode();
-        sendResponse(clientNum, true, "STA config cleared");
+        sendResponse(clientNum, true, "STA config clear scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_CLEAR_STA);
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);

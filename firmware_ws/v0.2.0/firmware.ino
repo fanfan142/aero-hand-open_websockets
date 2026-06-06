@@ -43,6 +43,15 @@ String g_staSubnet = STA_SUBNET;
 String g_staDns1 = STA_DNS1;
 String g_staDns2 = STA_DNS2;
 
+enum PendingWifiAction {
+  WIFI_ACTION_NONE = 0,
+  WIFI_ACTION_CONNECT_STA = 1,
+  WIFI_ACTION_START_AP = 2,
+  WIFI_ACTION_CLEAR_STA = 3,
+};
+static volatile uint8_t g_pendingWifiAction = WIFI_ACTION_NONE;
+static uint32_t g_pendingWifiActionAt = 0;
+
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
 static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
@@ -179,6 +188,8 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
 void sendWsResponse(uint8_t clientNum, bool success, const char* message);
 void broadcastJointStates();
 void blinkLED(int times);
+void scheduleWifiAction(PendingWifiAction action);
+void processPendingWifiAction();
 
 // 关节名称映射 (新增)
 static const char* const JOINT_NAMES[JOINT_COUNT] = {
@@ -1129,6 +1140,35 @@ void setupWiFi() {
     }
 }
 
+void scheduleWifiAction(PendingWifiAction action) {
+    g_pendingWifiAction = action;
+    g_pendingWifiActionAt = millis() + 500;
+}
+
+void processPendingWifiAction() {
+    if (g_pendingWifiAction == WIFI_ACTION_NONE) return;
+    uint32_t now = millis();
+    if ((int32_t)(now - g_pendingWifiActionAt) < 0) return;
+
+    PendingWifiAction action = (PendingWifiAction)g_pendingWifiAction;
+    g_pendingWifiAction = WIFI_ACTION_NONE;
+
+    if (action == WIFI_ACTION_CONNECT_STA) {
+        bool connected = connectToSta(true);
+        if (connected) {
+            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+            saveWiFiConfig();
+        }
+    } else if (action == WIFI_ACTION_START_AP) {
+        g_wifiModeSetting = AH_WIFI_MODE_AP;
+        saveWiFiConfig();
+        startApMode();
+    } else if (action == WIFI_ACTION_CLEAR_STA) {
+        clearWiFiConfig();
+        startApMode();
+    }
+}
+
 // WebSocket事件处理
 void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
     switch (type) {
@@ -1366,28 +1406,19 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         sendWifiStatus(clientNum);
 
     } else if (strcmp(type, "wifi_connect_sta") == 0) {
-        bool connected = connectToSta(true);
-        if (connected) {
-            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
-            saveWiFiConfig();
-            sendWsResponse(clientNum, true, "STA connected");
-        } else {
-            sendWsResponse(clientNum, false, "STA connection failed");
-        }
+        sendWsResponse(clientNum, true, "STA switch scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_CONNECT_STA);
 
     } else if (strcmp(type, "wifi_start_ap") == 0) {
-        g_wifiModeSetting = AH_WIFI_MODE_AP;
-        saveWiFiConfig();
-        startApMode();
-        sendWsResponse(clientNum, true, "AP started");
+        sendWsResponse(clientNum, true, "AP switch scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_START_AP);
 
     } else if (strcmp(type, "wifi_clear_sta") == 0) {
-        clearWiFiConfig();
-        startApMode();
-        sendWsResponse(clientNum, true, "STA config cleared");
+        sendWsResponse(clientNum, true, "STA config clear scheduled");
         sendWifiStatus(clientNum);
+        scheduleWifiAction(WIFI_ACTION_CLEAR_STA);
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
@@ -1498,6 +1529,7 @@ void loop() {
   }
 
   updateLEDBlink();
+  processPendingWifiAction();
   applyPendingWsTarget();
   checkAndEnforceSoftLimits();
   vTaskDelay(pdMS_TO_TICKS(COMMAND_INTERVAL_MS));

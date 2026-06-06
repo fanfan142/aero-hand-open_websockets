@@ -99,6 +99,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private var lastGestureSendTimeMs: Long = 0L
     private var lastGestureUiUpdateTimeMs: Long = 0L
     private var gestureControlReady = false
+    private var pendingWifiTransitionMessage: String? = null
 
     companion object {
         private const val GESTURE_SEND_INTERVAL_MS = 16L
@@ -110,6 +111,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     init {
         viewModelScope.launch {
             webSocketService.connectionState.collectLatest { state ->
+                val transitionMessage = pendingWifiTransitionMessage
+                if (state is ConnectionState.Connected) {
+                    pendingWifiTransitionMessage = null
+                }
                 mutateState {
                     copy(
                         wifiConnected = state is ConnectionState.Connected,
@@ -118,8 +123,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                         statusMessage = when (state) {
                             is ConnectionState.Connected -> "WiFi 已连接 ${state.server}"
                             is ConnectionState.Connecting -> "WiFi 连接中..."
-                            is ConnectionState.Error -> state.message
-                            ConnectionState.Disconnected -> if (connectionMode == ConnectionMode.WIFI) "WiFi 未连接" else statusMessage
+                            is ConnectionState.Error -> transitionMessage ?: state.message
+                            ConnectionState.Disconnected -> if (connectionMode == ConnectionMode.WIFI) {
+                                transitionMessage ?: "WiFi 未连接"
+                            } else {
+                                statusMessage
+                            }
                         }
                     )
                 }
@@ -295,7 +304,15 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (state.connectionMode) {
             ConnectionMode.WIFI -> {
                 val host = state.host.trim().ifBlank { "192.168.4.1" }
-                val port = state.port.toIntOrNull() ?: 8765
+                val port = state.port.toIntOrNull()
+                if (host.isBlank()) {
+                    mutateState { copy(statusMessage = "Host 不能为空") }
+                    return
+                }
+                if (port == null || port !in 1..65535) {
+                    mutateState { copy(statusMessage = "端口范围应为 1-65535") }
+                    return
+                }
                 webSocketService.connect(host, port)
             }
             ConnectionMode.USB -> {
@@ -365,12 +382,27 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "仅连接设备默认 AP 时允许下发 WiFi 配置") }
             return
         }
+        val ssid = wifiConfig.staSsid.trim()
+        val password = wifiConfig.staPassword.trim()
+        if (ssid.isBlank()) {
+            mutateState { copy(statusMessage = "请输入 STA WiFi 名称") }
+            return
+        }
+        if (password.isBlank()) {
+            mutateState { copy(statusMessage = "请输入 STA WiFi 密码") }
+            return
+        }
         val targetIp = wifiConfig.staticIp.ifBlank { "192.168.1.210" }
         val targetGateway = wifiConfig.gateway.ifBlank { "192.168.1.1" }
         val targetDns1 = wifiConfig.dns1.ifBlank { targetGateway }
+        if (!isValidIpv4(targetIp)) {
+            mutateState { copy(statusMessage = "静态 IP 格式不合法") }
+            return
+        }
+        pendingWifiTransitionMessage = "已请求切 STA，请将手机 WiFi 换到 ${ssid}，然后连接 $targetIp:8765"
         val sentConfig = webSocketService.sendWifiConfig(
-            wifiConfig.staSsid,
-            wifiConfig.staPassword,
+            ssid,
+            password,
             targetIp,
             targetGateway,
             wifiConfig.subnet.ifBlank { "255.255.255.0" },
@@ -383,10 +415,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 copy(
                     host = targetIp,
                     port = "8765",
-                    statusMessage = "已发送配置；手机切到目标 WiFi 后连接 $targetIp:8765",
+                    statusMessage = pendingWifiTransitionMessage ?: statusMessage,
                     wifiConfig = wifiConfig.copy(
                         staPassword = "",
-                        configuredStaSsid = wifiConfig.staSsid,
+                        configuredStaSsid = ssid,
                         staticIp = targetIp,
                         gateway = targetGateway,
                         dns1 = targetDns1,
@@ -395,6 +427,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 )
             }
         } else {
+            pendingWifiTransitionMessage = null
+            mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
+        }
+    }
             mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
         }
     }
@@ -406,11 +442,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         if (webSocketService.switchToAp()) {
+            pendingWifiTransitionMessage = "设备即将切回 AP，请将手机 WiFi 重连到 AeroHand_WIFI，然后重连 192.168.4.1:8765"
             mutateState {
                 copy(
                     host = "192.168.4.1",
                     port = "8765",
-                    statusMessage = "已请求设备切回 AP 模式"
+                    statusMessage = pendingWifiTransitionMessage ?: statusMessage
                 )
             }
         } else {
@@ -425,9 +462,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         if (webSocketService.clearWifiConfig()) {
+            pendingWifiTransitionMessage = "已清除 STA 配置，设备即将切回 AP"
             mutateState {
                 copy(
-                    statusMessage = "已清除设备 STA 配置",
+                    statusMessage = pendingWifiTransitionMessage ?: statusMessage,
                     wifiConfig = wifiConfig.copy(staSsid = "", staPassword = "", configuredStaSsid = null)
                 )
             }
@@ -615,6 +653,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private fun mutateState(transform: HandControlUiState.() -> HandControlUiState) {
         val next = _uiState.value.transform()
         _uiState.value = next.copy(protocolPreview = buildProtocolPreview(next.controlValues))
+    }
+
+    private fun isValidIpv4(value: String): Boolean {
+        return value.split(".").let { parts ->
+            parts.size == 4 && parts.all { segment ->
+                segment.toIntOrNull()?.let { it in 0..255 } == true
+            }
+        }
     }
 
     override fun onCleared() {
