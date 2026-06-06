@@ -1,7 +1,7 @@
 # Aero Hand Open WebSocket 控制套件
 
+https://github.com/user-attachments/assets/b9ed0a9f-7e19-4603-96f7-cb8995c56a5b
 
-https://github.com/fanfan142/aero-hand-open_websockets/blob/main/aero-hand-open_websockets.mp4
 <p align="center">
   <img src="https://img.shields.io/badge/project-Aero%20Hand%20Open-blue" alt="project">
   <img src="https://img.shields.io/badge/android-Compose-brightgreen" alt="android">
