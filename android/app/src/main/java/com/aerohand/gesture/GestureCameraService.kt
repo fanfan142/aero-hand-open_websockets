@@ -205,7 +205,13 @@ class GestureCameraService(
                 sourceSize = frame.sourceSize,
                 detectionSize = frame.detectionSize
             )
-            processHands(hands, fps, frame.displaySize.width, frame.displaySize.height)
+            processHands(
+                hands = hands,
+                fps = fps,
+                frameWidth = frame.displaySize.width,
+                frameHeight = frame.displaySize.height,
+                rotationDegrees = frame.rotationDegrees
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Frame processing failed", e)
             if (handTracker?.backendName?.contains("GPU") == true) {
@@ -231,7 +237,8 @@ class GestureCameraService(
         hands: List<TrackedHand>,
         fps: Float,
         frameWidth: Int,
-        frameHeight: Int
+        frameHeight: Int,
+        rotationDegrees: Int
     ) {
         if (hands.isEmpty()) {
             markNoHand(fps, "未检测到手，请将目标手完整放入画面", frameWidth, frameHeight)
@@ -251,7 +258,13 @@ class GestureCameraService(
             return
         }
         val targetMatched = targetHand.matches(detectedHand)
-        val rawAngles = GestureAngleEstimator.estimate(chosen.tracked.landmarks, detectedHand)
+        val controlLandmarks = chosen.tracked.landmarks
+        val previewLandmarks = GestureLandmarkTransforms.forPreview(
+            landmarks = controlLandmarks,
+            rotationDegrees = rotationDegrees,
+            mirrorMode = currentMirror()
+        )
+        val rawAngles = GestureAngleEstimator.estimate(controlLandmarks, detectedHand)
         val smoothedAngles = applySmoothing(rawAngles)
         rememberSample(detectedHand, smoothedAngles)
 
@@ -305,7 +318,7 @@ class GestureCameraService(
             frameWidth = frameWidth,
             frameHeight = frameHeight,
             trackerBackend = handTracker?.backendName.orEmpty(),
-            landmarks = chosen.tracked.landmarks
+            landmarks = previewLandmarks
         )
         publishUiState(
             nextState,
