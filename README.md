@@ -3,7 +3,7 @@
 <video src="./aero-hand-open_websockets.mp4" controls width="100%"></video>
 
 [如果 GitHub 没有自动显示视频，点击这里打开演示文件](./aero-hand-open_websockets.mp4)
-
+https://github.com/fanfan142/aero-hand-open_websockets/blob/main/aero-hand-open_websockets.mp4
 <p align="center">
   <img src="https://img.shields.io/badge/project-Aero%20Hand%20Open-blue" alt="project">
   <img src="https://img.shields.io/badge/android-Compose-brightgreen" alt="android">
