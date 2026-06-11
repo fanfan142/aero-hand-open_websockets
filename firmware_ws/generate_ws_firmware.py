@@ -105,18 +105,33 @@ void setupWiFi() {
     // AP模式 - ESP32开热点
     DEBUG_PRINTF("[WIFI] Starting AP mode: %s\\n", AP_SSID);
 
+    WiFi.persistent(false);
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true, false);
+    delay(150);
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
-
-    IPAddress IP = WiFi.softAPIP();
-    DEBUG_PRINT("[WIFI] AP IP address: ");
-    DEBUG_PRINTLN(IP.toString());
+    WiFi.setSleep(false);
+    IPAddress apIp(192, 168, 4, 1);
+    IPAddress apGateway(192, 168, 4, 1);
+    IPAddress apSubnet(255, 255, 255, 0);
+    bool configOk = WiFi.softAPConfig(apIp, apGateway, apSubnet);
+    bool started = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
+    delay(100);
+    DEBUG_PRINTF("[WIFI] AP config=%s started=%s ssid=%s ip=%s\\n",
+                 configOk ? "ok" : "fail",
+                 started ? "ok" : "fail",
+                 AP_SSID,
+                 WiFi.softAPIP().toString().c_str());
 
 #elif WIFI_MODE == 2
     // STA模式 - 连接路由器
     DEBUG_PRINTF("[WIFI] Connecting to: %s\\n", STA_SSID);
 
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true, false);
+    delay(100);
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
     WiFi.begin(STA_SSID, STA_PASSWORD);
 
     int attempts = 0;
@@ -133,8 +148,16 @@ void setupWiFi() {
     } else {
         DEBUG_PRINTLN();
         DEBUG_PRINTLN("[WIFI] Connection failed, starting AP as fallback");
+        WiFi.softAPdisconnect(true);
+        WiFi.disconnect(true, false);
+        delay(150);
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(AP_SSID, AP_PASSWORD);
+        WiFi.setSleep(false);
+        IPAddress apIp(192, 168, 4, 1);
+        IPAddress apGateway(192, 168, 4, 1);
+        IPAddress apSubnet(255, 255, 255, 0);
+        WiFi.softAPConfig(apIp, apGateway, apSubnet);
+        WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
     }
 
 #endif

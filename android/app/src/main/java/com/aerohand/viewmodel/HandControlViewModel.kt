@@ -439,7 +439,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         if (webSocketService.switchToAp()) {
-            pendingWifiTransitionMessage = "设备即将切回 AP，请将手机 WiFi 重连到 AeroHand_WIFI，然后重连 192.168.4.1:8765"
+            pendingWifiTransitionMessage = "设备即将切回 AP，请将手机 WiFi 重连到 AeroHand_Right/Left，然后重连 192.168.4.1:8765"
             mutateState {
                 copy(
                     host = "192.168.4.1",

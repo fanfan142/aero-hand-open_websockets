@@ -18,7 +18,7 @@ class GestureAngleEstimatorTest {
     }
 
     @Test
-    fun previewRotationDoesNotChangeControlAngleContract() {
+    fun previewTransformKeepsMediaPipeCoordinatesForOverlay() {
         val rawLandmarks = sampleLandmarks()
         val previewLandmarks = GestureLandmarkTransforms.forPreview(
             landmarks = rawLandmarks,
@@ -28,7 +28,7 @@ class GestureAngleEstimatorTest {
 
         val rawAngles = GestureAngleEstimator.estimate(rawLandmarks, "Right")
 
-        assertTrue(previewLandmarks != rawLandmarks)
+        assertEquals(rawLandmarks, previewLandmarks)
         assertTrue(rawAngles.indexTendon in 85f..90f)
         assertTrue(rawAngles.middleTendon < 2f)
         assertTrue(rawAngles.ringTendon in 85f..90f)

@@ -710,12 +710,23 @@ void clearWiFiConfig() {
 }
 
 void startApMode() {
-    WiFi.disconnect(true, true);
-    delay(100);
+    WiFi.persistent(false);
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true, false);
+    delay(150);
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL);
-    DEBUG_PRINT("[WIFI] AP IP address: ");
-    DEBUG_PRINTLN(WiFi.softAPIP().toString());
+    WiFi.setSleep(false);
+    IPAddress apIp(192, 168, 4, 1);
+    IPAddress apGateway(192, 168, 4, 1);
+    IPAddress apSubnet(255, 255, 255, 0);
+    bool configOk = WiFi.softAPConfig(apIp, apGateway, apSubnet);
+    bool started = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
+    delay(100);
+    DEBUG_PRINTF("[WIFI] AP config=%s started=%s ssid=%s ip=%s\n",
+                 configOk ? "ok" : "fail",
+                 started ? "ok" : "fail",
+                 AP_SSID,
+                 WiFi.softAPIP().toString().c_str());
 }
 
 bool connectToSta(bool fallbackToAp) {
@@ -727,9 +738,11 @@ bool connectToSta(bool fallbackToAp) {
         return false;
     }
 
-    WiFi.disconnect(true, true);
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect(true, false);
     delay(100);
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
     WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
