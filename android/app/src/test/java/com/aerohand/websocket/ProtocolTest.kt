@@ -1,6 +1,7 @@
 package com.aerohand.websocket
 
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,6 +35,47 @@ class ProtocolTest {
     }
 
     @Test
+    fun statesResponseFromActuatorEquivalentState_roundTripsToCompactState() {
+        val state = compactStateOf(listOf(50f, 20f, 30f, 45f, 50f, 55f, 60f))
+        val restored = compactStateFromActuations(compactStateToActuations(state))
+        val response = JSONObject().apply {
+            put("type", "states_response")
+            put("success", true)
+            put("data", JSONObject().apply {
+                put("joints", JSONArray().apply {
+                    put(jointState("thumb_proximal", restored.getValue("thumb_cmc_flex")))
+                    put(jointState("thumb_distal", restored.getValue("thumb_mcp_ip")))
+                    listOf("index", "middle", "ring", "pinky").forEach { finger ->
+                        val angle = restored.getValue("${finger}_flexion")
+                        put(jointState("${finger}_proximal", angle))
+                        put(jointState("${finger}_middle", angle))
+                        put(jointState("${finger}_distal", angle))
+                    }
+                    put(
+                        jointState(
+                            "thumb_rotation",
+                            mapRange(
+                                restored.getValue("thumb_cmc_abd"),
+                                0f,
+                                100f,
+                                ControlDefinitions.THUMB_ROTATION_MIN,
+                                ControlDefinitions.THUMB_ROTATION_MAX
+                            )
+                        )
+                    )
+                })
+            })
+        }
+
+        val parsed = parseStatesResponse(response.toString())
+        val compact = compactStateFromJointStates(requireNotNull(parsed))
+
+        state.forEach { (key, expected) ->
+            assertEquals(expected, compact.getValue(key), 0.05f)
+        }
+    }
+
+    @Test
     fun defaultWebSocketPayload_usesActuatorControlWithSevenTargets() {
         val state = compactStateOf(listOf(50f, 10f, 20f, 30f, 40f, 50f, 60f))
 
@@ -52,6 +94,29 @@ class ProtocolTest {
     }
 
     @Test
+    fun gestureFollowPayload_usesRealtimeActuatorControlWithinFirmwareLimits() {
+        val gestureState = compactStateOf(listOf(100f, 55f, 90f, 90f, 90f, 90f, 90f))
+
+        val payload = JSONObject(buildActuatorControlPayload(gestureState, durationMs = 24))
+
+        assertEquals("actuator_control", payload.getString("type"))
+        val data = payload.getJSONObject("data")
+        assertEquals(24, data.getInt("duration_ms"))
+        val actuators = data.getJSONArray("actuators")
+        assertEquals(7, actuators.length())
+        for (i in 0 until actuators.length()) {
+            val actuator = actuators.getJSONObject(i)
+            val id = actuator.getInt("id")
+            val angle = actuator.getDouble("angle").toFloat()
+            assertEquals(i, id)
+            assertTrue(
+                "actuator[$id]=$angle outside firmware limits",
+                angle in ControlDefinitions.ACTUATION_LOWER_LIMITS[id]..ControlDefinitions.ACTUATION_UPPER_LIMITS[id]
+            )
+        }
+    }
+
+    @Test
     fun protocolPreview_defaultsToActuatorControl() {
         val preview = JSONObject(buildProtocolPreview(ControlDefinitions.DEFAULT_CONTROL_STATE))
 
@@ -65,6 +130,33 @@ class ProtocolTest {
 
         assertEquals("multi_joint_control", payload.getString("type"))
         assertEquals(15, payload.getJSONObject("data").getJSONArray("joints").length())
+    }
+
+    @Test
+    fun firmwareInfoAndWifiStatusResponses_parseForUiFeedback() {
+        val handInfo = """{"type":"hand_info","hand_type":"Right","firmware_version":"v0.2.0"}"""
+        val wifiStatus = """
+            {
+              "type":"wifi_status",
+              "data":{
+                "mode":"STA",
+                "ip":"192.168.1.210",
+                "sta_ssid":"Lab_2G",
+                "sta_static_ip":"192.168.1.210",
+                "sta_gateway":"192.168.1.1",
+                "sta_subnet":"255.255.255.0",
+                "sta_dns1":"192.168.1.1",
+                "sta_dns2":"114.114.114.114"
+              }
+            }
+        """.trimIndent()
+
+        assertEquals("Right", parseHandInfo(handInfo))
+        val parsed = requireNotNull(parseWifiStatus(wifiStatus))
+        assertEquals("STA", parsed.mode)
+        assertEquals("192.168.1.210", parsed.ip)
+        assertEquals("Lab_2G", parsed.staSsid)
+        assertEquals("192.168.1.1", parsed.staGateway)
     }
 
     @Test
@@ -91,5 +183,12 @@ class ProtocolTest {
                 }
             }
         }
+    }
+}
+
+private fun jointState(jointId: String, angle: Float): JSONObject {
+    return JSONObject().apply {
+        put("joint_id", jointId)
+        put("angle", angle.toDouble())
     }
 }

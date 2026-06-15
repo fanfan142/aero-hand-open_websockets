@@ -46,7 +46,6 @@ build_flags =
     -D ARDUINO_USB_CDC_ON_BOOT=1
     -DCORE_DEBUG_LEVEL=3
     -Wno-reorder
-    -D{hand_flag}
 
 lib_deps =
     links2004/WebSockets@^2.3.4
