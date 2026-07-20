@@ -29,9 +29,11 @@ Android / PC / 脚本
 
 - Android APK：`HandControl-*.apk`
 - WebSocket 固件：`firmware_v*_lefthand.bin` / `firmware_v*_righthand.bin`
-- 调试包：`main` 分支推送后由 Android CI 上传 artifact
+- 预览包：`main` 分支推送后由 Android CI 使用正式密钥构建签名 APK 并上传 artifact
 
 发布标签会同时触发 Android Release 和 Firmware Release，同一个 Release 页面会包含 APK 与固件 bin。
+
+> **固件兼容性提示**：不要再使用仓库 `firmware_bin/` 中的 `aero_hand_wifi.ino.bin` 或 merged 镜像作为 App 配套固件。现有历史镜像只包含旧控制协议，缺少 `actuator_control` 和全部 App 配网命令。完整配网必须使用 `v1.5.5` 或更高版本 Release 中与左右手匹配的 `firmware_v0.2.0_*.bin`，也可使用与当前 App 同一提交生成的 Firmware CI artifact。文件名中的 `v0.2.0` 本身不代表支持完整配网；App 只在固件明确回传 `protocol_version >= 2` 时启用关联 ACK 配网。旧固件仍可降级使用 `multi_joint_control`。
 
 ---
 
@@ -58,6 +60,9 @@ Android / PC / 脚本
 - MediaPipe 手势识别跟随控制
 - 扫描附近 2.4GHz WiFi 并下发 STA 配置
 - 静态 IP、网关、子网、DNS 可自定义，默认值可自动补全
+- 自动识别固件能力：新版使用 7 执行器控制，旧版降级为 15 关节控制
+- 配网等待设备回传匹配的 SSID/静态 IP 后才切换 STA，不再把 WebSocket 入队成功当作设备执行成功
+- 手势检测复用图像缓冲区并限制检测尺寸；控制发送与 10 Hz UI 刷新解耦
 
 安装流程：
 
@@ -106,10 +111,11 @@ WiFi 扫描需要系统 WiFi 已开启，并授予附近 WiFi / 定位权限。A
 3. App WiFi 模式连接 `192.168.4.1:8765`。
 4. 展开连接面板，扫描附近 2.4GHz WiFi。
 5. 选择 SSID，输入密码。
-6. 填写静态 IP；网关、子网、DNS 可保留默认值。
-7. 点击“下发并切 STA”。
-8. 手机切到目标 WiFi。
-9. App 会把 Host 预填成目标静态 IP，重新连接即可控制。
+6. 填写静态 IP；网关、子网、DNS 可保留默认值。开放网络的密码可留空。
+7. 点击“下发并切 STA”。App 会先下发配置并等待设备回传相同 SSID 与静态 IP。
+8. 只有确认成功后，App 才发送切换 STA 指令；超时会保留 AP 连接并显示错误。
+9. 手机切到目标 WiFi。
+10. App 会把 Host 预填成目标静态 IP，重新连接即可控制。
 
 默认静态网络参数：
 
@@ -125,27 +131,14 @@ WiFi 扫描需要系统 WiFi 已开启，并授予附近 WiFi / 定位权限。A
 
 ## 烧录固件
 
-Releases 中的 `firmware_v*_*.bin` 是应用固件，烧录地址为 `0x10000`：
+Releases 中的 `firmware_v*_*.bin` 是应用固件。实时手势与 App 配网请使用 `v1.5.5+` Release 中的 v0.2.0 左右手固件，或与当前 App 同一提交的 Firmware CI artifact；烧录地址为 `0x10000`：
 
 ```bash
 esptool.py --chip esp32s3 --port COM3 write_flash \
   0x10000 firmware_v0.2.0_lefthand.bin
 ```
 
-如果使用 `firmware_bin/` 中的 Arduino 构建产物，可选择二者之一：
-
-```bash
-# 单文件完整镜像
-esptool.py --chip esp32s3 --port COM3 write_flash \
-  0x0 firmware_bin/aero_hand_wifi.ino.merged.bin
-
-# 分区烧录
-esptool.py --chip esp32s3 --port COM3 write_flash \
-  0x0 firmware_bin/boot_app0.bin \
-  0x1000 firmware_bin/aero_hand_wifi.ino.bootloader.bin \
-  0x8000 firmware_bin/aero_hand_wifi.ino.partitions.bin \
-  0x10000 firmware_bin/aero_hand_wifi.ino.bin
-```
+`firmware_bin/` 仅保留历史 Arduino 构建产物以便追溯，当前镜像不满足 App 的完整协议契约，不应作为推荐烧录入口。发布固件由 GitHub Actions 从 `firmware_ws/` 源码重新构建，并在上传前检查协议标记。
 
 左右手固件要与实际机械手匹配，避免手型配置和舵机方向不一致。
 
@@ -256,11 +249,12 @@ cmake --build build --config Release
 
 | Workflow | 触发条件 | 产物 |
 |----------|----------|------|
-| Android CI | push / PR 到 `main` | Debug APK artifact |
-| Android Release | 推送 `v*` 标签 | Release APK |
-| Firmware Release | 推送 `v*` 标签 | 多版本左右手固件 bin |
+| Android CI | push / PR 到 `main` | Python 3.8/3.11 测试、Android JVM 测试；main 产出正式密钥签名预览 APK，PR 产出调试签名 APK |
+| Firmware CI | push / PR 到 `main` | 独立 WiFi 固件与 v0.2.0 左右手云端编译、源码/bin 协议检查 |
+| Android Release | 推送 `v*` 标签 | 测试通过后的签名 Release APK |
+| Firmware Release | 推送 `v*` 标签 | 协议检查通过的多版本左右手固件 bin |
 
-本项目验证以 GitHub Actions 云端构建为准；本地 Windows 环境不作为 Android 发布门禁。
+本项目以 GitHub Actions 云端编译为发布门禁，本地 Windows 环境不执行 Android/固件发布编译。Android CI 与 Release 使用同一提交计数生成 `versionCode`，避免两个 workflow 各自计数造成同签名 APK 仍无法覆盖升级。
 
 ---
 
@@ -272,7 +266,7 @@ aero-hand-open_websockets/
 ├── c_dll/            # C ABI WebSocket 客户端库
 ├── esp32_wifi/       # ESP32 WiFi WebSocket 固件
 ├── firmware_ws/      # 多版本 WebSocket 改造固件
-├── firmware_bin/     # Arduino 固件烧录辅助产物
+├── firmware_bin/     # 历史 Arduino 构建产物，不用于当前 App
 ├── python_bridge/    # Python WebSocket 桥接
 ├── protocol/         # JSON 协议文档
 ├── scripts/          # 固件构建脚本
@@ -287,10 +281,16 @@ aero-hand-open_websockets/
 
 - Android WiFi 扫描等待系统扫描结果事件，避免总是读取旧缓存。
 - Android 不再尝试主动打开系统 WiFi，改为提示用户手动开启。
-- AP→STA 配网后自动预填目标静态 IP，减少切网后的重连误操作。
-- Debug CI 不依赖签名 secrets，Release 才强制签名。
+- AP→STA 配网校验 SSID、密码长度、IPv4、连续子网掩码及 IP/网关同网段，并等待固件状态确认。
+- 固件能力识别失败或发现旧协议时，控制自动降级为 `multi_joint_control`，配网入口明确禁用。
+- 手势首帧直接初始化平滑器，标定按手别/摄像头/镜像隔离，旧 schema 自动失效。
+- 相机 RGBA 转换复用 Bitmap/ByteArray/采样索引，检测边长限制为 256；物理控制不再依赖 Compose 整屏刷新。
+- Pull Request 的 Debug 构建不读取签名 Secrets；main 预览与标签 Release 均强制使用正式密钥。
 - Firmware Release 文档明确应用固件烧录地址为 `0x10000`。
+- `firmware_bin/` 历史镜像已确认缺少完整 App 协议，README 不再推荐烧录。
 - WebSocket payload、C DLL 输入校验、USB 串口短读、旧 WebSocket 回调覆盖等问题已在前序版本加固。
+
+真实硬件仍需在云端构建通过后验证：AP→STA 切网、旧固件降级、左右手重新标定、手势 FPS/GC 以及连续跟随时的舵机响应。
 
 ---
 

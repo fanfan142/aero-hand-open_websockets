@@ -97,7 +97,7 @@ class GestureCalibrationStore(context: Context) {
     }
 
     companion object {
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 5
         private const val TUNING_SCHEMA_VERSION = 1
     }
 }

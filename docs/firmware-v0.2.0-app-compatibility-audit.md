@@ -1,5 +1,19 @@
 # v0.2.0 固件与 Android APP 调用兼容性审计
 
+## 2026-07-20 补充审计
+
+本节覆盖并取代下方以 `v1.5.3/v1.5.4` 为基线的历史发布结论；旧段落保留用于追溯。
+
+- 当前开发版本：Android `1.5.5`，最终 Android 与固件编译只以 GitHub Actions 为准，本轮未执行本地 Gradle/PlatformIO 编译。
+- `firmware_bin/aero_hand_wifi.ino.bin` 与 merged 镜像已通过静态二进制契约检查确认缺少 `actuator_control`、能力握手和全部 App 配网命令，只能视为历史产物。
+- 推荐烧录入口：`v1.5.5+` GitHub Release 的 `firmware_v0.2.0_lefthand.bin` / `firmware_v0.2.0_righthand.bin`，或与当前 App 同一提交的 Firmware CI artifact，地址 `0x10000`。不能只按 v0.2.0 文件名判定配网兼容性。
+- App 按 `firmware_type + protocol_version` 判定能力：`firmware_ws v0.1.x` 和未声明协议版本的旧 v0.2.0 可执行器控制但禁用关联静态 IP 配网；本轮 v0.2.0 与当前 `esp32_wifi` 源码声明 `protocol_version=2` 后启用；未知旧固件降级 `multi_joint_control`。
+- WiFi 配置、切 STA、切 AP、清配置都使用 `request_id`；推荐固件 ACK 回传 `command_type/request_id`，配置状态还回传相同 `request_id`。App 不再把 `WebSocket.send()` 入队成功当作执行成功。
+- 固件契约门禁检查能力握手、控制、状态、配网及 ACK 关联标记；Firmware CI 运行 checker 测试，云端编译独立固件和 v0.2.0 左右手，并对生成 bin 再做契约检查。
+- 手势控制帧携带单调时间戳；相机 generation 会丢弃切镜头/停止后的旧帧，标定样本、平滑器与 tracker 生命周期在同一互斥边界内处理。
+
+当前静态验证不等于真机通过。云端变绿后仍需验证 AP→STA、旧固件降级、左右手重新标定、FPS/GC 和连续舵机响应。
+
 审计日期：2026-06-15
 
 ## 范围
@@ -8,7 +22,7 @@
 - 发布固件：审计基线为 GitHub Release `v1.5.3` 中的 `firmware_v0.2.0_lefthand.bin`、`firmware_v0.2.0_righthand.bin`。
 - 源码入口：`firmware_ws/v0.2.0/firmware.ino`。
 - 说明：用户口径中的 `0.20` 在仓库中对应 `v0.2.0`。
-- 当前文件包含本轮修复，目标随 `v1.5.4` 发布；发布完成后以 GitHub Release 资产校验为准。
+- 本段记录的是历史 `v1.5.4` 发布计划；当前修复与推荐入口以页首 `v1.5.5+` 结论为准。
 
 ## 发布链路确认
 

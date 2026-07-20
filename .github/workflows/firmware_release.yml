@@ -22,12 +22,21 @@ jobs:
           python-version: '3.10'
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: python -m pip install platformio==6.1.19
+
+      - name: Run firmware checker tests
+        run: python -m unittest discover -s "scripts/tests" -p "test_*.py" -v
+
+      - name: Check firmware protocol contract
+        run: python "scripts/check_firmware_contract.py" "esp32_wifi/firmware/aero_hand_wifi" "firmware_ws/v0.2.0"
 
       - name: Build firmware
         run: |
-          cd scripts
-          python build_versions.py
+          cd "scripts"
+          python "build_versions.py"
+
+      - name: Check recommended firmware binaries
+        run: python "scripts/check_firmware_contract.py" "firmware_ws_build/firmware_v0.2.0_lefthand.bin" "firmware_ws_build/firmware_v0.2.0_righthand.bin"
 
       - name: List built firmware
         run: |
@@ -67,6 +76,8 @@ jobs:
             | v0.1.4 | firmware_v0.1.4_lefthand.bin | firmware_v0.1.4_righthand.bin |
             | v0.1.5 | firmware_v0.1.5_lefthand.bin | firmware_v0.1.5_righthand.bin |
             | v0.2.0 | firmware_v0.2.0_lefthand.bin | firmware_v0.2.0_righthand.bin |
+
+            v0.2.0 是当前 Android App 的推荐固件，支持 protocol_version=2、关联 ACK 与完整静态 IP 配网。v0.1.x 仅用于历史控制兼容，不支持当前 App 配网。
 
             ## 烧录说明
 

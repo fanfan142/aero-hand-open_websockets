@@ -1,7 +1,7 @@
 # Aero Hand Open - 通信协议文档
 
-*Created: 2026/3/28*
-*Version: 1.0*
+*Created: 2026/3/28 · Updated: 2026/7/20*
+*Version: 1.1*
 
 ---
 
@@ -19,6 +19,28 @@
 ## 2. 控制指令格式
 
 ### 2.1 WebSocket JSON 格式
+
+设备建立连接后应先发送能力握手：
+
+```json
+{
+  "type": "hand_info",
+  "hand_type": "Left",
+  "firmware_type": "firmware_ws",
+  "firmware_version": "v0.2.0",
+  "protocol_version": 2
+}
+```
+
+能力矩阵：
+
+| 固件 | `actuator_control` | 完整静态 IP 配网 |
+|------|--------------------|------------------|
+| `firmware_ws` v0.2.0 + `protocol_version >= 2` | 支持 | 支持 |
+| 未声明 `protocol_version` 的旧 v0.2.0 | 支持 | App 禁用，需更新同版本发布固件 |
+| `firmware_ws` v0.1.x | 支持 | 不支持，仅有旧 SSID/密码字段 |
+| 当前 `esp32_wifi` 源码 | 支持 | 支持 |
+| 无 `firmware_type` 的旧固件 | App 降级为 `multi_joint_control` | 不支持 |
 
 **单关节控制：**
 ```json
@@ -69,6 +91,8 @@
 }
 ```
 
+`duration_ms` 是客户端节奏提示。v0.2.0 推荐固件以固定 20 ms 周期应用最新目标，当前不会严格按该字段做轨迹插值。
+
 **查询关节状态：**
 ```json
 {
@@ -89,6 +113,7 @@
 ```json
 {
   "type": "wifi_config_set",
+  "request_id": "7-41",
   "timestamp": 1711641600000,
   "data": {
     "sta_ssid": "Lab_2G",
@@ -104,9 +129,9 @@
 
 **切换 STA / AP 与查询 WiFi 状态：**
 ```json
-{"type": "wifi_connect_sta", "timestamp": 1711641600000}
-{"type": "wifi_start_ap", "timestamp": 1711641600000}
-{"type": "wifi_clear_sta", "timestamp": 1711641600000}
+{"type": "wifi_connect_sta", "request_id": "7-42", "timestamp": 1711641600000}
+{"type": "wifi_start_ap", "request_id": "7-43", "timestamp": 1711641600000}
+{"type": "wifi_clear_sta", "request_id": "7-44", "timestamp": 1711641600000}
 {"type": "wifi_status", "timestamp": 1711641600000}
 ```
 
@@ -114,7 +139,8 @@
 ```json
 {
   "type": "wifi_status",
-  "success": true,
+  "protocol_version": 2,
+  "request_id": "7-41",
   "timestamp": 1711641600100,
   "data": {
     "mode": "AP",
@@ -129,7 +155,16 @@
 }
 ```
 
-`sta_static_ip` 到 `sta_dns2` 可全部自定义；只修改静态 IP 时，网关、子网与 DNS 可使用默认值。
+`sta_static_ip` 到 `sta_dns2` 可全部自定义；只修改静态 IP 时，网关、子网与 DNS 可使用默认值。完整配网能力要求状态响应真实包含这五个字段，客户端不得为缺失字段补默认值后据此宣告成功。
+
+配网因果顺序：
+
+1. 客户端订阅响应后发送带唯一 `request_id` 的 `wifi_config_set`。
+2. 固件保存配置，返回相同 `request_id`、`command_type=wifi_config_set` 的成功 ACK，并发送相同 `request_id` 的 `wifi_status`。
+3. 客户端同时确认 ACK、SSID、静态 IP 和完整静态网络字段。
+4. 客户端发送新的 `wifi_connect_sta` 请求，等待其匹配 ACK 后才提示用户切换手机网络和目标 Host。
+
+`wifi_start_ap` 与 `wifi_clear_sta` 同样必须等待匹配 ACK；WebSocket `send()` 返回 `true` 只表示 OkHttp 已入队，不代表设备执行成功。
 
 ### 2.2 关节ID映射表
 
@@ -158,9 +193,13 @@
 {
   "type": "response",
   "success": true,
+  "command_type": "wifi_connect_sta",
+  "request_id": "7-42",
   "timestamp": 1711641600100,
   "data": {
-    "command_type": "joint_control",
+    "command_type": "wifi_connect_sta",
+    "request_id": "7-42",
+    "message": "STA switch scheduled",
     "executed": true
   }
 }

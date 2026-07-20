@@ -13,17 +13,30 @@
 
 ## Overview
 
-This project is a derivative of [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open), providing **3 independent WebSocket communication solutions**.
+This project is a derivative of [TetherIA/aero-hand-open](https://github.com/TetherIA/aero-hand-open). It provides an Android controller, ESP32-S3 WebSocket firmware, a Python bridge, a C ABI library, and one shared JSON protocol.
+
+> **Firmware compatibility warning:** do not use the historical `firmware_bin/aero_hand_wifi.ino.bin` or merged image with the current Android app. Those checked-in images contain only the legacy control protocol and are missing `actuator_control` plus every app provisioning command. Full provisioning requires the hand-specific `firmware_v0.2.0_*.bin` from Release `v1.5.5` or newer, or a Firmware CI artifact built from the same commit as the app. The `v0.2.0` filename alone does not prove compatibility: the app enables correlated-ACK provisioning only when firmware explicitly reports `protocol_version >= 2`. Legacy motion control still falls back to `multi_joint_control`.
 
 ---
 
-## Three Solutions Overview
+## Components
+| Component | Purpose | Connection |
+|-----------|---------|------------|
+| Android app | WiFi/USB control, presets, gesture following, AP-to-STA provisioning | WiFi WebSocket or USB OTG |
+| ESP32 firmware | WebSocket server and seven-actuator hand control | ESP32-S3 to servo bus |
+| Python bridge | Wired server, scripting, and fake-mode protocol testing | USB to servo controller |
+| C DLL | C/C++/C#/ctypes integration | WebSocket to ESP32 |
+| Shared protocol | Control, status, capability, and provisioning contract | JSON over WebSocket |
 
-| Solution | Description | Firmware | Connection |
-|----------|-------------|----------|------------|
-| **Sol 1** | Python Bridge (Wired) | None (use original USB) | USB → Servo controller |
-| **Sol 2** | ESP32 WiFi (Wireless) | Need flash ESP32 firmware | WiFi hotspot |
-| **Sol 3** | C DLL Library (Cross-lang) | None (library only) | WiFi → ESP32 server |
+---
+
+## Android App
+
+The app automatically detects firmware capabilities. Current `firmware_ws` releases use `actuator_control`; unknown legacy firmware falls back to `multi_joint_control`. Provisioning is enabled only for firmware that reports the complete static-network status contract.
+
+The gesture path uses CameraX RGBA frames and MediaPipe. Conversion reuses bitmap and byte buffers, limits detection images to a 256-pixel longest side, seeds smoothing from the first frame, and sends control independently from the 10 Hz Compose UI refresh. Calibration is isolated by handedness, camera facing, and mirror mode; schema 5 invalidates older calibration records.
+
+Download `HandControl-*.apk` from GitHub Releases. Builds from `main` are signed preview artifacts produced by Android CI; pull requests build a separate debug-signed APK.
 
 ---
 
@@ -64,40 +77,34 @@ ESP32 runs WebSocket server independently for wireless control.
 
 ### Flash Firmware
 
-Use pre-built firmware in `firmware_bin/`:
+Download the hand-specific application image from Release `v1.5.5` or newer, or use a Firmware CI artifact built from the same commit as the app, and flash it at `0x10000`:
 
 ```bash
-# Full merged image
 esptool.py --chip esp32s3 --port COM3 write_flash \
-  0x0 firmware_bin/aero_hand_wifi.ino.merged.bin
-
-# Split images
-esptool.py --chip esp32s3 --port COM3 write_flash \
-  0x0 firmware_bin/boot_app0.bin \
-  0x1000 firmware_bin/aero_hand_wifi.ino.bootloader.bin \
-  0x8000 firmware_bin/aero_hand_wifi.ino.partitions.bin \
-  0x10000 firmware_bin/aero_hand_wifi.ino.bin
+  0x10000 firmware_v0.2.0_lefthand.bin
 ```
+
+Use `firmware_v0.2.0_righthand.bin` for a right hand. A left/right mismatch can apply the wrong homing and actuator direction configuration. The `firmware_bin/` directory is retained only for historical inspection and is not a supported flashing source for the current app.
 
 ### Usage
 
-1. Power on ESP32, it creates hotspot `AeroHand_WIFI` (password: `12345678`)
+1. Power on ESP32; the hand-specific firmware creates `AeroHand_Left` or `AeroHand_Right`
 2. Connect phone/PC to the hotspot
-3. Open `esp32_wifi/web_client/html_client.html` or use Python client to connect `ws://192.168.4.1:8765`
+3. Connect the Android app or another client to `ws://192.168.4.1:8765`
 
 ### Firmware Files
 
 | File | Description |
 |------|-------------|
-| `aero_hand_wifi.ino.merged.bin` | Full firmware (8MB), includes all partitions, recommended |
-| `aero_hand_wifi.ino.bin` | Application only (no bootloader) |
-| `aero_hand_wifi.ino.bootloader.bin` | Bootloader |
-| `aero_hand_wifi.ino.partitions.bin` | Partition table |
-| `boot_app0.bin` | Boot app0 |
+| `firmware_v0.2.0_lefthand.bin` | Left-hand application image; use the `v1.5.5+` Release or same-commit CI artifact |
+| `firmware_v0.2.0_righthand.bin` | Right-hand application image; use the `v1.5.5+` Release or same-commit CI artifact |
+| `firmware_v0.1.x_*.bin` | Historical WebSocket variants; static-IP provisioning is not supported by the current app |
 
 ### WiFi Configuration
 
-Modify in `esp32_wifi/firmware/aero_hand_wifi/config.h`:
+The Android app can provision a 2.4 GHz SSID, an open or WPA password, static IP, gateway, subnet, and DNS values. It validates the network first, then waits for a `wifi_config_set` ACK and a `wifi_status` carrying the same `request_id`, SSID, and static IP. Only then does it send `wifi_connect_sta` and wait for its matching ACK.
+
+Source defaults are in `esp32_wifi/firmware/aero_hand_wifi/config.h`:
 
 ```cpp
 #define WIFI_MODE 1           // 1=AP mode, 2=STA mode
@@ -192,15 +199,15 @@ Original firmware source code from upstream [TetherIA/aero-hand-open](https://gi
 
 ### WebSocket Firmware (`firmware_ws/`)
 
-Original serial firmware converted to WiFi + WebSocket communication, preserving each version's characteristics. Pre-built binaries and source packages are available at [Release 1](https://github.com/fanfan142/aero-hand-open_websockets/releases/tag/1):
+Original serial firmware converted to WiFi + WebSocket communication, preserving each version's characteristics. Current binaries are produced from source by GitHub Actions and attached to versioned Releases:
 
-| Version | Binary | Source Package | Thermal Protection | Initial Torque | Features |
-|---------|--------|----------------|-------------------|----------------|----------|
-| v0.1.0 | `aero_hand_v0.1.0_websockets.bin` | `v0.1.0_websockets_src.tar.gz` | None | 1023 | Base version |
-| v0.1.3 | `aero_hand_v0.1.3_websockets.bin` | `v0.1.3_websockets_src.tar.gz` | 50°C / 200 | 700 | Added thermal protection |
-| v0.1.4 | `aero_hand_v0.1.4_websockets.bin` | `v0.1.4_websockets_src.tar.gz` | 70°C / 500 | 700 | More relaxed thermal protection |
-| v0.1.5 | `aero_hand_v0.1.5_websockets.bin` | `v0.1.5_websockets_src.tar.gz` | 70°C / 500 | 700 | Fixed motor configuration |
-| v0.2.0 | `aero_hand_v0.2.0_websockets.bin` | `v0.2.0_websockets_src.tar.gz` | 70°C / 500 | 700 | Thumb homing offset optimization |
+| Version | Left-hand Binary | Right-hand Binary | Thermal Protection | Initial Torque | Features |
+|---------|------------------|-------------------|-------------------|----------------|----------|
+| v0.1.0 | `firmware_v0.1.0_lefthand.bin` | `firmware_v0.1.0_righthand.bin` | None | 1023 | Base version |
+| v0.1.3 | `firmware_v0.1.3_lefthand.bin` | `firmware_v0.1.3_righthand.bin` | 50°C / 200 | 700 | Added thermal protection |
+| v0.1.4 | `firmware_v0.1.4_lefthand.bin` | `firmware_v0.1.4_righthand.bin` | 70°C / 500 | 700 | More relaxed thermal protection |
+| v0.1.5 | `firmware_v0.1.5_lefthand.bin` | `firmware_v0.1.5_righthand.bin` | 70°C / 500 | 700 | Fixed motor configuration |
+| v0.2.0 | `firmware_v0.2.0_lefthand.bin` | `firmware_v0.2.0_righthand.bin` | 70°C / 500 | 700 | Thumb homing offset optimization |
 
 See [`firmware_ws/README.md`](firmware_ws/README.md) for details.
 
@@ -216,7 +223,8 @@ aero-hand-open_websockets/
 │   ├── tests/            # Unit tests
 │   └── README.md
 │
-├── esp32_wifi/            # Solution 2: ESP32 WiFi Control (Wireless, verified)
+├── android/               # Android WiFi/USB and gesture controller
+├── esp32_wifi/            # Standalone ESP32 WiFi firmware source
 │   ├── firmware/          # ESP32 firmware source
 │   │   └── aero_hand_wifi/
 │   ├── web_client/        # Web client (HTML)
@@ -227,10 +235,11 @@ aero-hand-open_websockets/
 │   ├── src/              # Source code
 │   └── examples/          # Usage examples
 │
-├── firmware_bin/           # Pre-built ESP32 firmware
+├── firmware_bin/           # Historical Arduino artifacts, not current app firmware
 ├── firmware_src/           # Original firmware source (v0.1.0, v0.1.3-v0.2.0)
 ├── firmware_ws/           # WebSocket converted firmware (v0.1.0, v0.1.3-v0.2.0)
 ├── protocol/              # Unified communication protocol
+├── scripts/               # Cloud firmware build and contract checks
 └── README.md / README_en.md
 ```
 
@@ -238,13 +247,20 @@ aero-hand-open_websockets/
 
 ## Testing
 
+Static tests can be run without compiling Android or firmware:
+
 ```bash
-cd python_bridge
-pip install pytest
-python -m pytest tests/ -v
+python -m pytest python_bridge/tests scripts/tests -q
+python scripts/check_firmware_contract.py esp32_wifi/firmware/aero_hand_wifi firmware_ws/v0.2.0
 ```
 
-Current status: **7 passed**
+GitHub Actions is the release build gate:
+
+- Android CI: Python tests, Android JVM tests, and a signed preview APK from `main`
+- Firmware CI: checker tests, standalone firmware, v0.2.0 left/right builds, compiled-binary contract checks, and firmware artifacts
+- Tag workflows: signed Android APK plus release firmware binaries
+
+Cloud compilation does not replace hardware validation. AP-to-STA switching, legacy fallback, left/right recalibration, gesture FPS/GC, and continuous servo response must still be checked on devices.
 
 ---
 

@@ -4,11 +4,12 @@ import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aerohand.gesture.FingerAngles
-import com.aerohand.gesture.GestureCameraState
+import com.aerohand.gesture.GestureCommandScheduler
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
@@ -16,19 +17,23 @@ import com.aerohand.wifi.WifiNetworkItem
 import com.aerohand.wifi.WifiScanService
 import com.aerohand.websocket.ConnectionState
 import com.aerohand.websocket.ControlDefinitions
+import com.aerohand.websocket.ControlTransport
+import com.aerohand.websocket.DeviceCapabilities
+import com.aerohand.websocket.DeviceCommandResult
 import com.aerohand.websocket.LogEntry
 import com.aerohand.websocket.PresetAction
 import com.aerohand.websocket.PresetActions
 import com.aerohand.websocket.WebSocketService
-import com.aerohand.websocket.buildProtocolPreview
+import com.aerohand.websocket.WifiProvisioningRequest
+import com.aerohand.websocket.WifiProvisioningResult
 import com.aerohand.websocket.compactStateFromJointStates
+import com.aerohand.websocket.validateWifiProvisioning
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.coroutines.coroutineContext
 
 data class WifiConfigUiState(
@@ -43,7 +48,8 @@ data class WifiConfigUiState(
     val currentIp: String = "192.168.4.1",
     val configuredStaSsid: String? = null,
     val scanResults: List<WifiNetworkItem> = emptyList(),
-    val isScanning: Boolean = false
+    val isScanning: Boolean = false,
+    val isProvisioning: Boolean = false
 )
 
 enum class ConnectionPanelVisibility {
@@ -62,18 +68,19 @@ data class HandControlUiState(
     val port: String = "8765",
     val connectionPanelVisibility: ConnectionPanelVisibility = ConnectionPanelVisibility.COLLAPSED,
     val wifiConfig: WifiConfigUiState = WifiConfigUiState(),
+    val deviceCapabilities: DeviceCapabilities = DeviceCapabilities(),
+    val firmwareVersion: String? = null,
+    val controlTransport: ControlTransport = ControlTransport.MULTI_JOINT,
+    val gestureTargetHand: GestureTargetHand = GestureTargetHand.AUTO,
     val controlValues: Map<String, Float> = ControlDefinitions.DEFAULT_CONTROL_STATE,
     val logs: List<LogEntry> = emptyList(),
-    val protocolPreview: String = "[]",
     val statusMessage: String = "准备就绪",
     val presetActions: List<PresetAction> = PresetActions.all,
     val activePresetId: String? = null,
     val isPresetRunning: Boolean = false,
     val isMacroRunning: Boolean = false,
     val presetRepeatCounts: Map<String, Int> = emptyMap(),
-    val macroPresetIds: List<String> = emptyList(),
-    val gestureTargetHand: GestureTargetHand = GestureTargetHand.AUTO,
-    val gestureCameraState: GestureCameraState = GestureCameraState()
+    val macroPresetIds: List<String> = emptyList()
 )
 
 enum class ConnectionMode {
@@ -86,26 +93,20 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private val usbSerialService = UsbSerialService(application)
     private val wifiScanService = WifiScanService(application)
 
-    private val _uiState = MutableStateFlow(
-        HandControlUiState(protocolPreview = buildProtocolPreview(ControlDefinitions.DEFAULT_CONTROL_STATE))
-    )
+    private val _uiState = MutableStateFlow(HandControlUiState())
     val uiState: StateFlow<HandControlUiState> = _uiState
 
     private var sendDebounceJob: Job? = null
     private var presetJob: Job? = null
+    private var wifiProvisionJob: Job? = null
     private var latestWifiLogs: List<LogEntry> = emptyList()
     private var latestUsbLogs: List<LogEntry> = emptyList()
-    private var lastGestureCompactState: Map<String, Float>? = null
-    private var lastGestureSendTimeMs: Long = 0L
+    private val gestureCommandScheduler = GestureCommandScheduler()
     private var lastGestureUiUpdateTimeMs: Long = 0L
-    private var gestureControlReady = false
     private var pendingWifiTransitionMessage: String? = null
 
     companion object {
-        private const val GESTURE_SEND_INTERVAL_MS = 16L
-        private const val GESTURE_UI_UPDATE_INTERVAL_MS = 33L
-        private const val GESTURE_DURATION_MS = 24
-        private const val GESTURE_MIN_DELTA = 0.18f
+        private const val GESTURE_UI_UPDATE_INTERVAL_MS = 100L
     }
 
     init {
@@ -155,10 +156,30 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                             subnet = status.staSubnet,
                             dns1 = status.staDns1,
                             dns2 = status.staDns2
-                        ),
-                        host = if (wifiConnected && status.ip.isNotBlank() && status.ip != "0.0.0.0") status.ip else host
+                        )
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            webSocketService.capabilities.collectLatest { capabilities ->
+                mutateState {
+                    copy(
+                        deviceCapabilities = capabilities,
+                        controlTransport = if (capabilities.actuatorControl) {
+                            ControlTransport.ACTUATOR
+                        } else {
+                            ControlTransport.MULTI_JOINT
+                        }
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            webSocketService.deviceInfo.collectLatest { info ->
+                mutateState { copy(firmwareVersion = info?.firmwareVersion?.takeIf { it.isNotBlank() }) }
             }
         }
 
@@ -239,6 +260,11 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     fun setConnectionPanelVisibility(visibility: ConnectionPanelVisibility) {
         mutateState { copy(connectionPanelVisibility = visibility) }
+    }
+
+    fun setGestureTargetHand(targetHand: GestureTargetHand) {
+        mutateState { copy(gestureTargetHand = targetHand) }
+        resetGestureSendState()
     }
 
     fun setStaSsid(value: String) {
@@ -324,8 +350,17 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     fun disconnect() {
         presetJob?.cancel()
         presetJob = null
+        wifiProvisionJob?.cancel()
+        wifiProvisionJob = null
         resetGestureSendState()
-        mutateState { copy(isPresetRunning = false, isMacroRunning = false, activePresetId = null) }
+        mutateState {
+            copy(
+                isPresetRunning = false,
+                isMacroRunning = false,
+                activePresetId = null,
+                wifiConfig = wifiConfig.copy(isProvisioning = false)
+            )
+        }
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.disconnect()
             ConnectionMode.USB -> usbSerialService.disconnect()
@@ -378,57 +413,72 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "WiFi 未连接，无法下发配置") }
             return
         }
-        if (state.connectedServer != "192.168.4.1:8765") {
-            mutateState { copy(statusMessage = "仅连接设备默认 AP 时允许下发 WiFi 配置") }
+        if (!state.deviceCapabilities.identified) {
+            mutateState { copy(statusMessage = "正在检测固件能力，请稍后重试") }
             return
         }
-        val ssid = wifiConfig.staSsid.trim()
-        val password = wifiConfig.staPassword.trim()
-        if (ssid.isBlank()) {
-            mutateState { copy(statusMessage = "请输入 STA WiFi 名称") }
+        if (!state.deviceCapabilities.wifiProvisioning) {
+            mutateState { copy(statusMessage = "当前固件不支持 App 配网，请先刷入新版 WebSocket 固件") }
             return
         }
-        if (password.isBlank()) {
-            mutateState { copy(statusMessage = "请输入 STA WiFi 密码") }
-            return
-        }
-        val targetIp = wifiConfig.staticIp.ifBlank { "192.168.1.210" }
-        val targetGateway = wifiConfig.gateway.ifBlank { "192.168.1.1" }
-        val targetDns1 = wifiConfig.dns1.ifBlank { targetGateway }
-        if (!isValidIpv4(targetIp)) {
-            mutateState { copy(statusMessage = "静态 IP 格式不合法") }
-            return
-        }
-        pendingWifiTransitionMessage = "已请求切 STA，请将手机 WiFi 换到 ${ssid}，然后连接 $targetIp:8765"
-        val sentConfig = webSocketService.sendWifiConfig(
-            ssid,
-            password,
-            targetIp,
-            targetGateway,
-            wifiConfig.subnet.ifBlank { "255.255.255.0" },
-            targetDns1,
-            wifiConfig.dns2.ifBlank { targetDns1 }
+        if (wifiConfig.isProvisioning) return
+
+        val request = WifiProvisioningRequest(
+            ssid = wifiConfig.staSsid,
+            password = wifiConfig.staPassword,
+            staticIp = wifiConfig.staticIp.ifBlank { "192.168.1.210" },
+            gateway = wifiConfig.gateway.ifBlank { "192.168.1.1" },
+            subnet = wifiConfig.subnet.ifBlank { "255.255.255.0" },
+            dns1 = wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } },
+            dns2 = wifiConfig.dns2.ifBlank { wifiConfig.dns1.ifBlank { wifiConfig.gateway.ifBlank { "192.168.1.1" } } }
         )
-        val sentConnect = sentConfig && webSocketService.connectSta()
-        if (sentConnect) {
-            mutateState {
-                copy(
-                    host = targetIp,
-                    port = "8765",
-                    statusMessage = pendingWifiTransitionMessage ?: statusMessage,
-                    wifiConfig = wifiConfig.copy(
-                        staPassword = "",
-                        configuredStaSsid = ssid,
-                        staticIp = targetIp,
-                        gateway = targetGateway,
-                        dns1 = targetDns1,
-                        dns2 = wifiConfig.dns2.ifBlank { targetDns1 }
-                    )
-                )
+        val validationError = validateWifiProvisioning(request)
+        if (validationError != null) {
+            mutateState { copy(statusMessage = validationError) }
+            return
+        }
+        resetGestureSendState()
+        mutateState {
+            copy(
+                wifiConfig = wifiConfig.copy(isProvisioning = true),
+                statusMessage = "正在下发 WiFi 配置并等待设备确认..."
+            )
+        }
+        wifiProvisionJob?.cancel()
+        wifiProvisionJob = viewModelScope.launch {
+            when (val result = webSocketService.provisionWifi(request)) {
+                is WifiProvisioningResult.SwitchScheduled -> {
+                    pendingWifiTransitionMessage =
+                        "设备已确认配置并开始切 STA；请将手机切到 ${request.ssid}，然后连接 ${result.targetIp}:8765"
+                    mutateState {
+                        copy(
+                            host = result.targetIp,
+                            port = "8765",
+                            statusMessage = pendingWifiTransitionMessage ?: statusMessage,
+                            wifiConfig = wifiConfig.copy(
+                                staPassword = "",
+                                configuredStaSsid = request.ssid,
+                                staticIp = request.staticIp,
+                                gateway = request.gateway,
+                                subnet = request.subnet,
+                                dns1 = request.dns1,
+                                dns2 = request.dns2,
+                                isProvisioning = false
+                            )
+                        )
+                    }
+                }
+                is WifiProvisioningResult.Failure -> {
+                    pendingWifiTransitionMessage = null
+                    mutateState {
+                        copy(
+                            wifiConfig = wifiConfig.copy(isProvisioning = false),
+                            statusMessage = result.message
+                        )
+                    }
+                }
             }
-        } else {
-            pendingWifiTransitionMessage = null
-            mutateState { copy(statusMessage = "WiFi 配置发送失败，请检查连接") }
+            wifiProvisionJob = null
         }
     }
 
@@ -438,17 +488,43 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "WiFi 未连接，无法切回 AP") }
             return
         }
-        if (webSocketService.switchToAp()) {
-            pendingWifiTransitionMessage = "设备即将切回 AP，请将手机 WiFi 重连到 AeroHand_Right/Left，然后重连 192.168.4.1:8765"
-            mutateState {
-                copy(
-                    host = "192.168.4.1",
-                    port = "8765",
-                    statusMessage = pendingWifiTransitionMessage ?: statusMessage
-                )
+        if (!state.deviceCapabilities.identified) {
+            mutateState { copy(statusMessage = "正在检测固件能力，请稍后重试") }
+            return
+        }
+        if (!state.deviceCapabilities.wifiProvisioning) {
+            mutateState { copy(statusMessage = "当前固件不支持 App 切换 WiFi 模式") }
+            return
+        }
+        if (state.wifiConfig.isProvisioning) return
+        mutateState {
+            copy(
+                wifiConfig = wifiConfig.copy(isProvisioning = true),
+                statusMessage = "正在等待设备确认切回 AP..."
+            )
+        }
+        wifiProvisionJob = viewModelScope.launch {
+            when (val result = webSocketService.switchToApConfirmed()) {
+                DeviceCommandResult.Success -> {
+                    pendingWifiTransitionMessage =
+                        "设备已确认切回 AP；请将手机 WiFi 重连到 AeroHand_Right/Left，然后连接 192.168.4.1:8765"
+                    mutateState {
+                        copy(
+                            host = "192.168.4.1",
+                            port = "8765",
+                            statusMessage = pendingWifiTransitionMessage ?: statusMessage,
+                            wifiConfig = wifiConfig.copy(isProvisioning = false)
+                        )
+                    }
+                }
+                is DeviceCommandResult.Failure -> mutateState {
+                    copy(
+                        statusMessage = "切回 AP 失败：${result.message}",
+                        wifiConfig = wifiConfig.copy(isProvisioning = false)
+                    )
+                }
             }
-        } else {
-            mutateState { copy(statusMessage = "切回 AP 失败，请检查连接") }
+            wifiProvisionJob = null
         }
     }
 
@@ -458,16 +534,47 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = "WiFi 未连接，无法清除 STA 配置") }
             return
         }
-        if (webSocketService.clearWifiConfig()) {
-            pendingWifiTransitionMessage = "已清除 STA 配置，设备即将切回 AP"
-            mutateState {
-                copy(
-                    statusMessage = pendingWifiTransitionMessage ?: statusMessage,
-                    wifiConfig = wifiConfig.copy(staSsid = "", staPassword = "", configuredStaSsid = null)
-                )
+        if (!state.deviceCapabilities.identified) {
+            mutateState { copy(statusMessage = "正在检测固件能力，请稍后重试") }
+            return
+        }
+        if (!state.deviceCapabilities.wifiProvisioning) {
+            mutateState { copy(statusMessage = "当前固件不支持 App 清除 WiFi 配置") }
+            return
+        }
+        if (state.wifiConfig.isProvisioning) return
+        mutateState {
+            copy(
+                wifiConfig = wifiConfig.copy(isProvisioning = true),
+                statusMessage = "正在等待设备确认清除 STA 配置..."
+            )
+        }
+        wifiProvisionJob = viewModelScope.launch {
+            when (val result = webSocketService.clearWifiConfigConfirmed()) {
+                DeviceCommandResult.Success -> {
+                    pendingWifiTransitionMessage = "设备已确认清除 STA 配置并切回 AP"
+                    mutateState {
+                        copy(
+                            host = "192.168.4.1",
+                            port = "8765",
+                            statusMessage = pendingWifiTransitionMessage ?: statusMessage,
+                            wifiConfig = wifiConfig.copy(
+                                staSsid = "",
+                                staPassword = "",
+                                configuredStaSsid = null,
+                                isProvisioning = false
+                            )
+                        )
+                    }
+                }
+                is DeviceCommandResult.Failure -> mutateState {
+                    copy(
+                        statusMessage = "清除 STA 配置失败：${result.message}",
+                        wifiConfig = wifiConfig.copy(isProvisioning = false)
+                    )
+                }
             }
-        } else {
-            mutateState { copy(statusMessage = "清除 STA 配置失败，请检查连接") }
+            wifiProvisionJob = null
         }
     }
 
@@ -609,8 +716,13 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         val state = _uiState.value
         return when (state.connectionMode) {
             ConnectionMode.WIFI -> {
-                if (state.wifiConnected) {
-                    webSocketService.sendCompactState(values, durationMs, logControl = logControl)
+                if (state.wifiConnected && !state.wifiConfig.isProvisioning) {
+                    webSocketService.sendCompactState(
+                        values,
+                        durationMs,
+                        transport = state.controlTransport,
+                        logControl = logControl
+                    )
                 } else {
                     false
                 }
@@ -648,47 +760,13 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun mutateState(transform: HandControlUiState.() -> HandControlUiState) {
-        val next = _uiState.value.transform()
-        _uiState.value = next.copy(protocolPreview = buildProtocolPreview(next.controlValues))
-    }
-
-    private fun isValidIpv4(value: String): Boolean {
-        return value.split(".").let { parts ->
-            parts.size == 4 && parts.all { segment ->
-                segment.toIntOrNull()?.let { it in 0..255 } == true
-            }
-        }
+        _uiState.value = _uiState.value.transform()
     }
 
     override fun onCleared() {
         super.onCleared()
         webSocketService.disconnect()
         usbSerialService.release()
-    }
-
-    fun setGestureTargetHand(targetHand: GestureTargetHand) {
-        resetGestureSendState()
-        mutateState {
-            copy(
-                gestureTargetHand = targetHand,
-                gestureCameraState = gestureCameraState.copy(
-                    targetHand = targetHand,
-                    targetHandMatched = targetHand.matches(gestureCameraState.handedness)
-                )
-            )
-        }
-    }
-
-    fun updateGestureCameraState(state: GestureCameraState) {
-        val targetHand = _uiState.value.gestureTargetHand
-        mutateState {
-            copy(
-                gestureCameraState = state.copy(
-                    targetHand = targetHand,
-                    targetHandMatched = targetHand.matches(state.handedness)
-                )
-            )
-        }
     }
 
     fun fingerAnglesToCompactState(angles: FingerAngles): Map<String, Float> {
@@ -704,49 +782,22 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun resetGestureSendState() {
-        lastGestureCompactState = null
-        lastGestureSendTimeMs = 0L
+        gestureCommandScheduler.reset()
         lastGestureUiUpdateTimeMs = 0L
-        gestureControlReady = false
     }
 
     fun markGestureControlReady() {
-        if (!gestureControlReady) {
-            gestureControlReady = true
-            lastGestureCompactState = null
-            lastGestureSendTimeMs = 0L
-            lastGestureUiUpdateTimeMs = 0L
-        }
+        gestureCommandScheduler.markReady()
     }
 
-    fun updateControlValuesFromGesture(angles: FingerAngles) {
-        val rawCompactState = fingerAnglesToCompactState(angles)
-        val previous = lastGestureCompactState
-        val compactState = rawCompactState
-        val now = System.currentTimeMillis()
-        val changedEnough = previous == null || compactState.any { (key, value) ->
-            abs((previous[key] ?: value) - value) >= GESTURE_MIN_DELTA
-        }
-        val intervalReached = now - lastGestureSendTimeMs >= GESTURE_SEND_INTERVAL_MS
-        val shouldSend = if (!gestureControlReady) {
-            false
-        } else if (previous == null) {
-            true
-        } else {
-            changedEnough && intervalReached
-        }
-
-        if (!shouldSend) {
-            return
-        }
-
-        if (sendState(compactState, GESTURE_DURATION_MS, logControl = false)) {
-            gestureControlReady = true
-            lastGestureCompactState = compactState
-            lastGestureSendTimeMs = now
+    fun updateControlValuesFromGesture(angles: FingerAngles, capturedAtMs: Long = 0L) {
+        val now = capturedAtMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
+        val command = gestureCommandScheduler.plan(fingerAnglesToCompactState(angles), now) ?: return
+        if (sendState(command.values, command.durationMs, logControl = false)) {
+            gestureCommandScheduler.markSent(command, now)
             if (now - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
                 lastGestureUiUpdateTimeMs = now
-                updateControlValues(compactState)
+                updateControlValues(command.values)
             }
         }
     }

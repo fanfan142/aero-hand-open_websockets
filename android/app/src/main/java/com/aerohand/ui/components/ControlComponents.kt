@@ -52,8 +52,10 @@ fun ConnectionPanel(
     wifiConnected: Boolean,
     usbConnected: Boolean,
     statusMessage: String,
-    connectedServer: String?,
     wifiConfig: WifiConfigUiState,
+    firmwareIdentified: Boolean,
+    wifiProvisioningSupported: Boolean,
+    firmwareVersion: String?,
     onModeChange: (ConnectionMode) -> Unit,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
@@ -144,8 +146,10 @@ fun ConnectionPanel(
                             host = host,
                             port = port,
                             connected = wifiConnected,
-                            connectedServer = connectedServer,
                             wifiConfig = wifiConfig,
+                            firmwareIdentified = firmwareIdentified,
+                            wifiProvisioningSupported = wifiProvisioningSupported,
+                            firmwareVersion = firmwareVersion,
                             onHostChange = onHostChange,
                             onPortChange = onPortChange,
                             onConnect = onConnect,
@@ -180,8 +184,10 @@ private fun WifiConnectionContent(
     host: String,
     port: String,
     connected: Boolean,
-    connectedServer: String?,
     wifiConfig: WifiConfigUiState,
+    firmwareIdentified: Boolean,
+    wifiProvisioningSupported: Boolean,
+    firmwareVersion: String?,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
@@ -198,7 +204,7 @@ private fun WifiConnectionContent(
     onSwitchToAp: () -> Unit,
     onClearStaConfig: () -> Unit
 ) {
-    val canProvisionSta = connected && connectedServer == "192.168.4.1:8765" && wifiConfig.currentWifiMode.equals("AP", ignoreCase = true)
+    val canProvisionSta = connected && wifiProvisioningSupported && !wifiConfig.isProvisioning
 
     Column {
         Row(
@@ -263,13 +269,19 @@ private fun WifiConnectionContent(
                 )
                 Text(
                     text = "当前 ${wifiConfig.currentWifiMode} · IP ${wifiConfig.currentIp}" +
-                        (wifiConfig.configuredStaSsid?.let { " · STA $it" } ?: ""),
+                        (wifiConfig.configuredStaSsid?.let { " · STA $it" } ?: "") +
+                        (firmwareVersion?.let { " · 固件 $it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (!canProvisionSta) {
                     Text(
-                        text = "仅实际连接设备默认 AP 192.168.4.1:8765 时允许下发 WiFi 凭据",
+                        text = when {
+                            !connected -> "连接设备后可下发 WiFi 配置"
+                            !firmwareIdentified -> "正在检测固件能力"
+                            !wifiProvisioningSupported -> "当前固件不支持 App 配网，请刷入新版 WebSocket 固件"
+                            else -> "正在等待设备确认 WiFi 指令"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -333,6 +345,7 @@ private fun WifiConnectionContent(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    enabled = !wifiConfig.isProvisioning,
                     shape = RoundedCornerShape(18.dp)
                 )
                 Row(
@@ -390,16 +403,16 @@ private fun WifiConnectionContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MiniActionButton(
-                        text = "下发并切 STA",
+                        text = if (wifiConfig.isProvisioning) "等待设备确认" else "下发并切 STA",
                         onClick = onApplyStaConfig,
-                        enabled = canProvisionSta && wifiConfig.staSsid.isNotBlank() && wifiConfig.staPassword.isNotBlank(),
+                        enabled = canProvisionSta && wifiConfig.staSsid.isNotBlank(),
                         modifier = Modifier.weight(1f),
                         color = MaterialTheme.colorScheme.primary
                     )
                     MiniActionButton(
                         text = "切回 AP",
                         onClick = onSwitchToAp,
-                        enabled = connected,
+                        enabled = canProvisionSta,
                         modifier = Modifier.weight(1f),
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -407,7 +420,7 @@ private fun WifiConnectionContent(
                 MiniActionButton(
                     text = "清除 STA 配置",
                     onClick = onClearStaConfig,
-                    enabled = connected,
+                    enabled = canProvisionSta,
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.tertiary
                 )

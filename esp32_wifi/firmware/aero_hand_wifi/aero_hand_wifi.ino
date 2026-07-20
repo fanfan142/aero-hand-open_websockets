@@ -84,8 +84,14 @@ static constexpr float ACTUATION_UPPER_LIMITS[SERVO_COUNT] = {30.0f, 104.1250f, 
 uint8_t getJointNumber(const char* jointId);
 void handleCommand(uint8_t clientNum, const char* payload, size_t length);
 void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
-void sendResponse(uint8_t clientNum, bool success, const char* message);
-void sendWifiStatus(uint8_t clientNum);
+void sendResponse(
+    uint8_t clientNum,
+    bool success,
+    const char* message,
+    const char* commandType = nullptr,
+    const char* requestId = nullptr
+);
+void sendWifiStatus(uint8_t clientNum, const char* requestId = nullptr);
 void loadWiFiConfig();
 void saveWiFiConfig();
 void clearWiFiConfig();
@@ -136,6 +142,7 @@ void setup() {
         doc["ip"] = getCurrentIp();
         doc["firmware_type"] = "esp32_wifi";
         doc["firmware_version"] = "v1.0";
+        doc["protocol_version"] = 2;
         String output;
         serializeJson(doc, output);
         wsServer.sendText(num, output);
@@ -383,6 +390,9 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
     }
 
     const char* type = doc["type"].as<const char*>();
+    const char* requestId = doc["request_id"].is<const char*>()
+        ? doc["request_id"].as<const char*>()
+        : nullptr;
 
     if (strcmp(type, "joint_control") == 0) {
         // 单关节控制 - 检查必要字段存在且类型正确
@@ -542,11 +552,11 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
     } else if (strcmp(type, "wifi_status") == 0) {
-        sendWifiStatus(clientNum);
+        sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_config_set") == 0) {
         if (!doc["data"]["sta_ssid"].is<const char*>() || !doc["data"]["sta_password"].is<const char*>()) {
-            sendResponse(clientNum, false, "Missing required fields in wifi_config_set");
+            sendResponse(clientNum, false, "Missing required fields in wifi_config_set", type, requestId);
             return;
         }
         g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
@@ -559,38 +569,52 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         g_wifiModeSetting = AH_WIFI_MODE_DUAL;
         saveWiFiConfig();
         DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
-        sendResponse(clientNum, true, "WiFi config saved");
-        sendWifiStatus(clientNum);
+        sendResponse(clientNum, true, "WiFi config saved", type, requestId);
+        sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_connect_sta") == 0) {
-        sendResponse(clientNum, true, "STA switch scheduled");
-        sendWifiStatus(clientNum);
+        sendResponse(clientNum, true, "STA switch scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_CONNECT_STA);
 
     } else if (strcmp(type, "wifi_start_ap") == 0) {
-        sendResponse(clientNum, true, "AP switch scheduled");
-        sendWifiStatus(clientNum);
+        sendResponse(clientNum, true, "AP switch scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_START_AP);
 
     } else if (strcmp(type, "wifi_clear_sta") == 0) {
-        sendResponse(clientNum, true, "STA config clear scheduled");
-        sendWifiStatus(clientNum);
+        sendResponse(clientNum, true, "STA config clear scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_CLEAR_STA);
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
-        sendResponse(clientNum, false,"Unknown command type");
+        sendResponse(clientNum, false, "Unknown command type", type, requestId);
     }
 }
 
-void sendResponse(uint8_t clientNum, bool success, const char* message) {
+void sendResponse(
+    uint8_t clientNum,
+    bool success,
+    const char* message,
+    const char* commandType,
+    const char* requestId
+) {
     JsonDocument response;
     response["type"] = "response";
     response["success"] = success;
     response["timestamp"] = millis();
+    if (commandType != nullptr && commandType[0] != '\0') {
+        response["command_type"] = commandType;
+        response["data"]["command_type"] = commandType;
+    }
+    if (requestId != nullptr && requestId[0] != '\0') {
+        response["request_id"] = requestId;
+        response["data"]["request_id"] = requestId;
+    }
 
     if (success) {
         response["data"]["executed"] = true;
+        if (commandType != nullptr && commandType[0] != '\0') {
+            response["data"]["message"] = message;
+        }
     } else {
         response["error"]["code"] = "COMMAND_ERROR";
         response["error"]["message"] = message;
@@ -601,10 +625,14 @@ void sendResponse(uint8_t clientNum, bool success, const char* message) {
     wsServer.sendText(clientNum, output);
 }
 
-void sendWifiStatus(uint8_t clientNum) {
+void sendWifiStatus(uint8_t clientNum, const char* requestId) {
     JsonDocument response;
     response["type"] = "wifi_status";
     response["timestamp"] = millis();
+    response["protocol_version"] = 2;
+    if (requestId != nullptr && requestId[0] != '\0') {
+        response["request_id"] = requestId;
+    }
     response["data"]["mode"] = getWifiModeName();
     response["data"]["ip"] = getCurrentIp();
     if (!g_staSsid.isEmpty()) {

@@ -777,7 +777,10 @@ data class WifiStatus(
     val staGateway: String = "192.168.1.1",
     val staSubnet: String = "255.255.255.0",
     val staDns1: String = "192.168.1.1",
-    val staDns2: String = "114.114.114.114"
+    val staDns2: String = "114.114.114.114",
+    val requestId: String? = null,
+    val protocolVersion: Int = 0,
+    val supportsStaticConfiguration: Boolean = false
 )
 
 sealed class ConnectionState {
@@ -831,11 +834,31 @@ object Commands {
         })
     }.toString()
 
-    fun connectSta() = """{"type":"wifi_connect_sta","timestamp":${System.currentTimeMillis()}}"""
+    fun setWifiConfig(request: WifiProvisioningRequest, requestId: String? = null): String {
+        return JSONObject(setWifiConfig(
+            request.ssid,
+            request.password,
+            request.staticIp,
+            request.gateway,
+            request.subnet,
+            request.dns1,
+            request.dns2
+        )).apply {
+            requestId?.let { put("request_id", it) }
+        }.toString()
+    }
 
-    fun startAp() = """{"type":"wifi_start_ap","timestamp":${System.currentTimeMillis()}}"""
+    fun connectSta(requestId: String? = null) = wifiCommand("wifi_connect_sta", requestId)
 
-    fun clearWifiConfig() = """{"type":"wifi_clear_sta","timestamp":${System.currentTimeMillis()}}"""
+    fun startAp(requestId: String? = null) = wifiCommand("wifi_start_ap", requestId)
+
+    fun clearWifiConfig(requestId: String? = null) = wifiCommand("wifi_clear_sta", requestId)
+
+    private fun wifiCommand(type: String, requestId: String?): String = JSONObject().apply {
+        put("type", type)
+        put("timestamp", System.currentTimeMillis())
+        requestId?.let { put("request_id", it) }
+    }.toString()
 }
 
 private const val UINT16_MAX = 65535f
@@ -1149,16 +1172,7 @@ fun parseStatesResponse(text: String): Map<String, Float>? {
 }
 
 fun parseHandInfo(text: String): String? {
-    return try {
-        val json = JSONObject(text)
-        if (json.optString("type") != "hand_info") {
-            null
-        } else {
-            json.optString("hand_type").takeIf { it.isNotBlank() }
-        }
-    } catch (_: Exception) {
-        null
-    }
+    return parseDeviceInfo(text)?.handType?.takeIf { it.isNotBlank() }
 }
 
 fun parseWifiStatus(text: String): WifiStatus? {
@@ -1168,6 +1182,14 @@ fun parseWifiStatus(text: String): WifiStatus? {
             null
         } else {
             val data = json.optJSONObject("data") ?: json
+            val staticFields = listOf(
+                "sta_static_ip",
+                "sta_gateway",
+                "sta_subnet",
+                "sta_dns1",
+                "sta_dns2"
+            )
+            val protocolVersion = json.optInt("protocol_version", data.optInt("protocol_version", 0))
             WifiStatus(
                 mode = data.optString("mode", "AP"),
                 ip = data.optString("ip", "192.168.4.1"),
@@ -1176,7 +1198,12 @@ fun parseWifiStatus(text: String): WifiStatus? {
                 staGateway = data.optString("sta_gateway", "192.168.1.1"),
                 staSubnet = data.optString("sta_subnet", "255.255.255.0"),
                 staDns1 = data.optString("sta_dns1", "192.168.1.1"),
-                staDns2 = data.optString("sta_dns2", "114.114.114.114")
+                staDns2 = data.optString("sta_dns2", "114.114.114.114"),
+                requestId = json.optString("request_id").takeIf { it.isNotBlank() }
+                    ?: data.optString("request_id").takeIf { it.isNotBlank() },
+                protocolVersion = protocolVersion,
+                supportsStaticConfiguration = staticFields.all { data.has(it) } &&
+                    protocolVersion >= CORRELATED_WIFI_PROTOCOL_VERSION
             )
         }
     } catch (_: Exception) {

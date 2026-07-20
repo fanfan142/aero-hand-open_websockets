@@ -18,6 +18,24 @@ data class GestureFrame(
 class GestureFrameConverter(
     private val maxDetectionSide: Int
 ) {
+    private data class SamplingLayout(
+        val cropLeft: Int,
+        val cropTop: Int,
+        val cropWidth: Int,
+        val cropHeight: Int,
+        val outputWidth: Int,
+        val outputHeight: Int,
+        val pixelStride: Int,
+        val rowStride: Int
+    )
+
+    private var reusableBitmap: Bitmap? = null
+    private var packedPixels = ByteArray(0)
+    private var packedBuffer: ByteBuffer? = null
+    private var samplingLayout: SamplingLayout? = null
+    private var sourceXOffsets = IntArray(0)
+    private var sourceRowOffsets = IntArray(0)
+
     fun convert(imageProxy: ImageProxy): GestureFrame {
         val bitmap = rgbaImageProxyToBitmap(imageProxy)
         val rotation = imageProxy.imageInfo.rotationDegrees
@@ -47,7 +65,7 @@ class GestureFrameConverter(
         val outputSize = detectionBitmapSize(width, height)
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
-        val bitmap = Bitmap.createBitmap(outputSize.width, outputSize.height, Bitmap.Config.ARGB_8888)
+        val bitmap = obtainBitmap(outputSize)
 
         val usesFullBuffer = cropRect.left == 0 &&
             cropRect.top == 0 &&
@@ -64,26 +82,64 @@ class GestureFrameConverter(
             return bitmap
         }
 
-        val packed = ByteArray(outputSize.width * outputSize.height * 4)
+        val layout = SamplingLayout(
+            cropLeft = cropRect.left,
+            cropTop = cropRect.top,
+            cropWidth = width,
+            cropHeight = height,
+            outputWidth = outputSize.width,
+            outputHeight = outputSize.height,
+            pixelStride = pixelStride,
+            rowStride = rowStride
+        )
+        prepareSampling(layout)
         var dst = 0
         for (row in 0 until outputSize.height) {
-            val cropY = (row.toFloat() * height / outputSize.height).toInt().coerceIn(0, height - 1)
-            val sourceY = cropRect.top + cropY
-            val rowStart = sourceY * rowStride
+            val rowStart = sourceRowOffsets[row]
             if (rowStart >= buffer.limit()) break
             for (col in 0 until outputSize.width) {
-                val cropX = (col.toFloat() * width / outputSize.width).toInt().coerceIn(0, width - 1)
-                val sourceX = cropRect.left + cropX
-                val src = rowStart + sourceX * pixelStride
-                if (src + 3 >= buffer.limit() || dst + 3 >= packed.size) break
-                packed[dst++] = buffer.get(src)
-                packed[dst++] = buffer.get(src + 1)
-                packed[dst++] = buffer.get(src + 2)
-                packed[dst++] = buffer.get(src + 3)
+                val src = rowStart + sourceXOffsets[col]
+                if (src + 3 >= buffer.limit() || dst + 3 >= packedPixels.size) break
+                packedPixels[dst++] = buffer.get(src)
+                packedPixels[dst++] = buffer.get(src + 1)
+                packedPixels[dst++] = buffer.get(src + 2)
+                packedPixels[dst++] = buffer.get(src + 3)
             }
         }
-        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(packed))
+        val buf = packedBuffer!!
+        buf.rewind()
+        bitmap.copyPixelsFromBuffer(buf)
         return bitmap
+    }
+
+    private fun obtainBitmap(size: Size): Bitmap {
+        val current = reusableBitmap
+        if (current != null && !current.isRecycled && current.width == size.width && current.height == size.height) {
+            return current
+        }
+        current?.recycle()
+        return Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888).also {
+            reusableBitmap = it
+        }
+    }
+
+    private fun prepareSampling(layout: SamplingLayout) {
+        val requiredBytes = layout.outputWidth * layout.outputHeight * 4
+        if (packedPixels.size != requiredBytes) {
+            packedPixels = ByteArray(requiredBytes)
+            packedBuffer = ByteBuffer.wrap(packedPixels)
+        }
+        if (samplingLayout == layout) return
+
+        sourceXOffsets = IntArray(layout.outputWidth) { column ->
+            val cropX = (column * layout.cropWidth / layout.outputWidth).coerceIn(0, layout.cropWidth - 1)
+            (layout.cropLeft + cropX) * layout.pixelStride
+        }
+        sourceRowOffsets = IntArray(layout.outputHeight) { row ->
+            val cropY = (row * layout.cropHeight / layout.outputHeight).coerceIn(0, layout.cropHeight - 1)
+            (layout.cropTop + cropY) * layout.rowStride
+        }
+        samplingLayout = layout
     }
 
     private fun detectionBitmapSize(width: Int, height: Int): Size {

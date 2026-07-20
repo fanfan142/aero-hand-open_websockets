@@ -16,6 +16,7 @@ class MediaPipeHandTracker private constructor(
     private val delegate: Delegate
 ) : HandTracker {
     override val backendName: String = "MediaPipe/$delegate"
+    private val processingOptionsByRotation = mutableMapOf<Int, ImageProcessingOptions>()
 
     override fun detect(
         bitmap: Bitmap,
@@ -25,9 +26,12 @@ class MediaPipeHandTracker private constructor(
         var mpImage: MPImage? = null
         return try {
             mpImage = BitmapImageBuilder(bitmap).build()
-            val options = ImageProcessingOptions.builder()
-                .setRotationDegrees(rotationDegrees)
-                .build()
+            val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+            val options = processingOptionsByRotation.getOrPut(normalizedRotation) {
+                ImageProcessingOptions.builder()
+                    .setRotationDegrees(normalizedRotation)
+                    .build()
+            }
             val result = landmarker.detectForVideo(mpImage, options, timestampMs)
             result.landmarks().mapIndexedNotNull { index, landmarks ->
                 if (landmarks.size < 21) return@mapIndexedNotNull null

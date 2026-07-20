@@ -32,6 +32,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -43,8 +44,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aerohand.websocket.ControlDefinitions
+import com.aerohand.websocket.ControlTransport
 import com.aerohand.websocket.LogEntry
 import com.aerohand.websocket.PresetAction
+import com.aerohand.websocket.buildProtocolPreview
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -251,13 +254,16 @@ private fun PresetActionTile(
 @Composable
 fun JointControlPage(
     controlValues: Map<String, Float>,
-    protocolPreview: String,
+    controlTransport: ControlTransport,
     onControlChange: (String, Float) -> Unit,
     onAllZeros: () -> Unit,
     onGetStates: () -> Unit,
     isConnected: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val protocolPreview = remember(controlValues, controlTransport) {
+        buildProtocolPreview(controlValues, controlTransport)
+    }
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
