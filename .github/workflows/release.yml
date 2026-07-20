@@ -14,9 +14,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set version from tag
-        run: echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        run: |
+          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -29,7 +33,13 @@ jobs:
 
       - name: Create local.properties
         run: |
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" > "android/local.properties"
+
+      - name: Run Android unit tests
+        working-directory: "android"
+        run: |
+          chmod +x "./gradlew"
+          "./gradlew" :app:testDebugUnitTest -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${APP_VERSION_CODE}" --stacktrace --no-daemon
 
       - name: Prepare signing keystore from secrets
         env:
@@ -45,17 +55,16 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 --decode > /tmp/android-signing.jks
 
       - name: Build release APK
+        working-directory: "android"
         env:
           ANDROID_SIGNING_STORE_FILE: /tmp/android-signing.jks
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
           ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${{ github.run_number }}" --stacktrace --no-daemon 2>&1 | tee release-build.log
-          tail -100 release-build.log
-          test -f app/build/outputs/apk/release/app-release.apk
+          "./gradlew" :app:assembleRelease -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${APP_VERSION_CODE}" --stacktrace --no-daemon 2>&1 | tee "release-build.log"
+          tail -100 "release-build.log"
+          test -f "app/build/outputs/apk/release/app-release.apk"
 
       - name: Rename APK to versioned name
         run: |
@@ -88,6 +97,7 @@ jobs:
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
+            - WiFi 配网需搭配同一 Release 中声明 protocol_version=2 的 v0.2.0 左右手固件
           generate_release_notes: true
           make_latest: true
 

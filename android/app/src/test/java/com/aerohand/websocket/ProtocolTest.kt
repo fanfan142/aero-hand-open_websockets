@@ -3,6 +3,9 @@ package com.aerohand.websocket
 import org.json.JSONObject
 import org.json.JSONArray
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -157,6 +160,127 @@ class ProtocolTest {
         assertEquals("192.168.1.210", parsed.ip)
         assertEquals("Lab_2G", parsed.staSsid)
         assertEquals("192.168.1.1", parsed.staGateway)
+    }
+
+    @Test
+    fun deviceInfoDeclaresModernFirmwareCapabilities() {
+        val modern = parseDeviceInfo(
+            """{"type":"hand_info","hand_type":"Right","firmware_type":"firmware_ws","firmware_version":"v0.2.0","protocol_version":2}"""
+        )
+        val partialLegacy = parseDeviceInfo(
+            """{"type":"hand_info","hand_type":"Right","firmware_type":"firmware_ws","firmware_version":"v0.1.5"}"""
+        )
+        val legacy = parseDeviceInfo("""{"type":"hand_info","hand_type":"Right"}""")
+
+        assertNotNull(modern)
+        assertEquals("Right", modern!!.handType)
+        assertEquals("v0.2.0", modern.firmwareVersion)
+        assertTrue(modern.capabilities.actuatorControl)
+        assertTrue(modern.capabilities.wifiProvisioning)
+        val partialLegacyInfo = requireNotNull(partialLegacy)
+        assertTrue(partialLegacyInfo.capabilities.actuatorControl)
+        assertFalse(partialLegacyInfo.capabilities.wifiProvisioning)
+        assertNotNull(legacy)
+        assertFalse(legacy!!.capabilities.actuatorControl)
+        assertFalse(legacy.capabilities.wifiProvisioning)
+    }
+
+    @Test
+    fun legacyV020WithoutProtocolVersionDoesNotEnableCorrelatedWifiProvisioning() {
+        val legacyV020 = requireNotNull(
+            parseDeviceInfo(
+                """{"type":"hand_info","hand_type":"Right","firmware_type":"firmware_ws","firmware_version":"v0.2.0"}"""
+            )
+        )
+
+        assertEquals("v0.2.0", legacyV020.firmwareVersion)
+        assertEquals(0, legacyV020.protocolVersion)
+        assertTrue(legacyV020.capabilities.actuatorControl)
+        assertFalse(legacyV020.capabilities.wifiProvisioning)
+    }
+
+    @Test
+    fun commandResponseParsesUnsupportedFirmwareErrorAndCorrelatedAck() {
+        val unsupported = parseCommandResponse(
+            """{"type":"response","success":false,"error":{"code":"COMMAND_ERROR","message":"Unknown command type"}}"""
+        )
+        val ack = parseCommandResponse(
+            """{"type":"response","success":true,"request_id":"7-3","data":{"executed":true,"command_type":"wifi_connect_sta"}}"""
+        )
+        val genericAck = parseCommandResponse(
+            """{"type":"response","success":true,"data":{"executed":true}}"""
+        )
+
+        assertEquals("Unknown command type", unsupported?.errorMessage)
+        assertFalse(requireNotNull(unsupported).success)
+        assertTrue(requireNotNull(ack).success)
+        assertEquals("wifi_connect_sta", ack.commandType)
+        assertEquals("7-3", ack.requestId)
+        assertFalse(ack.isGenericExecutionAck)
+        assertTrue(requireNotNull(genericAck).isGenericExecutionAck)
+        assertNull(parseCommandResponse("""{"type":"wifi_status"}"""))
+    }
+
+    @Test
+    fun wifiProvisioningPreservesCredentialsAndRequiresDeviceConfirmation() {
+        val request = WifiProvisioningRequest(
+            ssid = " Lab 2G ",
+            password = " pass word ",
+            staticIp = "192.168.31.210",
+            gateway = "192.168.31.1",
+            subnet = "255.255.255.0",
+            dns1 = "192.168.31.1",
+            dns2 = "1.1.1.1"
+        )
+
+        assertNull(validateWifiProvisioning(request))
+        val payload = JSONObject(Commands.setWifiConfig(request, "4-9"))
+        assertEquals(" Lab 2G ", payload.getJSONObject("data").getString("sta_ssid"))
+        assertEquals(" pass word ", payload.getJSONObject("data").getString("sta_password"))
+        assertEquals("4-9", payload.getString("request_id"))
+
+        val confirmed = WifiStatus(
+            staSsid = " Lab 2G ",
+            staStaticIp = "192.168.31.210",
+            requestId = "4-9",
+            supportsStaticConfiguration = true
+        )
+        val stale = confirmed.copy(requestId = "4-8")
+        assertTrue(isWifiProvisioningConfirmation(request, "4-9", confirmed))
+        assertFalse(isWifiProvisioningConfirmation(request, "4-9", stale))
+    }
+
+    @Test
+    fun wifiStatusDoesNotInventStaticConfigurationCapability() {
+        val legacyStatus = parseWifiStatus(
+            """{"type":"wifi_status","firmware_version":"v0.2.0","data":{"mode":"AP","ip":"192.168.4.1","sta_ssid":"Lab","sta_static_ip":"192.168.1.210","sta_gateway":"192.168.1.1","sta_subnet":"255.255.255.0","sta_dns1":"192.168.1.1","sta_dns2":"1.1.1.1"}}"""
+        )
+        val modernStatus = parseWifiStatus(
+            """{"type":"wifi_status","protocol_version":2,"request_id":"2-1","data":{"mode":"AP","ip":"192.168.4.1","sta_ssid":"Lab","sta_static_ip":"192.168.1.210","sta_gateway":"192.168.1.1","sta_subnet":"255.255.255.0","sta_dns1":"192.168.1.1","sta_dns2":"1.1.1.1"}}"""
+        )
+
+        assertFalse(requireNotNull(legacyStatus).supportsStaticConfiguration)
+        assertEquals(0, legacyStatus.protocolVersion)
+        assertTrue(requireNotNull(modernStatus).supportsStaticConfiguration)
+        assertEquals("2-1", modernStatus.requestId)
+    }
+
+    @Test
+    fun wifiProvisioningRejectsInvalidOrCrossSubnetStaticNetwork() {
+        val request = WifiProvisioningRequest(
+            ssid = "Lab_2G",
+            password = "12345678",
+            staticIp = "192.168.31.210",
+            gateway = "192.168.1.1",
+            subnet = "255.255.255.0",
+            dns1 = "192.168.1.1",
+            dns2 = "1.1.1.1"
+        )
+
+        val error = validateWifiProvisioning(request)
+
+        assertNotNull(error)
+        assertTrue(error!!.contains("同一子网"))
     }
 
     @Test

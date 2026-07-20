@@ -91,7 +91,7 @@ data class GestureTuningProfile(
 }
 
 data class GestureCalibrationProfile(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val handSide: String = "",
     val cameraFacing: GestureCameraFacing = GestureCameraFacing.FRONT,
     val mirrorMode: GestureMirrorMode = GestureMirrorMode.SELFIE,
@@ -121,7 +121,8 @@ data class GestureCalibrationProfile(
 data class GestureControlFrame(
     val allowed: Boolean,
     val angles: FingerAngles = FingerAngles(),
-    val message: String = ""
+    val message: String = "",
+    val capturedAtMs: Long = 0L
 )
 
 data class GestureCameraState(

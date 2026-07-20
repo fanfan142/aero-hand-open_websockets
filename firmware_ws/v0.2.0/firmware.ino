@@ -175,11 +175,17 @@ void startApMode();
 bool connectToSta(bool fallbackToAp);
 const char* getWifiModeName();
 String getCurrentIp();
-void sendWifiStatus(uint8_t clientNum);
+void sendWifiStatus(uint8_t clientNum, const char* requestId = nullptr);
 void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length);
 void handleWsCommand(uint8_t clientNum, const char* payload, size_t length);
 void processJsonCommand(uint8_t clientNum, const JsonDocument& doc);
-void sendWsResponse(uint8_t clientNum, bool success, const char* message);
+void sendWsResponse(
+    uint8_t clientNum,
+    bool success,
+    const char* message,
+    const char* commandType = nullptr,
+    const char* requestId = nullptr
+);
 void broadcastJointStates();
 void blinkLED(int times);
 void scheduleWifiAction(PendingWifiAction action);
@@ -1012,6 +1018,7 @@ void setup() {
     doc["ip"] = getCurrentIp();
     doc["firmware_type"] = "firmware_ws";
     doc["firmware_version"] = "v0.2.0";
+    doc["protocol_version"] = 2;
     String output;
     serializeJson(doc, output);
     wsServer.sendText(num, output);
@@ -1299,6 +1306,9 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
     }
 
     const char* type = doc["type"].as<const char*>();
+    const char* requestId = doc["request_id"].is<const char*>()
+        ? doc["request_id"].as<const char*>()
+        : nullptr;
 
     if (strcmp(type, "joint_control") == 0) {
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
@@ -1429,11 +1439,11 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
     } else if (strcmp(type, "wifi_status") == 0) {
-        sendWifiStatus(clientNum);
+        sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_config_set") == 0) {
         if (!doc["data"]["sta_ssid"].is<const char*>() || !doc["data"]["sta_password"].is<const char*>()) {
-            sendWsResponse(clientNum, false, "Missing required fields in wifi_config_set");
+            sendWsResponse(clientNum, false, "Missing required fields in wifi_config_set", type, requestId);
             return;
         }
         g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
@@ -1446,38 +1456,52 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         g_wifiModeSetting = AH_WIFI_MODE_DUAL;
         saveWiFiConfig();
         DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
-        sendWsResponse(clientNum, true, "WiFi config saved");
-        sendWifiStatus(clientNum);
+        sendWsResponse(clientNum, true, "WiFi config saved", type, requestId);
+        sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_connect_sta") == 0) {
-        sendWsResponse(clientNum, true, "STA switch scheduled");
-        sendWifiStatus(clientNum);
+        sendWsResponse(clientNum, true, "STA switch scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_CONNECT_STA);
 
     } else if (strcmp(type, "wifi_start_ap") == 0) {
-        sendWsResponse(clientNum, true, "AP switch scheduled");
-        sendWifiStatus(clientNum);
+        sendWsResponse(clientNum, true, "AP switch scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_START_AP);
 
     } else if (strcmp(type, "wifi_clear_sta") == 0) {
-        sendWsResponse(clientNum, true, "STA config clear scheduled");
-        sendWifiStatus(clientNum);
+        sendWsResponse(clientNum, true, "STA config clear scheduled", type, requestId);
         scheduleWifiAction(WIFI_ACTION_CLEAR_STA);
 
     } else {
         DEBUG_PRINTF("[CMD] Unknown command type: %s\n", type);
-        sendWsResponse(clientNum, false, "Unknown command type");
+        sendWsResponse(clientNum, false, "Unknown command type", type, requestId);
     }
 }
 
-void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
+void sendWsResponse(
+    uint8_t clientNum,
+    bool success,
+    const char* message,
+    const char* commandType,
+    const char* requestId
+) {
     DynamicJsonDocument response(WS_RESPONSE_DOC_CAPACITY);
     response["type"] = "response";
     response["success"] = success;
     response["timestamp"] = millis();
+    if (commandType != nullptr && commandType[0] != '\0') {
+        response["command_type"] = commandType;
+        response["data"]["command_type"] = commandType;
+    }
+    if (requestId != nullptr && requestId[0] != '\0') {
+        response["request_id"] = requestId;
+        response["data"]["request_id"] = requestId;
+    }
 
     if (success) {
         response["data"]["executed"] = true;
+        if (commandType != nullptr && commandType[0] != '\0') {
+            response["data"]["message"] = message;
+        }
     } else {
         response["error"]["code"] = "COMMAND_ERROR";
         response["error"]["message"] = message;
@@ -1488,10 +1512,14 @@ void sendWsResponse(uint8_t clientNum, bool success, const char* message) {
     wsServer.sendText(clientNum, output);
 }
 
-void sendWifiStatus(uint8_t clientNum) {
+void sendWifiStatus(uint8_t clientNum, const char* requestId) {
     DynamicJsonDocument response(512);
     response["type"] = "wifi_status";
     response["timestamp"] = millis();
+    response["protocol_version"] = 2;
+    if (requestId != nullptr && requestId[0] != '\0') {
+        response["request_id"] = requestId;
+    }
     response["data"]["mode"] = getWifiModeName();
     response["data"]["ip"] = getCurrentIp();
     if (!g_staSsid.isEmpty()) {

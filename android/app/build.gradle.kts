@@ -14,10 +14,10 @@ android {
         minSdk = 26
         targetSdk = 34
 
-        // CI_VERSION_CODE / CI_VERSION_NAME 由 workflow 通过 -P 传入
-        // fallback 与 CI workflow 保持一致，保证 debug/release 版本号一致可互相覆盖
-        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 153
-        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.5.3"
+        // CI_VERSION_CODE / CI_VERSION_NAME 由 workflow 通过 -P 传入。
+        // 云端使用同一提交的提交计数，确保 Debug 与 Release 的 versionCode 一致且单调递增。
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 100155
+        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.5.5"
 
         vectorDrawables {
             useSupportLibrary = true

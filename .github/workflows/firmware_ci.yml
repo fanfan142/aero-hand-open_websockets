@@ -1,0 +1,62 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: python -m pip install platformio==6.1.19
+
+      - name: Run firmware checker tests
+        run: python -m unittest discover -s "scripts/tests" -p "test_*.py" -v
+
+      - name: Check firmware source contracts
+        run: python "scripts/check_firmware_contract.py" "esp32_wifi/firmware/aero_hand_wifi" "firmware_ws/v0.2.0"
+
+      - name: Build standalone ESP32 Wi-Fi firmware
+        run: pio run -d "esp32_wifi/firmware/aero_hand_wifi" -e "aero_hand_wifi"
+
+      - name: Prepare recommended v0.2.0 projects
+        run: python -c "from scripts.build_versions import create_project; create_project('v0.2.0', 'lefthand'); create_project('v0.2.0', 'righthand')"
+
+      - name: Build recommended v0.2.0 firmware
+        run: |
+          pio run -d "firmware_ws_build/v0.2.0/lefthand" -e "esp32-s3-devkitc-1"
+          pio run -d "firmware_ws_build/v0.2.0/righthand" -e "esp32-s3-devkitc-1"
+
+      - name: Check compiled firmware contracts
+        run: >-
+          python "scripts/check_firmware_contract.py"
+          "esp32_wifi/firmware/aero_hand_wifi/.pio/build/aero_hand_wifi/firmware.bin"
+          "firmware_ws_build/v0.2.0/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
+          "firmware_ws_build/v0.2.0/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
+
+      - name: Upload firmware CI artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-ci-bin
+          path: |
+            esp32_wifi/firmware/aero_hand_wifi/.pio/build/aero_hand_wifi/firmware.bin
+            firmware_ws_build/v0.2.0/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin
+            firmware_ws_build/v0.2.0/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin
+          if-no-files-found: error

@@ -104,6 +104,10 @@ fun HandControlScreen() {
 
     var selectedControlPage by remember { mutableIntStateOf(2) }
 
+    LaunchedEffect(gestureService, uiState.gestureTargetHand) {
+        gestureService.setTargetHand(uiState.gestureTargetHand)
+    }
+
     LaunchedEffect(uiState.wifiConnected, uiState.usbConnected) {
         if ((uiState.wifiConnected || uiState.usbConnected) &&
             uiState.connectionPanelVisibility == ConnectionPanelVisibility.EXPANDED
@@ -122,20 +126,13 @@ fun HandControlScreen() {
         }
     }
 
-    // Collect throttled gesture UI state.
-    LaunchedEffect(gestureService.state) {
-        gestureService.state.collect { state ->
-            viewModel.updateGestureCameraState(state)
-        }
-    }
-
     // Keep real-time control independent from Compose UI refresh rate.
     LaunchedEffect(gestureService.controlFrame, selectedControlPage) {
         gestureService.controlFrame.collect { frame ->
             if (selectedControlPage == 2) {
                 if (frame.allowed) {
                     viewModel.markGestureControlReady()
-                    viewModel.updateControlValuesFromGesture(frame.angles)
+                    viewModel.updateControlValuesFromGesture(frame.angles, frame.capturedAtMs)
                 } else {
                     viewModel.resetGestureSendState()
                 }
@@ -240,8 +237,10 @@ fun HandControlScreen() {
                         wifiConnected = uiState.wifiConnected,
                         usbConnected = uiState.usbConnected,
                         statusMessage = uiState.statusMessage,
-                        connectedServer = uiState.connectedServer,
                         wifiConfig = uiState.wifiConfig,
+                        firmwareIdentified = uiState.deviceCapabilities.identified,
+                        wifiProvisioningSupported = uiState.deviceCapabilities.wifiProvisioning,
+                        firmwareVersion = uiState.firmwareVersion,
                         onModeChange = viewModel::setConnectionMode,
                         onHostChange = viewModel::setHost,
                         onPortChange = viewModel::setPort,
@@ -316,7 +315,7 @@ fun HandControlScreen() {
                         when (selectedControlPage) {
                             1 -> JointControlPage(
                                 controlValues = uiState.controlValues,
-                                protocolPreview = uiState.protocolPreview,
+                                controlTransport = uiState.controlTransport,
                                 onControlChange = viewModel::updateControlValue,
                                 onAllZeros = viewModel::sendAllZeros,
                                 onGetStates = viewModel::requestStates,
@@ -327,11 +326,7 @@ fun HandControlScreen() {
                             )
                             2 -> GestureFollowPage(
                                 gestureService = gestureService,
-                                cameraState = uiState.gestureCameraState,
-                                onTargetHandChange = {
-                                    gestureService.setTargetHand(it)
-                                    viewModel.setGestureTargetHand(it)
-                                },
+                                onTargetHandChange = viewModel::setGestureTargetHand,
                                 onStartCalibration = { gestureService.startCalibration() },
                                 onRecordCalibrationPose = { gestureService.recordCalibrationPose() },
                                 onCameraFlip = { viewModel.resetGestureSendState() }

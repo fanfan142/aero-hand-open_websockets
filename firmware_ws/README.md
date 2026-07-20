@@ -27,6 +27,8 @@ firmware_ws/
 
 **注意**: 每个版本目录包含完整独立的项目文件，可直接使用 PlatformIO 或 Arduino IDE 构建。
 
+Android App 的完整静态 IP 配网仅对声明 `protocol_version >= 2` 的当前固件开放。发布产物应来自 `v1.5.5+` Release，或来自与 App 同一提交的 Firmware CI artifact。v0.1.x 虽支持 WebSocket 控制和旧 SSID/密码配置，但不会保存或回传静态 IP、网关、子网和 DNS；未声明协议版本的旧 v0.2.0 也没有关联 ACK，二者都不能作为当前 App 的 AP→STA 推荐固件。
+
 ## 版本差异
 
 | 版本 | 热保护 | 初始扭矩 | 特性 |
@@ -56,6 +58,7 @@ firmware_ws/
    - WiFi AP/STA 模式
    - WebSocket 服务器
    - JSON 命令解析
+   - v0.2.0 配网 `request_id` / `command_type` 关联确认
 
 ### 代码变更说明
 
@@ -125,6 +128,8 @@ wsServer.loop();
 
 ## 编译
 
+正式产物由 GitHub Actions 编译。Firmware CI 构建 v0.2.0 左右手并检查生成 bin 的完整协议标记；版本标签由 Firmware Release 生成可烧录资产。仓库 `firmware_bin/` 中的历史 Arduino 镜像不属于这条发布链。
+
 使用 PlatformIO:
 
 ```bash
@@ -151,4 +156,4 @@ pio run
 ```
 
 ---
-*最后更新: 2026-04-02*
+*最后更新: 2026-07-20*

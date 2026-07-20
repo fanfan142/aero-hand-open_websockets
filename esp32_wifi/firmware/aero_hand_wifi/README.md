@@ -2,6 +2,8 @@
 
 ESP32 WiFi 控制固件，支持 AP 热点模式和 WebSocket 通信。
 
+该目录是独立固件源码与云端编译目标。连续手势跟随和正式左右手发布请使用 `v1.5.5+` Release 中的 `firmware_v0.2.0_lefthand.bin` / `firmware_v0.2.0_righthand.bin`，或与当前 App 同一提交的 Firmware CI artifact；只有明确回传 `protocol_version >= 2` 的构建才支持完整配网。仓库根目录 `firmware_bin/` 是缺少当前 App 完整协议的历史镜像。
+
 ## 功能特性
 
 - WiFi AP 模式：ESP32 开启热点，手机/电脑直连控制
@@ -63,9 +65,18 @@ ESP32 WiFi 控制固件，支持 AP 热点模式和 WebSocket 通信。
 #define STA_DNS2 "114.114.114.114"
 ```
 
-运行后也可通过 Android App 下发并保存 STA 配置。
+运行后也可通过 Android App 下发并保存 STA 配置。配网响应会回传客户端的 `request_id` 与 `command_type`，App 收到匹配 ACK 和完整 `wifi_status` 后才允许切换网络。
 
-## 测试
+## 云端构建
+
+`.github/workflows/firmware_ci.yml` 在 push、Pull Request 或手动触发时执行：
+
+1. 固件 checker 单元测试；
+2. 源码协议契约检查；
+3. PlatformIO 云端编译；
+4. 生成 bin 协议契约检查；
+5. 上传 `firmware-ci-bin` artifact。
+## 真机测试
 
 固件上传后:
 1. ESP32 初始化并执行一次 homing

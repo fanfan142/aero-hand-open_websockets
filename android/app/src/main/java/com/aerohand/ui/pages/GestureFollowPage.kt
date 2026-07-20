@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +50,6 @@ import androidx.core.content.ContextCompat
 import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraService
-import com.aerohand.gesture.GestureCameraState
 import com.aerohand.gesture.GestureCameraFacing
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.gesture.GestureTuningChannel
@@ -59,7 +59,6 @@ import com.aerohand.gesture.SkeletonOverlay
 @Composable
 fun GestureFollowPage(
     gestureService: GestureCameraService,
-    cameraState: GestureCameraState,
     onTargetHandChange: (GestureTargetHand) -> Unit,
     onStartCalibration: () -> Unit,
     onRecordCalibrationPose: () -> Unit,
@@ -67,6 +66,7 @@ fun GestureFollowPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val cameraState by gestureService.state.collectAsState()
     val hasVisibleSkeleton = cameraState.handDetected && cameraState.landmarks.size >= 21
     val previewView = remember {
         PreviewView(context).apply {
