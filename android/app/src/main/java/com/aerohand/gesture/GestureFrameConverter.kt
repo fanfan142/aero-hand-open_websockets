@@ -106,8 +106,9 @@ class GestureFrameConverter(
                 packedPixels[dst++] = buffer.get(src + 3)
             }
         }
-        packedBuffer!!.rewind()
-        bitmap.copyPixelsFromBuffer(packedBuffer)
+        val buf = packedBuffer!!
+        buf.rewind()
+        bitmap.copyPixelsFromBuffer(buf)
         return bitmap
     }
 

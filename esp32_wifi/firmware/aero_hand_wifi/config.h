@@ -52,6 +52,7 @@
 
 #define WS_PORT 8765
 #define WS_PATH "/"
+#define WS_MAX_CLIENTS 4
 
 // 指令处理间隔 (ms)
 #define COMMAND_INTERVAL_MS 20
