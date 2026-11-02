@@ -1,3 +1,3 @@
 websockets>=10.0,<16
 pyserial>=3.5
-aero-open-sdk>=0.1.0.dev1
+aero-open-sdk @ git+https://github.com/chestnut-robotics/aero-hand-open.git@7bb2f23485a7d440960c21046da642de132b7745#subdirectory=sdk

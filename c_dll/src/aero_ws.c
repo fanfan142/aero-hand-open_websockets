@@ -327,8 +327,8 @@ static int json_parse_joints_array(const char* p, AeroStates* states, int max_co
 
         while (*p && *p != '}') {
             p = json_skip_ws(p);
-            if (strncmp(p, "\"joint_id\"", 9) == 0) {
-                p += 9;
+            if (strncmp(p, "\"joint_id\"", 10) == 0) {
+                p += 10;
                 p = json_skip_ws(p);
                 if (*p == ':') p++;
                 char id_buf[32];
