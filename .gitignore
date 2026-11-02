@@ -26,6 +26,7 @@ env/
 Thumbs.db
 
 # ESP32 Build
+**/.pio/
 esp32_wifi/firmware/*/build/
 esp32_wifi/firmware/*/*.bin
 esp32_wifi/firmware/*/*.elf

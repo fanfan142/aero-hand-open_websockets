@@ -1,5 +1,7 @@
 package com.aerohand.websocket
 
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -19,6 +21,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -34,6 +37,7 @@ class WebSocketService {
         .build()
 
     private var webSocket: WebSocket? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val connectionToken = AtomicInteger(0)
     private val commandSequence = AtomicLong(0L)
     private var serialBusyHintLogged = false
@@ -61,16 +65,15 @@ class WebSocketService {
     private val _capabilities = MutableStateFlow(DeviceCapabilities())
     val capabilities: StateFlow<DeviceCapabilities> = _capabilities
 
-    fun connect(host: String, port: Int) {
-        if (_connectionState.value is ConnectionState.Connected ||
-            _connectionState.value is ConnectionState.Connecting
-        ) {
-            disconnect()
-        }
+    fun connect(host: String, port: Int, requireHandIdentity: Boolean = false) {
+        // Drop, rather than gracefully flush, commands for a previous controller.
+        disconnect()
 
         val url = "ws://$host:$port/"
         val token = connectionToken.incrementAndGet()
+        val identityConfirmed = AtomicBoolean(!requireHandIdentity)
         serialBusyHintLogged = false
+        _jointStates.value = emptyMap()
         _deviceInfo.value = null
         _capabilities.value = DeviceCapabilities()
         _wifiStatus.value = WifiStatus()
@@ -82,7 +85,16 @@ class WebSocketService {
             private fun isCurrent(): Boolean = connectionToken.get() == token
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (!isCurrent()) return
+                if (!isCurrent()) { webSocket.cancel(); return }
+                if (requireHandIdentity) {
+                    mainHandler.postDelayed({
+                        if (isCurrent() && !identityConfirmed.get()) {
+                            webSocket.cancel()
+                            _connectionState.value = ConnectionState.Error("未收到有效 hand_info，已拒绝自动发现设备")
+                        }
+                    }, 5_000L)
+                    return
+                }
                 _connectionState.value = ConnectionState.Connected("$host:$port")
                 addLog(LogEntry.Info("Connected", timestamp()))
                 requestStates()
@@ -91,18 +103,30 @@ class WebSocketService {
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (!isCurrent()) return
+                val info = parseDeviceInfo(text)
+                if (requireHandIdentity && !identityConfirmed.get()) {
+                    if (info?.handType != "Left" && info?.handType != "Right") {
+                        // Ignore unrelated services and all messages until this peer proves its identity.
+                        return
+                    }
+                    identityConfirmed.set(true)
+                    _connectionState.value = ConnectionState.Connected("$host:$port", info.handType)
+                    addLog(LogEntry.Info("Identified ${info.handType} hand", timestamp()))
+                    requestStates()
+                    requestWifiStatus()
+                }
                 val response = parseCommandResponse(text)
                 response?.let { commandResponses.tryEmit(it) }
                 if (response?.isGenericExecutionAck != true) {
                     addLog(LogEntry.Receive(sanitizeLogMessage(text), timestamp()))
                 }
                 maybeLogSerialBusyHint(text)
-                parseDeviceInfo(text)?.let { info ->
-                    _deviceInfo.value = info
-                    _capabilities.value = info.capabilities
+                info?.let { deviceInfo ->
+                    _deviceInfo.value = deviceInfo
+                    _capabilities.value = deviceInfo.capabilities
                     val current = _connectionState.value
                     if (current is ConnectionState.Connected) {
-                        _connectionState.value = ConnectionState.Connected(current.server, info.handType)
+                        _connectionState.value = ConnectionState.Connected(current.server, deviceInfo.handType)
                     }
                 }
                 parseWifiStatus(text)?.let { status ->
@@ -132,6 +156,7 @@ class WebSocketService {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (!isCurrent()) return
+                if (requireHandIdentity && !identityConfirmed.get() && _connectionState.value is ConnectionState.Error) return
                 _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
                 addLog(LogEntry.Error("Error: ${t.message}", timestamp()))
             }
@@ -141,8 +166,12 @@ class WebSocketService {
 
     fun disconnect() {
         connectionToken.incrementAndGet()
-        webSocket?.close(1000, "User disconnected")
+        webSocket?.cancel() // close() would drain queued motion commands first.
         webSocket = null
+        _jointStates.value = emptyMap()
+        _deviceInfo.value = null
+        _capabilities.value = DeviceCapabilities()
+        _wifiStatus.value = WifiStatus()
         _connectionState.value = ConnectionState.Disconnected
     }
 

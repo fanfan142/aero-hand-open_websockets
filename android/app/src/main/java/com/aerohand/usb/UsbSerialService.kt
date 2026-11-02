@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.SystemClock
 import com.aerohand.websocket.LogEntry
 import com.aerohand.websocket.buildSerialGetPositionsFrame
 import com.aerohand.websocket.buildSerialHomingFrame
@@ -22,6 +23,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -43,6 +46,9 @@ class UsbSerialService(context: Context) {
     private val portMux = Any()
     private var receiverRegistered = false
     private var pendingDevice: UsbDevice? = null
+    private var pendingPermissionGeneration = -1
+    private val positionDecoder = SerialPositionFrameDecoder()
+    private val connectionGeneration = AtomicInteger(0)
 
     private val _connectionState = MutableStateFlow<UsbConnectionState>(UsbConnectionState.Disconnected)
     val connectionState: StateFlow<UsbConnectionState> = _connectionState
@@ -59,9 +65,11 @@ class UsbSerialService(context: Context) {
                 ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     val device = readUsbDevice(intent) ?: pendingDevice
-                    if (granted && device != null) {
-                        ioScope.launch { openDevice(device) }
-                    } else {
+                    if (granted && device != null && pendingDevice?.deviceId == device.deviceId &&
+                        pendingPermissionGeneration == connectionGeneration.get()) {
+                        val generation = connectionGeneration.get()
+                        ioScope.launch { if (generation == connectionGeneration.get()) openDevice(device, generation) }
+                    } else if (!granted && pendingDevice != null) {
                         _connectionState.value = UsbConnectionState.Error("USB 权限被拒绝")
                         addLog(LogEntry.Error("USB permission denied", timestamp()))
                     }
@@ -84,9 +92,12 @@ class UsbSerialService(context: Context) {
     }
 
     fun findAndConnect() {
+        val requestedGeneration = connectionGeneration.get()
         ioScope.launch {
+            if (requestedGeneration != connectionGeneration.get()) return@launch
             val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
             val supportedDrivers = drivers.filter { driver -> driver.device.vendorId in SUPPORTED_VENDOR_IDS }
+            if (requestedGeneration != connectionGeneration.get()) return@launch
             if (supportedDrivers.isEmpty()) {
                 _connectionState.value = UsbConnectionState.Error("未检测到受支持的 USB 串口设备")
                 addLog(LogEntry.Error("No supported USB serial device found", timestamp()))
@@ -95,14 +106,17 @@ class UsbSerialService(context: Context) {
 
             val driver = supportedDrivers.first()
             val device = driver.device
+            if (requestedGeneration != connectionGeneration.get()) return@launch
             addLog(LogEntry.Info("发现 USB 设备 VID=${device.vendorId} PID=${device.productId}", timestamp()))
 
             if (usbManager.hasPermission(device)) {
-                openDevice(device)
+                if (requestedGeneration == connectionGeneration.get()) openDevice(device, requestedGeneration)
                 return@launch
             }
 
+            if (requestedGeneration != connectionGeneration.get()) return@launch
             pendingDevice = device
+            pendingPermissionGeneration = connectionGeneration.get()
             usbManager.requestPermission(device, buildPermissionIntent())
             _connectionState.value = UsbConnectionState.Error("正在申请 USB 权限，请确认系统弹窗")
             addLog(LogEntry.Info("Requesting USB permission", timestamp()))
@@ -110,30 +124,45 @@ class UsbSerialService(context: Context) {
     }
 
     fun disconnect() {
-        ioScope.launch { disconnectInternal() }
+        // Invalidate every queued write immediately, before the IO thread closes the port.
+        val generation = connectionGeneration.incrementAndGet()
+        pendingDevice = null
+        pendingPermissionGeneration = -1
+        ioScope.launch { if (generation == connectionGeneration.get()) disconnectInternal() }
     }
 
     fun sendHoming() {
+        val generation = connectionGeneration.get()
         ioScope.launch {
-            sendFrame(buildSerialHomingFrame(), "homing")
-        }
-    }
-
-    fun requestStates() {
-        ioScope.launch {
-            val frame = buildSerialGetPositionsFrame()
             synchronized(portMux) {
-                if (sendFrameLocked(frame, frame.toHexString())) {
-                    readActuationStateLocked()
+                if (generation == connectionGeneration.get()) {
+                    sendFrameLocked(buildSerialHomingFrame(), "homing")
                 }
             }
         }
     }
 
-    fun sendCompactState(compactState: Map<String, Float>) {
+    fun requestStates() {
+        val generation = connectionGeneration.get()
         ioScope.launch {
-            val frame = buildSerialPositionControlFrame(compactState)
-            sendFrame(frame, frame.toHexString(), logPayload = false)
+            synchronized(portMux) {
+                if (generation == connectionGeneration.get()) {
+                    val frame = buildSerialGetPositionsFrame()
+                    if (sendFrameLocked(frame, frame.toHexString())) readActuationStateLocked()
+                }
+            }
+        }
+    }
+
+    /** Returns true only after the 16 bytes were written, not when a job was queued. */
+    suspend fun sendCompactState(compactState: Map<String, Float>): Boolean {
+        val generation = connectionGeneration.get()
+        val frame = buildSerialPositionControlFrame(compactState)
+        return withContext(Dispatchers.IO) {
+            synchronized(portMux) {
+                generation == connectionGeneration.get() &&
+                    sendFrameLocked(frame, frame.toHexString(), logPayload = false)
+            }
         }
     }
 
@@ -142,6 +171,9 @@ class UsbSerialService(context: Context) {
     }
 
     fun release() {
+        connectionGeneration.incrementAndGet()
+        pendingDevice = null
+        pendingPermissionGeneration = -1
         ioScope.cancel()
         synchronized(portMux) {
             disconnectInternalLocked()
@@ -149,8 +181,9 @@ class UsbSerialService(context: Context) {
         unregisterReceiver()
     }
 
-    private fun openDevice(device: UsbDevice) {
+    private fun openDevice(device: UsbDevice, generation: Int) {
         synchronized(portMux) {
+            if (generation != connectionGeneration.get()) return
             try {
                 val driver = UsbSerialProber.getDefaultProber().probeDevice(device)
                 if (driver == null) {
@@ -181,10 +214,13 @@ class UsbSerialService(context: Context) {
                 nextPort.rts = true
                 port = nextPort
                 currentDevice = device
+                connectionGeneration.incrementAndGet()
                 _connectionState.value = UsbConnectionState.Connected(device.deviceName ?: "USB Serial")
                 addLog(LogEntry.Info("USB connected @ 921600", timestamp()))
-                readActuationStateLocked()
+                val query = buildSerialGetPositionsFrame()
+                if (sendFrameLocked(query, query.toHexString())) readActuationStateLocked()
             } catch (e: Exception) {
+                runCatching { port?.close() }
                 port = null
                 currentDevice = null
                 _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 连接失败")
@@ -200,6 +236,9 @@ class UsbSerialService(context: Context) {
     }
 
     private fun disconnectInternalLocked() {
+        connectionGeneration.incrementAndGet()
+        positionDecoder.reset()
+        _compactState.value = emptyMap()
         try {
             port?.close()
         } catch (_: IOException) {
@@ -209,41 +248,30 @@ class UsbSerialService(context: Context) {
         _connectionState.value = UsbConnectionState.Disconnected
     }
 
-    private fun readActuationState() {
-        synchronized(portMux) {
-            readActuationStateLocked()
-        }
-    }
-
     private fun readActuationStateLocked() {
         val currentPort = port ?: return
-        val buffer = ByteArray(16)
-        var offset = 0
+        val generation = connectionGeneration.get()
+        val deadline = SystemClock.elapsedRealtime() + 500L
+        val chunk = ByteArray(64)
         try {
-            while (offset < buffer.size) {
-                val chunk = ByteArray(buffer.size - offset)
-                val length = currentPort.read(chunk, 80)
-                if (length <= 0) {
+            while (generation == connectionGeneration.get() && SystemClock.elapsedRealtime() < deadline) {
+                val timeout = (deadline - SystemClock.elapsedRealtime()).coerceIn(1L, 80L).toInt()
+                val length = currentPort.read(chunk, timeout)
+                if (generation != connectionGeneration.get()) break
+                if (length <= 0) continue // A read timeout does not delimit a USB frame.
+                for (frame in positionDecoder.offer(chunk, length)) {
+                    val state = parseSerialActuationResponse(frame) ?: continue
+                    _compactState.value = state
+                    addLog(LogEntry.Receive(frame.toHexString(), timestamp()))
                     return
                 }
-                chunk.copyInto(buffer, offset, 0, length)
-                offset += length
             }
-            val state = parseSerialActuationResponse(buffer)
-            if (state != null) {
-                _compactState.value = state
-                addLog(LogEntry.Receive(buffer.toHexString(), timestamp()))
-            }
+            // A later query must not splice its response onto a timed-out fragment.
+            positionDecoder.reset()
         } catch (e: Exception) {
             addLog(LogEntry.Error("USB read failed: ${e.message}", timestamp()))
             _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 读取失败")
             disconnectInternalLocked()
-        }
-    }
-
-    private fun sendFrame(frame: ByteArray, logMessage: String, logPayload: Boolean = true) {
-        synchronized(portMux) {
-            sendFrameLocked(frame, logMessage, logPayload)
         }
     }
 
@@ -256,13 +284,12 @@ class UsbSerialService(context: Context) {
 
         return try {
             currentPort.write(frame, 200)
-            if (logPayload) {
-                addLog(LogEntry.Send(logMessage, timestamp()))
-            }
+            if (logPayload) addLog(LogEntry.Send(logMessage, timestamp()))
             true
         } catch (e: Exception) {
             _connectionState.value = UsbConnectionState.Error(e.message ?: "USB 发送失败")
             addLog(LogEntry.Error("USB send failed: ${e.message}", timestamp()))
+            disconnectInternalLocked()
             false
         }
     }

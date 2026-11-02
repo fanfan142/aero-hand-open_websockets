@@ -12,13 +12,22 @@ internal class GestureSmoother(
     private val values = FloatArray(GestureTuningChannel.entries.size)
     private var thumbSwing = 0f
     private var initialized = false
+    private var lastHand: String? = null
+    private var lastCapturedAtMs = 0L
 
     init {
         require(emaAlpha.size == values.size)
         require(deadband.size == values.size)
     }
 
-    fun apply(angles: FingerAngles): FingerAngles {
+    fun apply(angles: FingerAngles, hand: String? = null, capturedAtMs: Long = 0L): FingerAngles {
+        if (hand != null && lastHand != null && hand != lastHand ||
+            capturedAtMs > 0L && lastCapturedAtMs > 0L &&
+                (capturedAtMs < lastCapturedAtMs || capturedAtMs - lastCapturedAtMs >= 240L)) {
+            reset()
+        }
+        if (hand != null) lastHand = hand
+        if (capturedAtMs > 0L) lastCapturedAtMs = capturedAtMs
         val raw = angles.toControlArray()
         if (!initialized) {
             raw.copyInto(values)
@@ -46,6 +55,8 @@ internal class GestureSmoother(
         values.fill(0f)
         thumbSwing = 0f
         initialized = false
+        lastHand = null
+        lastCapturedAtMs = 0L
     }
 }
 

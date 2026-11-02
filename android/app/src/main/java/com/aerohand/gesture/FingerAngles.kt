@@ -123,7 +123,11 @@ data class GestureControlFrame(
     val angles: FingerAngles = FingerAngles(),
     val message: String = "",
     val capturedAtMs: Long = 0L
-)
+) {
+    fun isFreshAt(nowMs: Long, maxAgeMs: Long): Boolean =
+        capturedAtMs > 0L && nowMs >= capturedAtMs &&
+            nowMs - capturedAtMs < maxAgeMs
+}
 
 data class GestureCameraState(
     val isRunning: Boolean = false,

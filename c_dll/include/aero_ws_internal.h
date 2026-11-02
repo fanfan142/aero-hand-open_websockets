@@ -56,6 +56,11 @@ struct AeroWSContext {
     bool states_pending;
     char states_response[4096];
     int states_response_len;
+    char handshake_pending[512];
+    int handshake_pending_len;
+    char fragment[4096];
+    int fragment_len;
+    int fragment_active;
 };
 
 /**

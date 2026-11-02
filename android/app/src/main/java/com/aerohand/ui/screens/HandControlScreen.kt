@@ -3,6 +3,7 @@ package com.aerohand.ui.screens
 import android.Manifest
 import android.app.Application
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -102,7 +103,7 @@ fun HandControlScreen() {
         GestureCameraService(context, lifecycleOwner)
     }
 
-    var selectedControlPage by remember { mutableIntStateOf(2) }
+    var selectedControlPage by remember { mutableIntStateOf(1) }
 
     LaunchedEffect(gestureService, uiState.gestureTargetHand) {
         gestureService.setTargetHand(uiState.gestureTargetHand)
@@ -116,10 +117,15 @@ fun HandControlScreen() {
         }
     }
 
+    // Require leaving/re-entering the gesture tab after a transport switch.
+    LaunchedEffect(uiState.connectionMode) {
+        if (selectedControlPage == 2) selectedControlPage = 1
+    }
+
     // Start/stop camera based on selected page
     LaunchedEffect(selectedControlPage) {
         if (selectedControlPage == 2) { // Gesture page
-            // Camera will be started by GestureFollowPage composable
+            viewModel.onGesturePageEntered()
         } else {
             gestureService.stopCamera()
             viewModel.resetGestureSendState()
@@ -130,7 +136,9 @@ fun HandControlScreen() {
     LaunchedEffect(gestureService.controlFrame, selectedControlPage) {
         gestureService.controlFrame.collect { frame ->
             if (selectedControlPage == 2) {
-                if (frame.allowed) {
+                if (frame.allowed && frame.isFreshAt(
+                        SystemClock.elapsedRealtime(), 240L
+                    )) {
                     viewModel.markGestureControlReady()
                     viewModel.updateControlValuesFromGesture(frame.angles, frame.capturedAtMs)
                 } else {
@@ -238,6 +246,9 @@ fun HandControlScreen() {
                         usbConnected = uiState.usbConnected,
                         statusMessage = uiState.statusMessage,
                         wifiConfig = uiState.wifiConfig,
+                        discoveredHands = uiState.discoveredHands,
+                        discoveryStatus = uiState.discoveryStatus,
+                        onDiscoveredHandClick = viewModel::connectDiscoveredHand,
                         firmwareIdentified = uiState.deviceCapabilities.identified,
                         wifiProvisioningSupported = uiState.deviceCapabilities.wifiProvisioning,
                         firmwareVersion = uiState.firmwareVersion,

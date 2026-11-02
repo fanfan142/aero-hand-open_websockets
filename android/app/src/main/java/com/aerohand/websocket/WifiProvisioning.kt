@@ -122,6 +122,11 @@ fun isWifiProvisioningConfirmation(
         status.staStaticIp == request.staticIp
 }
 
+fun isStaReady(status: WifiStatus, request: WifiProvisioningRequest): Boolean {
+    return status.mode == "STA" && status.staSsid == request.ssid &&
+        status.ip == request.staticIp
+}
+
 private fun capabilitiesFor(firmwareType: String, protocolVersion: Int): DeviceCapabilities {
     val isSupportedFirmware = firmwareType == "esp32_wifi" || firmwareType == "firmware_ws"
     if (!isSupportedFirmware) {

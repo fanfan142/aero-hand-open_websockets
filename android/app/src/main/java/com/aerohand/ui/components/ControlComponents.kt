@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aerohand.viewmodel.ConnectionMode
 import com.aerohand.viewmodel.WifiConfigUiState
+import com.aerohand.wifi.DiscoveredHand
 
 // ============== 连接面板 ==============
 
@@ -53,6 +54,9 @@ fun ConnectionPanel(
     usbConnected: Boolean,
     statusMessage: String,
     wifiConfig: WifiConfigUiState,
+    discoveredHands: List<DiscoveredHand>,
+    discoveryStatus: String,
+    onDiscoveredHandClick: (String) -> Unit,
     firmwareIdentified: Boolean,
     wifiProvisioningSupported: Boolean,
     firmwareVersion: String?,
@@ -147,6 +151,9 @@ fun ConnectionPanel(
                             port = port,
                             connected = wifiConnected,
                             wifiConfig = wifiConfig,
+                            discoveredHands = discoveredHands,
+                            discoveryStatus = discoveryStatus,
+                            onDiscoveredHandClick = onDiscoveredHandClick,
                             firmwareIdentified = firmwareIdentified,
                             wifiProvisioningSupported = wifiProvisioningSupported,
                             firmwareVersion = firmwareVersion,
@@ -185,6 +192,9 @@ private fun WifiConnectionContent(
     port: String,
     connected: Boolean,
     wifiConfig: WifiConfigUiState,
+    discoveredHands: List<DiscoveredHand>,
+    discoveryStatus: String,
+    onDiscoveredHandClick: (String) -> Unit,
     firmwareIdentified: Boolean,
     wifiProvisioningSupported: Boolean,
     firmwareVersion: String?,
@@ -207,6 +217,17 @@ private fun WifiConnectionContent(
     val canProvisionSta = connected && wifiProvisioningSupported && !wifiConfig.isProvisioning
 
     Column {
+        Text(discoveryStatus, style = MaterialTheme.typography.bodySmall)
+        discoveredHands.forEach { hand ->
+            Button(
+                onClick = { onDiscoveredHandClick(hand.name) },
+                enabled = !connected,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("${hand.name} · ${hand.host}:${hand.port}")
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)

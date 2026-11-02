@@ -335,7 +335,9 @@ class GestureCameraService(
             mirrorMode = currentMirror()
         )
         val rawAngles = GestureAngleEstimator.estimate(controlLandmarks, detectedHand)
-        val smoothedAngles = smoother.apply(rawAngles)
+        val smoothedAngles = smoother.apply(
+            rawAngles, detectedHand, SystemClock.elapsedRealtime()
+        )
         rememberSample(detectedHand, smoothedAngles)
 
         val activeProfile = activeProfileFor(detectedHand)

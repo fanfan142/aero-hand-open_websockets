@@ -196,24 +196,23 @@ static void sha1_hash(const unsigned char* data, int len, unsigned char* out) {
     unsigned int h3 = 0x10325476;
     unsigned int h4 = 0xC3D2E1F0;
 
-    // 预处理：添加 bit '1' 和 bit '0'
-    // 简化：使用固定长度的 copy 和简单填充
-    unsigned char msg[64];
-    int msg_len = len;
-    memcpy(msg, data, len);
+    // WebSocket key (24 bytes) plus GUID (36 bytes) needs two SHA-1 blocks.
+    if (len < 0 || len > 119) {
+        memset(out, 0, 20);
+        return;
+    }
+    unsigned char msg[128] = {0};
+    memcpy(msg, data, (size_t)len);
     msg[len] = 0x80;
-    // 填充到 56 bytes (448 bits) 模 512
-    int pad_len = (len < 56) ? (56 - len - 1) : (120 - len);
-    memset(msg + len + 1, 0, pad_len);
 
-    // 添加长度 (big endian)
+    // Append the original bit length at the end of the final block.
+    int padded_len = len < 56 ? 64 : 128;
     unsigned long long bits = (unsigned long long)len * 8;
     for (int i = 0; i < 8; i++) {
-        msg[56 + i] = (unsigned char)((bits >> (56 - i * 8)) & 0xFF);
+        msg[padded_len - 8 + i] = (unsigned char)((bits >> (56 - i * 8)) & 0xFF);
     }
 
-    // 处理每个 64 字节块
-    for (int chunk = 0; chunk < 64; chunk += 64) {
+    for (int chunk = 0; chunk < padded_len; chunk += 64) {
         unsigned int w[80];
         for (int i = 0; i < 16; i++) {
             w[i] = ((unsigned int)msg[chunk + i * 4] << 24) |
@@ -328,8 +327,8 @@ static int json_parse_joints_array(const char* p, AeroStates* states, int max_co
 
         while (*p && *p != '}') {
             p = json_skip_ws(p);
-            if (strncmp(p, "\"joint_id\"", 9) == 0) {
-                p += 9;
+            if (strncmp(p, "\"joint_id\"", 10) == 0) {
+                p += 10;
                 p = json_skip_ws(p);
                 if (*p == ':') p++;
                 char id_buf[32];
@@ -464,13 +463,46 @@ static int is_valid_duration_value(int duration_ms) {
     return duration_ms >= 0 && duration_ms <= 5000;
 }
 
+static int send_all(SOCKET sock, const char* data, int size) {
+    int sent = 0;
+    while (sent < size) {
+        int written = send(sock, data + sent, size - sent, 0);
+        if (written <= 0) return -1;
+        sent += written;
+    }
+    return 0;
+}
+
+static int recv_exact(SOCKET sock, char* data, int size) {
+    int received = 0;
+    while (received < size) {
+        int n = recv(sock, data + received, size - received, 0);
+        if (n <= 0) return -1;
+        received += n;
+    }
+    return 0;
+}
+
+/* A WebSocket upgrade may share its TCP packet with the first frame. Store
+ * only the unconsumed bytes for this socket; never treat HTTP bytes as frames. */
+static int recv_exact_buffered(SOCKET sock, char* data, int size,
+                               char* pending, int* pending_len) {
+    int copied = *pending_len < size ? *pending_len : size;
+    if (copied) {
+        memcpy(data, pending, copied);
+        memmove(pending, pending + copied, (size_t)(*pending_len - copied));
+        *pending_len -= copied;
+    }
+    return recv_exact(sock, data + copied, size - copied);
+}
+
 // WebSocket握手
-static int websocket_handshake(SOCKET sock, const char* host, int port) {
+static int websocket_handshake(SOCKET sock, const char* host, int port,
+                               char* pending, int* pending_len) {
     char request[512];
     char response[512];
     // Base64编码16字节需要 ceil(16/3)*4 = 22字符，加上填充和null terminator
     char key[30];  // 留有余量
-    char accept[32];
 
     // 生成随机key
     unsigned char random_bytes[16];
@@ -489,17 +521,32 @@ static int websocket_handshake(SOCKET sock, const char* host, int port) {
         host, port, key
     );
 
-    if (send(sock, request, strlen(request), 0) == SOCKET_ERROR) {
+    if (send_all(sock, request, (int)strlen(request)) != 0) {
         set_error("Failed to send handshake");
         return AERO_WS_ERROR;
     }
 
-    int received = recv(sock, response, sizeof(response) - 1, 0);
-    if (received <= 0) {
-        set_error("Handshake failed - no response");
+    int received = 0;
+    char* end = NULL;
+    while (received < (int)sizeof(response) - 1) {
+        int n = recv(sock, response + received, (int)sizeof(response) - 1 - received, 0);
+        if (n <= 0) {
+            set_error("Handshake failed - incomplete response");
+            return AERO_WS_ERROR;
+        }
+        received += n;
+        response[received] = '\0';
+        end = strstr(response, "\r\n\r\n");
+        if (end != NULL) break;
+    }
+    if (end == NULL) {
+        set_error("Handshake failed - headers too large");
         return AERO_WS_ERROR;
     }
-    response[received] = '\0';
+    int header_len = (int)(end - response) + 4;
+    *pending_len = received - header_len;
+    if (*pending_len) memcpy(pending, response + header_len, (size_t)*pending_len);
+    response[header_len] = '\0';
 
     // 检查 HTTP 101 Switching Protocols
     if (strncmp(response, "HTTP/1.1 101", 12) != 0 &&
@@ -529,7 +576,7 @@ static int websocket_handshake(SOCKET sock, const char* host, int port) {
     base64_encode(sha1_result, 20, expected_accept);
 
     // 提取响应中的 Accept 值并比较
-    char* accept_start = accept_header + 20;  // 跳过 "Sec-WebSocket-Accept: "
+    char* accept_start = accept_header + strlen("Sec-WebSocket-Accept:");
     while (*accept_start == ' ' || *accept_start == '\t') accept_start++;
     char* accept_end = accept_start;
     while (*accept_end && *accept_end != '\r' && *accept_end != '\n') accept_end++;
@@ -577,12 +624,12 @@ static int websocket_send(SOCKET sock, const char* data, int len) {
     }
 
     // 发送帧头
-    if (send(sock, frame, header_len, 0) != header_len) {
+    if (send_all(sock, frame, header_len) != 0) {
         return AERO_WS_SEND_ERROR;
     }
 
     // 发送mask key
-    if (send(sock, mask_key, 4, 0) != 4) {
+    if (send_all(sock, mask_key, 4) != 0) {
         return AERO_WS_SEND_ERROR;
     }
 
@@ -594,10 +641,9 @@ static int websocket_send(SOCKET sock, const char* data, int len) {
     while (sent_total < len) {
         int chunk = (len - sent_total < chunk_size) ? (len - sent_total) : chunk_size;
         for (int i = 0; i < chunk; i++) {
-            masked[i] = data[sent_total + i] ^ mask_key[i % 4];
+            masked[i] = data[sent_total + i] ^ mask_key[(sent_total + i) % 4];
         }
-        int sent_now = send(sock, masked, chunk, 0);
-        if (sent_now != chunk) {
+        if (send_all(sock, masked, chunk) != 0) {
             return AERO_WS_SEND_ERROR;
         }
         sent_total += chunk;
@@ -607,126 +653,85 @@ static int websocket_send(SOCKET sock, const char* data, int len) {
 }
 
 // WebSocket接收（服务器响应，无需mask）
-static int websocket_recv(SOCKET sock, char* buffer, int buf_size, int timeout_ms) {
+static int websocket_recv(struct AeroWSContext* ctx, char* buffer, int buf_size, int timeout_ms) {
+    SOCKET sock = ctx->sock;
     if (buf_size <= 0) return AERO_WS_INVALID_PARAM;
-
-    fd_set fds;
-    FD_ZERO(&fds);
-    FD_SET(sock, &fds);
-
-    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-    int result = select(sock + 1, &fds, NULL, NULL, &tv);
-
-    if (result <= 0) {
-        return 0;  // 超时
-    }
-
-    char header[14];  // 2 + 8 (max extended length) + 4 (mask not present in server frames)
-    int received = recv(sock, header, 2, 0);
-    if (received != 2) return -1;
-
-    int opcode = header[0] & 0x0F;
-    int payload_len = header[1] & 0x7F;
-    int offset = 2;
-
-    // 处理扩展长度
-    if (payload_len == 126) {
-        received = recv(sock, header + 2, 2, 0);
-        if (received != 2) return -1;
-        payload_len = ((unsigned char)header[2] << 8) | (unsigned char)header[3];
-        offset = 4;
-    } else if (payload_len == 127) {
-        received = recv(sock, header + 2, 8, 0);
-        if (received != 8) return -1;
-        // 检查是否超出范围
-        uint64_t ext_len = 0;
-        for (int i = 0; i < 8; i++) {
-            ext_len = (ext_len << 8) | ((unsigned char)header[2 + i]);
+    for (;;) {
+        if (ctx->handshake_pending_len == 0) {
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(sock, &fds);
+            struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+            int result = select((int)sock + 1, &fds, NULL, NULL, &tv);
+            if (result <= 0) return result == 0 ? 0 : -1;
         }
-        if (ext_len > 0x7FFFFFFF) {
-            set_error("Payload too large");
+
+        unsigned char header[10];
+        if (recv_exact_buffered(sock, (char*)header, 2, ctx->handshake_pending,
+                                &ctx->handshake_pending_len) != 0) return -1;
+        int fin = (header[0] & 0x80) != 0;
+        int opcode = header[0] & 0x0F;
+        int masked = (header[1] & 0x80) != 0;
+        uint64_t length = header[1] & 0x7F;
+        if (length == 126) {
+            if (recv_exact_buffered(sock, (char*)header + 2, 2, ctx->handshake_pending,
+                                    &ctx->handshake_pending_len) != 0) return -1;
+            length = ((uint64_t)header[2] << 8) | header[3];
+        } else if (length == 127) {
+            if (recv_exact_buffered(sock, (char*)header + 2, 8, ctx->handshake_pending,
+                                    &ctx->handshake_pending_len) != 0) return -1;
+            length = 0;
+            for (int i = 2; i < 10; i++) length = (length << 8) | header[i];
+        }
+        if (masked || length >= (uint64_t)buf_size ||
+            length + (uint64_t)ctx->fragment_len >= (uint64_t)buf_size ||
+            length + (uint64_t)ctx->fragment_len >= sizeof(ctx->fragment) ||
+            (opcode >= 8 && (!fin || length > 125)) ||
+            (opcode != WS_OP_TEXT && opcode != 0 && opcode != WS_OP_PING &&
+             opcode != WS_OP_PONG && opcode != WS_OP_CLOSE)) {
+            set_error("Invalid or oversized WebSocket frame");
             return -1;
         }
-        payload_len = (int)ext_len;
-        offset = 10;
-    }
-
-    // 处理控制帧
-    if (opcode == WS_OP_CLOSE) {
-        // 收到 close 帧，回复 close
-        char close_frame[2] = {0x88, 0x00};
-        send(sock, close_frame, 2, 0);
-        return -1;  // 表示连接关闭
-    } else if (opcode == WS_OP_PING) {
-        // 收到 ping，回复 pong
-        char pong_frame[10];
-        pong_frame[0] = 0x8A;  // pong + FIN
-        if (payload_len < 126) {
-            pong_frame[1] = (char)payload_len;
-            // 读出 ping payload 并原样返回
-            char tmp[125];
-            int r = recv(sock, tmp, payload_len, 0);
-            if (r != payload_len) return -1;
-            memcpy(pong_frame + 2, tmp, payload_len);
-            send(sock, pong_frame, 2 + payload_len, 0);
-        } else {
-            // payload >= 126 的 ping 很少见，简单处理
-            char tmp[4096];
-            int r = recv(sock, tmp, payload_len < (int)sizeof(tmp) ? payload_len : sizeof(tmp), 0);
-            pong_frame[1] = payload_len < 126 ? (char)payload_len : 126;
-            send(sock, pong_frame, 2, 0);
-            if (r > 0) send(sock, tmp, r, 0);
+        char payload[4096];
+        if (recv_exact_buffered(sock, payload, (int)length, ctx->handshake_pending,
+                                &ctx->handshake_pending_len) != 0) return -1;
+        if (opcode == WS_OP_PING) {
+            char pong[2] = { (char)0x8A, (char)length };
+            if (send_all(sock, pong, 2) != 0 ||
+                send_all(sock, payload, (int)length) != 0) return -1;
+            continue;
         }
-        return 0;  // 继续等待下一帧
-    } else if (opcode != WS_OP_TEXT) {
-        // 未知 opcode，跳过
-        char tmp[4096];
-        int to_read = payload_len < (int)sizeof(tmp) ? payload_len : (int)sizeof(tmp);
-        int r = recv(sock, tmp, to_read, 0);
-        if (r != to_read) return -1;
-        if (payload_len > to_read) {
-            // 跳过剩余
-            int remaining = payload_len - to_read;
-            char skip[1024];
-            while (remaining > 0) {
-                int skip_len = remaining < (int)sizeof(skip) ? remaining : (int)sizeof(skip);
-                recv(sock, skip, skip_len, 0);
-                remaining -= skip_len;
-            }
+        if (opcode == WS_OP_PONG) continue;
+        if (opcode == WS_OP_CLOSE) {
+            char close_frame[2] = { (char)0x88, 0 };
+            send_all(sock, close_frame, 2);
+            set_error("WebSocket connection closed");
+            return -1;
         }
-        return 0;  // 继续等待下一帧
-    }
-
-    // 检查 buffer 大小
-    if (payload_len >= buf_size) {
-        set_error("Buffer too small");
-        // 跳过此帧
-        char tmp[4096];
-        int to_read = payload_len < (int)sizeof(tmp) ? payload_len : (int)sizeof(tmp);
-        recv(sock, tmp, to_read, 0);
-        if (payload_len > to_read) {
-            int remaining = payload_len - to_read;
-            char skip[1024];
-            while (remaining > 0) {
-                int skip_len = remaining < (int)sizeof(skip) ? remaining : (int)sizeof(skip);
-                recv(sock, skip, skip_len, 0);
-                remaining -= skip_len;
-            }
+        if (opcode == 0 && !ctx->fragment_active) {
+            set_error("Unexpected WebSocket continuation");
+            return -1;
         }
-        return -1;
+        if (opcode == WS_OP_TEXT && ctx->fragment_active) {
+            set_error("Nested WebSocket text frame");
+            return -1;
+        }
+        if (opcode == WS_OP_TEXT && !fin) ctx->fragment_active = 1;
+        if (ctx->fragment_active) {
+            memcpy(ctx->fragment + ctx->fragment_len, payload, (size_t)length);
+            ctx->fragment_len += (int)length;
+            if (!fin) continue;
+            memcpy(buffer, ctx->fragment, (size_t)ctx->fragment_len);
+            buffer[ctx->fragment_len] = '\0';
+            int count = ctx->fragment_len;
+            ctx->fragment_active = 0;
+            ctx->fragment_len = 0;
+            return count;
+        }
+        memcpy(buffer, payload, (size_t)length);
+        buffer[length] = '\0';
+        return (int)length;
     }
-
-    // 循环读取完整 payload
-    int total_read = 0;
-    while (total_read < payload_len) {
-        int to_read = payload_len - total_read;
-        int r = recv(sock, buffer + total_read, to_read, 0);
-        if (r <= 0) return -1;
-        total_read += r;
-    }
-    buffer[total_read] = '\0';
-
-    return total_read;
 }
 
 // ============================================
@@ -794,6 +799,9 @@ int aero_ws_connect(AeroWSHandle handle, int timeout_ms) {
 
     struct AeroWSContext* ctx = (struct AeroWSContext*)handle;
 
+    ctx->handshake_pending_len = 0;
+    ctx->fragment_len = 0;
+    ctx->fragment_active = 0;
     ctx->sock = create_socket();
     if (ctx->sock == INVALID_SOCKET) {
         set_error("Failed to create socket");
@@ -807,7 +815,8 @@ int aero_ws_connect(AeroWSHandle handle, int timeout_ms) {
         return result;
     }
 
-    result = websocket_handshake(ctx->sock, ctx->host, ctx->port);
+    result = websocket_handshake(ctx->sock, ctx->host, ctx->port,
+                                 ctx->handshake_pending, &ctx->handshake_pending_len);
     if (result != AERO_WS_OK) {
         close_socket(ctx->sock);
         ctx->sock = INVALID_SOCKET;
@@ -1011,7 +1020,7 @@ int aero_ws_get_states(AeroWSHandle handle, AeroStates* states, int max_count) {
     const int poll_interval = 100;
 
     while (waited < timeout_ms) {
-        int len = websocket_recv(ctx->sock, buffer, sizeof(buffer) - 1, poll_interval);
+        int len = websocket_recv(ctx, buffer, sizeof(buffer) - 1, poll_interval);
         if (len < 0) {
 #ifdef _WIN32
             WaitForSingleObject(ctx->states_mutex, INFINITE);
@@ -1108,7 +1117,7 @@ static void* receive_thread(void* param) {
     char buffer[4096];
 
     while (ctx->running && ctx->connected) {
-        int len = websocket_recv(ctx->sock, buffer, sizeof(buffer) - 1, 100);
+        int len = websocket_recv(ctx, buffer, sizeof(buffer) - 1, 100);
         if (len > 0) {
             int handled_states = 0;
             if (strstr(buffer, "\"type\"") && strstr(buffer, "\"states_response\"")) {

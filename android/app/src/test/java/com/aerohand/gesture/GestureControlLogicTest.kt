@@ -28,6 +28,27 @@ class GestureControlLogicTest {
     }
 
     @Test
+    fun smoothingDoesNotBlendAcrossHandsOrExtendedDetectionGaps() {
+        val smoother = GestureSmoother()
+        val bent = FingerAngles(indexTendon = 90f, thumbSwing = 30f)
+        val straight = FingerAngles(indexTendon = 0f, thumbSwing = -30f)
+
+        assertEquals(bent, smoother.apply(bent, hand = "Right", capturedAtMs = 1_000L))
+        assertEquals(straight, smoother.apply(straight, hand = "Left", capturedAtMs = 1_033L))
+        assertEquals(bent, smoother.apply(bent, hand = "Left", capturedAtMs = 1_300L))
+    }
+
+    @Test
+    fun expiredControlFrameIsNoLongerAllowed() {
+        val frame = GestureControlFrame(true, FingerAngles(indexTendon = 90f), capturedAtMs = 1_000L)
+
+        assertTrue(frame.isFreshAt(nowMs = 1_239L, maxAgeMs = 240L))
+        assertFalse(frame.isFreshAt(nowMs = 1_240L, maxAgeMs = 240L))
+        assertFalse(frame.isFreshAt(nowMs = 900L, maxAgeMs = 240L))
+        assertFalse(frame.copy(capturedAtMs = 0L).isFreshAt(nowMs = 1_000L, maxAgeMs = 240L))
+    }
+
+    @Test
     fun calibrationRejectsSubDegreeThumbRange() {
         val profile = calibrationProfile(openThumbSwing = 10f, thumbInSwing = 9.92f)
 

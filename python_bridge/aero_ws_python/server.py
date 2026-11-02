@@ -22,6 +22,7 @@ from .protocol import (
     JointCommand,
     JointState,
     MultiJointCommand,
+    JOINT_TO_SDK_INDEX,
     JOINT_TO_SERVO_ID,
     build_error,
     build_response,
@@ -44,7 +45,7 @@ class AeroWebSocketServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         serial_port: Optional[str] = None,
-        serial_baudrate: int = 115200,
+        serial_baudrate: int = 921600,
         use_fake_servo: bool = False,
     ):
         """
@@ -65,7 +66,11 @@ class AeroWebSocketServer:
 
         self.clients: Set[Any] = set()
         self.server = None
-        self.serial = None
+        self.serial = None  # OfficialSerialHand transport
+        self._joint_positions = [0.0] * 16
+        self._positions_initialized = False
+        self._command_lock = asyncio.Lock()
+        self._homing_task = None
         self._running = False
         self._stop_event = asyncio.Event()
 
@@ -98,23 +103,14 @@ class AeroWebSocketServer:
 
     def _init_serial(self):
         """初始化串口连接"""
+        # A configured physical port must fail closed, never silently simulate a hand.
         if self.serial_port is None:
-            logger.warning("No serial port specified, using fake servo mode")
-            self.use_fake_servo = True
-            return
+            raise ValueError("Specify a serial port, or explicitly enable --fake")
+        from .serial_hand import OfficialSerialHand
 
-        try:
-            import serial
-            self.serial = serial.Serial(
-                port=self.serial_port,
-                baudrate=self.serial_baudrate,
-                timeout=1.0,
-            )
-            logger.info("Serial port %s opened", self.serial_port)
-        except Exception as e:
-            logger.error("Failed to open serial port: %s", e)
-            logger.warning("Falling back to fake servo mode")
-            self.use_fake_servo = True
+        self.serial = OfficialSerialHand(self.serial_port, self.serial_baudrate)
+        self._positions_initialized = False
+        logger.info("Aero Hand serial port %s opened", self.serial_port)
 
     async def _handle_client(self, websocket):
         """处理客户端连接"""
@@ -164,15 +160,17 @@ class AeroWebSocketServer:
             await websocket.send(build_error(err_code or ErrorCode.INVALID_COMMAND, err))
             return
 
-        success = self._send_to_servo(cmd.joint_id, cmd.angle, cmd.duration_ms)
-        if success:
-            if self.use_fake_servo:
-                self._fake_joint_states[cmd.joint_id] = cmd.angle
-            response = build_response(True, CommandType.JOINT_CONTROL.value)
+        if self._homing_task is not None and not self._homing_task.done():
+            await websocket.send(build_error(ErrorCode.INVALID_COMMAND, "Homing in progress"))
+            return
+        if self.use_fake_servo:
+            self._fake_joint_states[cmd.joint_id] = cmd.angle
         else:
-            response = build_error(ErrorCode.SERVO_ERROR, "Failed to send command to servo")
-
-        await websocket.send(response)
+            async with self._command_lock:
+                if not await self._write_positions({cmd.joint_id: cmd.angle}):
+                    await websocket.send(build_error(ErrorCode.SERIAL_ERROR, "Failed to send joint positions"))
+                    return
+        await websocket.send(build_response(True, CommandType.JOINT_CONTROL.value))
 
     async def _handle_multi_joint_command(self, websocket: Any, cmd: MultiJointCommand):
         """处理多关节同步控制指令"""
@@ -181,136 +179,112 @@ class AeroWebSocketServer:
             await websocket.send(build_error(err_code or ErrorCode.INVALID_COMMAND, err))
             return
 
-        sent_count = 0
-        for joint in cmd.joints:
-            if not self._send_to_servo(joint.joint_id, joint.angle, cmd.duration_ms):
-                await websocket.send(build_error(ErrorCode.SERVO_ERROR, f"Failed to send command for joint {joint.joint_id}"))
-                return
-            sent_count += 1
-            if self.use_fake_servo:
-                self._fake_joint_states[joint.joint_id] = joint.angle
-
-        response = build_response(
-            True,
-            CommandType.MULTI_JOINT_CONTROL.value,
-            {"joints_count": sent_count},
+        if self._homing_task is not None and not self._homing_task.done():
+            await websocket.send(build_error(ErrorCode.INVALID_COMMAND, "Homing in progress"))
+            return
+        updates = {joint.joint_id: joint.angle for joint in cmd.joints}
+        if self.use_fake_servo:
+            self._fake_joint_states.update(updates)
+        else:
+            async with self._command_lock:
+                if not await self._write_positions(updates):
+                    await websocket.send(build_error(ErrorCode.SERIAL_ERROR, "Failed to send joint positions"))
+                    return
+        await websocket.send(build_response(
+            True, CommandType.MULTI_JOINT_CONTROL.value, {"joints_count": len(cmd.joints)})
         )
-        await websocket.send(response)
 
     async def _handle_get_states(self, websocket: Any):
         """处理获取状态指令"""
-        states = []
-        for joint_id in JOINT_TO_SERVO_ID.keys():
-            if self.use_fake_servo:
-                angle = self._fake_joint_states.get(joint_id, 0.0)
-                load = 0.0
-            else:
-                angle = self._read_servo_angle(joint_id)
-                load = 0.0
-
-            states.append(JointState(joint_id, angle, load))
-
+        if self._homing_task is not None and not self._homing_task.done():
+            await websocket.send(build_error(ErrorCode.INVALID_COMMAND, "Homing in progress"))
+            return
+        if self.use_fake_servo:
+            positions = [self._fake_joint_states[joint_id] for joint_id in JOINT_TO_SERVO_ID]
+            states = [JointState(joint_id, angle) for joint_id, angle in zip(JOINT_TO_SERVO_ID, positions)]
+        else:
+            try:
+                async with self._command_lock:
+                    compact = await asyncio.to_thread(self.serial.get_joint_positions_compact)
+                    # The official sensor reports compact tendon-based positions: MCP/PIP/DIP
+                    # are estimated as a common angle (not three independent sensors).
+                    positions = [compact[0], compact[1], compact[2], compact[2],
+                                 *([angle for angle in compact[3:] for _ in range(3)])]
+                    self._joint_positions = positions
+                    self._positions_initialized = True
+                states = [JointState(joint_id, positions[index] * 0.6 - 30.0
+                                     if joint_id == 'thumb_rotation' else positions[index])
+                          for joint_id, index in JOINT_TO_SDK_INDEX.items()]
+            except (OSError, ValueError, TimeoutError) as exc:
+                logger.error("Aero Hand state read failed: %s", exc)
+                await websocket.send(build_error(ErrorCode.SERIAL_ERROR, "Failed to read hand positions"))
+                return
         await websocket.send(build_states_response(states))
 
     async def _handle_homing(self, websocket: Any):
-        """处理归零指令"""
-        # 归零是长时间操作，在后台执行，不阻塞客户端响应
+        """The SDK homing opcode completes only after an ACK (up to 175 seconds)."""
+        if self._homing_task is not None and not self._homing_task.done():
+            await websocket.send(build_error(ErrorCode.INVALID_COMMAND, "Homing already in progress"))
+            return
+
         async def run_homing():
             try:
                 if self.use_fake_servo:
-                    for joint_id in self._fake_joint_states:
-                        self._fake_joint_states[joint_id] = 0.0
+                    self._fake_joint_states.update(dict.fromkeys(self._fake_joint_states, 0.0))
                 else:
-                    # 分步执行，每个关节间隔发送，避免总线冲突
-                    for joint_id in JOINT_TO_SERVO_ID.keys():
-                        self._send_to_servo(joint_id, 0.0, 1000)
-                        await asyncio.sleep(0.05)  # 50ms 间隔
+                    async with self._command_lock:
+                        await asyncio.to_thread(self.serial.send_homing)
+                        self._joint_positions = [0.0] * 16
+                        self._positions_initialized = True
+                await websocket.send(build_response(True, CommandType.HOMING.value))
+                states = [JointState(joint_id, 0.0) for joint_id in JOINT_TO_SERVO_ID]
+                response = build_states_response(states)
+                for client in list(self.clients):
+                    try:
+                        await client.send(response)
+                    except Exception:
+                        pass
+            except (OSError, ValueError, TimeoutError) as exc:
+                logger.error("Homing failed: %s", exc)
+                try:
+                    await websocket.send(build_error(ErrorCode.SERIAL_ERROR, "Homing failed or timed out"))
+                except Exception:
+                    pass
 
-                # 归零完成后广播状态更新
-                if self.clients:
-                    states = []
-                    for joint_id in JOINT_TO_SERVO_ID.keys():
-                        states.append(JointState(joint_id, 0.0, 0.0))
-                    response = build_states_response(states)
-                    for client in list(self.clients):
-                        try:
-                            await client.send(response)
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.error("Homing error: %s", e)
+        self._homing_task = asyncio.create_task(run_homing())
+        await asyncio.sleep(0)  # Schedule before a subsequent command can overtake homing.
 
-        # 立即响应客户端，归零在后台异步执行
-        asyncio.create_task(run_homing())
-        await websocket.send(build_response(True, CommandType.HOMING.value))
+    async def _write_positions(self, updates: Dict[str, float]) -> bool:
+        """Send all 16 joints in a single official CTRL_POS frame.
 
-    def _send_to_servo(self, joint_id: str, angle: float, duration_ms: int) -> bool:
-        """发送指令到舵机"""
-        if self.use_fake_servo:
-            return True
-
-        servo_id = JOINT_TO_SERVO_ID.get(joint_id)
-        if servo_id is None:
-            return False
-
+        On first use, obtain the official compact joint estimate before
+        applying a partial command. This avoids moving the rest of the hand to
+        zero when the bridge attaches to a hand already in motion.
+        """
+        if not self._positions_initialized:
+            try:
+                compact = await asyncio.to_thread(self.serial.get_joint_positions_compact)
+                self._joint_positions = [compact[0], compact[1], compact[2], compact[2],
+                                         *([angle for angle in compact[3:] for _ in range(3)])]
+                self._positions_initialized = True
+            except (OSError, ValueError, TimeoutError) as exc:
+                logger.error("Cannot initialize hand position: %s", exc)
+                return False
+        positions = self._joint_positions.copy()
+        for joint_id, angle in updates.items():
+            index = JOINT_TO_SDK_INDEX[joint_id]
+            positions[index] = ((angle + 30.0) * (100.0 / 60.0)
+                                if joint_id == 'thumb_rotation' else angle)
+            if joint_id == 'thumb_distal':
+                positions[3] = angle
         try:
-            angle_int = int(angle * 10)
-            duration_int = max(0, min(int(duration_ms), 5000))
-            data = bytes([
-                0x55,
-                0x01,
-                servo_id,
-                angle_int & 0xFF,
-                (angle_int >> 8) & 0xFF,
-                duration_int & 0xFF,
-                (duration_int >> 8) & 0xFF,
-                0x55 ^ 0x01 ^ servo_id ^ (angle_int & 0xFF) ^ ((angle_int >> 8) & 0xFF) ^ (duration_int & 0xFF) ^ ((duration_int >> 8) & 0xFF),
-            ])
-            self.serial.write(data)
-            return True
-        except Exception as e:
-            logger.error("Serial write error: %s", e)
+            await asyncio.to_thread(self.serial.set_joint_positions, positions)
+        except (OSError, ValueError, TimeoutError) as exc:
+            logger.error("Serial write error: %s", exc)
             return False
-
-    def _read_servo_angle(self, joint_id: str) -> float:
-        """读取舵机当前角度"""
-        if self.use_fake_servo:
-            return self._fake_joint_states.get(joint_id, 0.0)
-
-        servo_id = JOINT_TO_SERVO_ID.get(joint_id)
-        if servo_id is None:
-            return 0.0
-
-        try:
-            # 发送读取位置指令 (0x55 0x02 + servo_id + 校验)
-            data = bytes([
-                0x55,
-                0x02,
-                servo_id,
-                0x55 ^ 0x02 ^ servo_id,
-            ])
-            self.serial.write(data)
-
-            # 读取响应 (7 bytes: 0x55 0x02 servo_id angle_low angle_high temp checksum)
-            import time
-            time.sleep(0.01)  # 等待舵机响应
-
-            if self.serial.in_waiting >= 7:
-                response = self.serial.read(7)
-                if response[0] == 0x55 and response[1] == 0x02:
-                    angle_raw = response[3] | (response[4] << 8)
-                    # 舵机角度范围 0-1000 对应 0-90度
-                    return round((angle_raw / 1000.0) * 90.0, 1)
-
-            return self._fake_joint_states.get(joint_id, 0.0)
-        except Exception as e:
-            logger.error("Serial read error for joint %s: %s", joint_id, e)
-            return self._fake_joint_states.get(joint_id, 0.0)
-
-    def _send_homing_command(self):
-        """发送归零指令"""
-        for joint_id in JOINT_TO_SERVO_ID.keys():
-            self._send_to_servo(joint_id, 0.0, 1000)
+        self._joint_positions = positions
+        self._positions_initialized = True
+        return True
 
     async def _shutdown(self):
         """关闭服务与资源"""
@@ -327,8 +301,15 @@ class AeroWebSocketServer:
             except Exception:
                 pass
 
-        if self.serial and self.serial.is_open:
-            self.serial.close()
+        if self._homing_task is not None:
+            self._homing_task.cancel()
+            try:
+                await self._homing_task
+            except asyncio.CancelledError:
+                pass
+            self._homing_task = None
+        if self.serial is not None:
+            await asyncio.to_thread(self.serial.close)
         self.serial = None
         self._running = False
         logger.info("Server stopped")
@@ -348,7 +329,7 @@ async def main():
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen")
     parser.add_argument("--serial", default=None, help="Serial port")
-    parser.add_argument("--baudrate", type=int, default=115200, help="Serial baudrate")
+    parser.add_argument("--baudrate", type=int, default=921600, help="Serial baudrate")
     parser.add_argument("--fake", action="store_true", help="Use fake servo mode")
     args = parser.parse_args()
 

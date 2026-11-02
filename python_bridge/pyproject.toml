@@ -7,7 +7,7 @@ name = "aero-ws-python"
 version = "1.0.0"
 description = "Aero Hand Open Python WebSocket Bridge - Local USB to WebSocket server"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "fanfan142", email = "fanfan142@users.noreply.github.com"}
@@ -21,8 +21,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Topic :: Robotics",
@@ -31,6 +29,7 @@ classifiers = [
 dependencies = [
     "websockets>=10.0,<16",
     "pyserial>=3.5",
+    "aero-open-sdk @ git+https://github.com/chestnut-robotics/aero-hand-open.git@7bb2f23485a7d440960c21046da642de132b7745#subdirectory=sdk",
 ]
 
 [project.optional-dependencies]
@@ -52,9 +51,10 @@ include = ["aero_ws_python*"]
 
 [tool.black]
 line-length = 100
-target-version = ['py38', 'py39', 'py310', 'py311']
+target-version = ['py310', 'py311']
 
 [tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
