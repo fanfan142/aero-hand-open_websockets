@@ -916,10 +916,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     fun updateControlValuesFromGesture(angles: FingerAngles, capturedAtMs: Long = 0L) {
         if (!controlSession.gestureEnabled || _uiState.value.isPresetRunning || !isConnected()) return
-        val now = capturedAtMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
+        if (capturedAtMs > 0L &&
+            (capturedAtMs > now || now - capturedAtMs >= 240L)) return
         val command = gestureCommandScheduler.plan(fingerAnglesToCompactState(angles), now) ?: return
         pendingGestureCommand = command
-        pendingGestureCapturedAtMs = now
+        pendingGestureCapturedAtMs = capturedAtMs.takeIf { it > 0L } ?: now
         if (gestureSendJob?.isActive == true) return
         val epoch = controlSession.snapshot()
         gestureSendJob = viewModelScope.launch {
@@ -927,6 +929,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 val next = pendingGestureCommand ?: break
                 val capturedAt = pendingGestureCapturedAtMs
                 pendingGestureCommand = null
+                if (SystemClock.elapsedRealtime() - capturedAt >= 240L) continue
                 if (sendState(next.values, next.durationMs, logControl = false) &&
                     controlSession.acceptsGesture(epoch)) {
                     gestureCommandScheduler.markSent(next, capturedAt)

@@ -3,6 +3,7 @@ package com.aerohand.ui.screens
 import android.Manifest
 import android.app.Application
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -135,7 +136,9 @@ fun HandControlScreen() {
     LaunchedEffect(gestureService.controlFrame, selectedControlPage) {
         gestureService.controlFrame.collect { frame ->
             if (selectedControlPage == 2) {
-                if (frame.allowed) {
+                if (frame.allowed && frame.isFreshAt(
+                        SystemClock.elapsedRealtime(), 240L
+                    )) {
                     viewModel.markGestureControlReady()
                     viewModel.updateControlValuesFromGesture(frame.angles, frame.capturedAtMs)
                 } else {
