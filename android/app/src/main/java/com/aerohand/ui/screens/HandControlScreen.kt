@@ -102,7 +102,7 @@ fun HandControlScreen() {
         GestureCameraService(context, lifecycleOwner)
     }
 
-    var selectedControlPage by remember { mutableIntStateOf(2) }
+    var selectedControlPage by remember { mutableIntStateOf(1) }
 
     LaunchedEffect(gestureService, uiState.gestureTargetHand) {
         gestureService.setTargetHand(uiState.gestureTargetHand)
@@ -116,10 +116,15 @@ fun HandControlScreen() {
         }
     }
 
+    // Require leaving/re-entering the gesture tab after a transport switch.
+    LaunchedEffect(uiState.connectionMode) {
+        if (selectedControlPage == 2) selectedControlPage = 1
+    }
+
     // Start/stop camera based on selected page
     LaunchedEffect(selectedControlPage) {
         if (selectedControlPage == 2) { // Gesture page
-            // Camera will be started by GestureFollowPage composable
+            viewModel.onGesturePageEntered()
         } else {
             gestureService.stopCamera()
             viewModel.resetGestureSendState()
@@ -238,6 +243,9 @@ fun HandControlScreen() {
                         usbConnected = uiState.usbConnected,
                         statusMessage = uiState.statusMessage,
                         wifiConfig = uiState.wifiConfig,
+                        discoveredHands = uiState.discoveredHands,
+                        discoveryStatus = uiState.discoveryStatus,
+                        onDiscoveredHandClick = viewModel::connectDiscoveredHand,
                         firmwareIdentified = uiState.deviceCapabilities.identified,
                         wifiProvisioningSupported = uiState.deviceCapabilities.wifiProvisioning,
                         firmwareVersion = uiState.firmwareVersion,

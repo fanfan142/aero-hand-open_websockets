@@ -22,6 +22,7 @@
 // WiFi / WebSocket 相关头文件 (新增)
 // ============================================
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
 
@@ -64,8 +65,9 @@ static inline uint16_t u16_min(uint16_t a, uint16_t b);
 // WiFi / WebSocket 全局变量 (新增)
 // ============================================
 static AeroWebSocketServer wsServer;
-static bool g_wsConnected = false;
 static uint32_t g_lastWsActivity = 0;
+static int16_t g_wsControlOwner = -1; // WebSocket client number holding the short control lease.
+static String g_staMdnsHost; // Without .local; empty when STA mDNS is not advertised.
 
 enum ControlSource {
   CONTROL_SOURCE_NONE = 0,
@@ -168,6 +170,9 @@ SemaphoreHandle_t gBusMux = nullptr;
 
 // WebSocket相关函数 (新增)
 void setupWiFi();
+static const char* validateStaConfig(const String& ssid, const String& password,
+                                      const String& staticIp, const String& gateway,
+                                      const String& subnet, const String& dns1, const String& dns2);
 void loadWiFiConfig();
 void saveWiFiConfig();
 void clearWiFiConfig();
@@ -184,7 +189,8 @@ void sendWsResponse(
     bool success,
     const char* message,
     const char* commandType = nullptr,
-    const char* requestId = nullptr
+    const char* requestId = nullptr,
+    bool executed = true
 );
 void broadcastJointStates();
 void blinkLED(int times);
@@ -474,23 +480,24 @@ static void updateJointAnglesFromActuatorAngles(const float actuatorAngles[SERVO
   }
 }
 
-static bool canAcceptControl(ControlSource source) {
+static bool canAcceptControl(ControlSource source, int16_t wsClient = -1) {
   uint32_t now = millis();
   if (g_activeControlSource == CONTROL_SOURCE_NONE) return true;
-  if (g_activeControlSource == source) return true;
   uint32_t lastActivity = (g_activeControlSource == CONTROL_SOURCE_WEBSOCKET) ? g_lastWsActivity : g_lastSerialActivity;
-  if (now - lastActivity > CONTROL_SOURCE_TIMEOUT_MS) {
-    return true;
-  }
-  return false;
+  if (now - lastActivity > CONTROL_SOURCE_TIMEOUT_MS) return true;
+  if (g_activeControlSource != source) return false;
+  // A second socket cannot take over a live WS stream; USB retains its own lease.
+  return source != CONTROL_SOURCE_WEBSOCKET || wsClient == g_wsControlOwner;
 }
 
-static void markControlActivity(ControlSource source) {
+static void markControlActivity(ControlSource source, int16_t wsClient = -1) {
   uint32_t now = millis();
   g_activeControlSource = source;
   if (source == CONTROL_SOURCE_WEBSOCKET) {
+    g_wsControlOwner = wsClient;
     g_lastWsActivity = now;
   } else if (source == CONTROL_SOURCE_SERIAL) {
+    g_wsControlOwner = -1;
     g_lastSerialActivity = now;
   }
 }
@@ -535,7 +542,14 @@ static void buildServoTargetsFromActuatorAngles(const float actuatorAngles[SERVO
 static void applyPendingWsTarget() {
   uint32_t now = millis();
   if (!g_wsTargetDirty || now - g_lastServoWriteMs < WS_SERVO_WRITE_INTERVAL_MS) return;
-  if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) return;
+  if (g_wsControlOwner < 0) { cancelPendingWsTarget(); return; }
+  // Never let a buffered WS target outlive its control lease or apply after USB takes over.
+  if (g_activeControlSource != CONTROL_SOURCE_WEBSOCKET ||
+      now - g_lastWsActivity > CONTROL_SOURCE_TIMEOUT_MS) {
+    cancelPendingWsTarget();
+    return;
+  }
+  if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, g_wsControlOwner)) return;
   if (HOMING_isBusy()) return;
 
   int16_t writePos[SERVO_COUNT];
@@ -592,7 +606,7 @@ static void applyPendingWsTarget() {
     for (uint8_t i = 0; i < JOINT_COUNT; ++i) g_jointAngles[i] = settled ? g_targetJointAngles[i] : nextJointAngles[i];
     if (settled) g_wsTargetDirty = false;
   }
-  markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+  // A target may smooth only while its controller is actively sending commands.
   g_lastServoWriteMs = now;
 }
 
@@ -965,13 +979,8 @@ void setup() {
   resetSdToBaseline();
   prefs.begin("hand", false);
   loadManualExtendsFromNVS();
-  #if defined(LEFT_HAND)
-    Serial.println("[BOOT] Hand Type: LEFT_HAND");
-  #elif defined(RIGHT_HAND)
-    Serial.println("[BOOT] Hand Type: RIGHT_HAND");
-  #else
-    Serial.println("[BOOT] Hand Type: UNKNOWN");
-  #endif
+  // USB CDC is exclusively the official 16-byte binary protocol.
+  // Never emit text here, including during boot or homing.
 
   esp_reset_reason_t reason = esp_reset_reason();
   bool do_homing = false;
@@ -982,11 +991,8 @@ void setup() {
     do_homing = true;   // Power-dipped but not fully to 0v , Optional but recommended for safety
   }
   if (do_homing) {
-    Serial.println("[BOOT] Power-on detected → homing");
     HOMING_start();
     saveExtendsToNVS();
-  } else {
-    Serial.println("[BOOT] Non-power reset → skipping homing");
   }
 
   //Syncreadbegin to Start the syncread
@@ -1016,6 +1022,9 @@ void setup() {
     doc["wifi_mode"] = getWifiModeName();
     doc["configured_wifi_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
     doc["ip"] = getCurrentIp();
+    if (!g_staMdnsHost.isEmpty()) {
+      doc["mdns_host"] = g_staMdnsHost + ".local";
+    }
     doc["firmware_type"] = "firmware_ws";
     doc["firmware_version"] = "v0.2.0";
     doc["protocol_version"] = 2;
@@ -1026,6 +1035,11 @@ void setup() {
   });
   wsServer.onDisconnect([](uint8_t num) {
     DEBUG_PRINTF("[WS] Client %u disconnected\n", num);
+    if (g_wsControlOwner == num) {
+      cancelPendingWsTarget();
+      g_wsControlOwner = -1;
+      g_activeControlSource = CONTROL_SOURCE_NONE;
+    }
   });
 }
 
@@ -1044,6 +1058,12 @@ void loadWiFiConfig() {
     g_staDns1 = wifiPrefs.getString("sta_dns1", STA_DNS1);
     g_staDns2 = wifiPrefs.getString("sta_dns2", STA_DNS2);
     wifiPrefs.end();
+    if (g_wifiModeSetting != AH_WIFI_MODE_AP &&
+        validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp, g_staGateway,
+                          g_staSubnet, g_staDns1, g_staDns2) != nullptr) {
+        // Old/corrupt NVS entries are not trusted as connection parameters.
+        g_wifiModeSetting = AH_WIFI_MODE_AP;
+    }
 }
 
 void saveWiFiConfig() {
@@ -1080,31 +1100,159 @@ void clearWiFiConfig() {
     wifiPrefs.end();
 }
 
-static bool parseIp(const String& value, IPAddress& out) {
-    return !value.isEmpty() && out.fromString(value);
+// Android sends all seven STA fields. Reject partial updates rather than carrying
+// gateway/DNS settings forward from a different network.
+static bool validUtf8(const String& value) {
+    const uint8_t* bytes = (const uint8_t*)value.c_str();
+    size_t length = value.length();
+    for (size_t i = 0; i < length;) {
+        uint8_t first = bytes[i++];
+        if (first == 0) return false;
+        if (first < 0x80) continue;
+        size_t more = 0;
+        uint32_t codePoint = 0;
+        if (first >= 0xC2 && first <= 0xDF) { more = 1; codePoint = first & 0x1F; }
+        else if (first >= 0xE0 && first <= 0xEF) { more = 2; codePoint = first & 0x0F; }
+        else if (first >= 0xF0 && first <= 0xF4) { more = 3; codePoint = first & 0x07; }
+        else return false;
+        if (more > length - i) return false;
+        for (size_t j = 0; j < more; ++j) {
+            uint8_t next = bytes[i++];
+            if ((next & 0xC0) != 0x80) return false;
+            codePoint = (codePoint << 6) | (next & 0x3F);
+        }
+        if ((more == 1 && codePoint < 0x80) ||
+            (more == 2 && codePoint < 0x800) ||
+            (more == 3 && codePoint < 0x10000) ||
+            (codePoint >= 0xD800 && codePoint <= 0xDFFF) || codePoint > 0x10FFFF) return false;
+    }
+    return true;
 }
 
-static void applyStaStaticConfig() {
-    IPAddress ip;
-    IPAddress gateway;
-    IPAddress subnet;
-    IPAddress dns1;
-    IPAddress dns2;
-    if (!parseIp(g_staStaticIp, ip)) {
+static bool validStaSsid(const String& ssid) {
+    if (ssid.isEmpty() || ssid.length() > 32 || !validUtf8(ssid)) return false;
+    // Treat whitespace-only names as empty, as on Android.
+    for (size_t i = 0; i < ssid.length(); ++i) {
+        if (ssid[i] != ' ' && ssid[i] != '\t' && ssid[i] != '\r' && ssid[i] != '\n') return true;
+    }
+    return false;
+}
+
+static bool validStaPassword(const String& password) {
+    const size_t length = password.length();
+    if (!validUtf8(password)) return false;
+    if (length == 0 || (length >= 8 && length <= 63)) return true;
+    if (length != 64) return false;
+    for (size_t i = 0; i < length; ++i) {
+        char c = password[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) return false;
+    }
+    return true;
+}
+
+static bool parseStaIpv4(const String& value, IPAddress& out) {
+    uint8_t octets[4];
+    size_t index = 0;
+    for (size_t part = 0; part < 4; ++part) {
+        if (index >= value.length()) return false;
+        unsigned int octet = 0;
+        size_t digits = 0;
+        while (index < value.length() && value[index] >= '0' && value[index] <= '9') {
+            octet = octet * 10 + (value[index++] - '0');
+            if (++digits > 3 || octet > 255) return false;
+        }
+        if (digits == 0) return false;
+        octets[part] = (uint8_t)octet;
+        if (part < 3) {
+            if (index >= value.length() || value[index++] != '.') return false;
+        }
+    }
+    if (index != value.length()) return false;
+    out = IPAddress(octets[0], octets[1], octets[2], octets[3]);
+    return true;
+}
+
+static uint32_t ipBits(const IPAddress& ip) {
+    return (uint32_t(ip[0]) << 24) | (uint32_t(ip[1]) << 16) |
+           (uint32_t(ip[2]) << 8) | uint32_t(ip[3]);
+}
+
+static bool validSubnet(const IPAddress& mask) {
+    uint32_t bits = ipBits(mask);
+    if (bits == 0) return false;
+    uint32_t inverted = ~bits;
+    return (inverted & (inverted + 1U)) == 0;
+}
+
+static const char* validateStaConfig(const String& ssid, const String& password,
+                                      const String& staticIp, const String& gateway,
+                                      const String& subnet, const String& dns1, const String& dns2) {
+    if (!validStaSsid(ssid)) return "Invalid STA SSID (1-32 UTF-8 bytes)";
+    if (!validStaPassword(password)) return "Invalid STA password (empty, 8-63 bytes, or 64 hex)";
+    IPAddress ip, gw, mask, primaryDns, secondaryDns;
+    if (!parseStaIpv4(staticIp, ip)) return "Invalid STA static IP";
+    if (!parseStaIpv4(gateway, gw)) return "Invalid STA gateway";
+    if (!parseStaIpv4(subnet, mask) || !validSubnet(mask)) return "Invalid STA subnet mask";
+    if (!parseStaIpv4(dns1, primaryDns)) return "Invalid STA DNS1";
+    if (!parseStaIpv4(dns2, secondaryDns)) return "Invalid STA DNS2";
+    if ((ipBits(ip) & ipBits(mask)) != (ipBits(gw) & ipBits(mask)))
+        return "STA IP and gateway must share a subnet";
+    return nullptr;
+}
+
+static bool applyStaStaticConfig() {
+    // Call only after validateStaConfig; never silently substitute stale defaults.
+    IPAddress ip, gateway, subnet, dns1, dns2;
+    if (!parseStaIpv4(g_staStaticIp, ip) || !parseStaIpv4(g_staGateway, gateway) ||
+        !parseStaIpv4(g_staSubnet, subnet) || !parseStaIpv4(g_staDns1, dns1) ||
+        !parseStaIpv4(g_staDns2, dns2)) return false;
+    return WiFi.config(ip, gateway, subnet, dns1, dns2);
+}
+
+static void stopStaMdns() {
+    if (!g_staMdnsHost.isEmpty()) {
+        MDNS.end();
+        g_staMdnsHost = "";
+    }
+}
+
+static void updateStaMdns(bool immediate = false) {
+    if (WiFi.status() != WL_CONNECTED || WiFi.getMode() != WIFI_STA) {
+        stopStaMdns();
         return;
     }
-    parseIp(g_staGateway, gateway);
-    parseIp(g_staSubnet, subnet);
-    parseIp(g_staDns1, dns1);
-    parseIp(g_staDns2, dns2);
-    if (gateway == IPAddress(0, 0, 0, 0)) gateway = IPAddress(192, 168, 1, 1);
-    if (subnet == IPAddress(0, 0, 0, 0)) subnet = IPAddress(255, 255, 255, 0);
-    if (dns1 == IPAddress(0, 0, 0, 0)) dns1 = gateway;
-    if (dns2 == IPAddress(0, 0, 0, 0)) dns2 = dns1;
-    WiFi.config(ip, gateway, subnet, dns1, dns2);
+    if (!g_staMdnsHost.isEmpty()) return;
+    static uint32_t lastAttemptAt = 0;
+    static bool attempted = false;
+    uint32_t now = millis();
+    if (!immediate && attempted && now - lastAttemptAt < 5000) return;
+    lastAttemptAt = now;
+    attempted = true;
+    String suffix = WiFi.macAddress();
+    suffix.replace(":", "");
+    suffix.toLowerCase();
+    if (suffix.length() < 6) return;
+    suffix = suffix.substring(suffix.length() - 6);
+#if defined(LEFT_HAND)
+    String host = "aerohand-left-" + suffix;
+#elif defined(RIGHT_HAND)
+    String host = "aerohand-right-" + suffix;
+#else
+    String host = "aerohand-unknown-" + suffix;
+#endif
+    if (MDNS.begin(host.c_str())) {
+        MDNS.addService("aerohand", "tcp", WS_PORT);
+        g_staMdnsHost = host;
+        DEBUG_PRINTF("[WIFI] STA mDNS: %s.local\n", host.c_str());
+    } else {
+        MDNS.end();
+        DEBUG_PRINTLN("[WIFI] STA mDNS failed; will retry");
+    }
 }
 
 void startApMode() {
+    stopStaMdns();
     WiFi.persistent(false);
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true, false);
@@ -1125,20 +1273,25 @@ void startApMode() {
 }
 
 bool connectToSta(bool fallbackToAp) {
-    if (g_staSsid.isEmpty()) {
-        DEBUG_PRINTLN("[WIFI] STA SSID is empty");
-        if (fallbackToAp) {
-            startApMode();
-        }
+    const char* invalid = validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp,
+                                             g_staGateway, g_staSubnet, g_staDns1, g_staDns2);
+    if (invalid != nullptr) {
+        DEBUG_PRINTF("[WIFI] Refusing invalid STA config: %s\n", invalid);
+        if (fallbackToAp) startApMode();
         return false;
     }
 
+    stopStaMdns();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true, false);
     delay(100);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
-    applyStaStaticConfig();
+    if (!applyStaStaticConfig()) {
+        DEBUG_PRINTLN("[WIFI] STA static IP configuration failed");
+        if (fallbackToAp) startApMode();
+        return false;
+    }
     WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
@@ -1150,6 +1303,7 @@ bool connectToSta(bool fallbackToAp) {
         DEBUG_PRINTLN();
         DEBUG_PRINT("[WIFI] Connected! IP: ");
         DEBUG_PRINTLN(WiFi.localIP());
+        updateStaMdns(true);
         return true;
     }
 
@@ -1161,6 +1315,7 @@ bool connectToSta(bool fallbackToAp) {
     }
     return false;
 }
+
 
 const char* getWifiModeName() {
     wifi_mode_t mode = WiFi.getMode();
@@ -1176,7 +1331,7 @@ String getCurrentIp() {
         return WiFi.softAPIP().toString();
     }
     if (mode == WIFI_STA) {
-        return WiFi.localIP().toString();
+        return (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "0.0.0.0";
     }
     return "0.0.0.0";
 }
@@ -1228,19 +1383,21 @@ void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
     switch (type) {
         case WStype_DISCONNECTED:
             DEBUG_PRINTF("[WS] Client %u disconnected\n", num);
-            g_wsConnected = false;
+            if (g_wsControlOwner == num) {
+                cancelPendingWsTarget();
+                g_wsControlOwner = -1;
+                g_activeControlSource = CONTROL_SOURCE_NONE;
+            }
             break;
 
         case WStype_CONNECTED:
             DEBUG_PRINTF("[WS] Client %u connected\n", num);
-            g_wsConnected = true;
             blinkLED(2);
             break;
 
         case WStype_TEXT:
             DEBUG_PRINTF("[WS] Client %u sent %u bytes\n", num, (unsigned int)length);
             handleWsCommand(num, (const char*)payload, length);
-            g_lastWsActivity = millis();
             break;
 
         default:
@@ -1311,8 +1468,8 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         : nullptr;
 
     if (strcmp(type, "joint_control") == 0) {
-        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
-            sendWsResponse(clientNum, false, "Control busy: serial source active");
+        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
+            sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
         }
         if (!doc["data"]["joint_id"].is<const char*>() || !doc["data"]["angle"].is<float>()) {
@@ -1329,15 +1486,16 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             return;
         }
 
+        if (g_wsControlOwner != clientNum) cancelPendingWsTarget();
         prepareJointTargetsForWsUpdate();
         g_targetJointAngles[jointNum] = clampJointAngleDegrees(jointNum, angle);
         g_useActuatorTargets = false;
         g_wsTargetDirty = true;
-        markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+        markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
 
     } else if (strcmp(type, "actuator_control") == 0) {
-        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
-            sendWsResponse(clientNum, false, "Control busy: serial source active");
+        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
+            sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
         }
         if (!doc["data"]["actuators"].is<JsonArrayConst>()) {
@@ -1346,6 +1504,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         JsonArrayConst actuators = doc["data"]["actuators"].as<JsonArrayConst>();
+        if (g_wsControlOwner != clientNum) cancelPendingWsTarget();
         prepareActuatorTargetsForWsUpdate();
         int validCount = 0;
         for (JsonObjectConst actuator : actuators) {
@@ -1362,6 +1521,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         if (validCount <= 0) {
+            cancelPendingWsTarget();
             sendWsResponse(clientNum, false, "No valid actuators in actuator_control");
             return;
         }
@@ -1370,11 +1530,11 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
 
         g_useActuatorTargets = true;
         g_wsTargetDirty = true;
-        markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+        markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
-        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
-            sendWsResponse(clientNum, false, "Control busy: serial source active");
+        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
+            sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
         }
         if (!doc["data"]["joints"].is<JsonArrayConst>()) {
@@ -1384,6 +1544,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
 
         JsonArrayConst joints = doc["data"]["joints"].as<JsonArrayConst>();
 
+        if (g_wsControlOwner != clientNum) cancelPendingWsTarget();
         prepareJointTargetsForWsUpdate();
         int validCount = 0;
         for (JsonObjectConst joint : joints) {
@@ -1402,21 +1563,22 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         }
 
         if (validCount <= 0) {
+            cancelPendingWsTarget();
             sendWsResponse(clientNum, false, "No valid joints in multi_joint_control");
             return;
         }
 
         g_useActuatorTargets = false;
         g_wsTargetDirty = true;
-        markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+        markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
 
     } else if (strcmp(type, "get_states") == 0) {
         // 获取状态
         broadcastJointStatesTo(clientNum);
 
     } else if (strcmp(type, "homing") == 0) {
-        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET)) {
-            sendWsResponse(clientNum, false, "Control busy: serial source active");
+        if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
+            sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
         }
         if (!HOMING_isBusy()) {
@@ -1431,7 +1593,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
                 g_targetActuatorAngles[i] = 0;
             }
             g_wsTargetDirty = false;
-            markControlActivity(CONTROL_SOURCE_WEBSOCKET);
+            markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
             DEBUG_PRINTLN("[CMD] Homing executed");
             sendWsResponse(clientNum, true, "Homing executed");
         } else {
@@ -1442,17 +1604,34 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_config_set") == 0) {
-        if (!doc["data"]["sta_ssid"].is<const char*>() || !doc["data"]["sta_password"].is<const char*>()) {
-            sendWsResponse(clientNum, false, "Missing required fields in wifi_config_set", type, requestId);
+        JsonVariantConst data = doc["data"];
+        const char* const fields[] = {"sta_ssid", "sta_password", "sta_static_ip",
+                                      "sta_gateway", "sta_subnet", "sta_dns1", "sta_dns2"};
+        for (const char* field : fields) {
+            if (!data[field].is<const char*>()) {
+                sendWsResponse(clientNum, false, "All STA config fields must be strings", type, requestId);
+                return;
+            }
+        }
+        String ssid = data["sta_ssid"].as<const char*>();
+        String password = data["sta_password"].as<const char*>();
+        String staticIp = data["sta_static_ip"].as<const char*>();
+        String gateway = data["sta_gateway"].as<const char*>();
+        String subnet = data["sta_subnet"].as<const char*>();
+        String dns1 = data["sta_dns1"].as<const char*>();
+        String dns2 = data["sta_dns2"].as<const char*>();
+        const char* invalid = validateStaConfig(ssid, password, staticIp, gateway, subnet, dns1, dns2);
+        if (invalid != nullptr) {
+            sendWsResponse(clientNum, false, invalid, type, requestId);
             return;
         }
-        g_staSsid = doc["data"]["sta_ssid"].as<const char*>();
-        g_staPassword = doc["data"]["sta_password"].as<const char*>();
-        if (doc["data"]["sta_static_ip"].is<const char*>()) g_staStaticIp = doc["data"]["sta_static_ip"].as<const char*>();
-        if (doc["data"]["sta_gateway"].is<const char*>()) g_staGateway = doc["data"]["sta_gateway"].as<const char*>();
-        if (doc["data"]["sta_subnet"].is<const char*>()) g_staSubnet = doc["data"]["sta_subnet"].as<const char*>();
-        if (doc["data"]["sta_dns1"].is<const char*>()) g_staDns1 = doc["data"]["sta_dns1"].as<const char*>();
-        if (doc["data"]["sta_dns2"].is<const char*>()) g_staDns2 = doc["data"]["sta_dns2"].as<const char*>();
+        g_staSsid = ssid;
+        g_staPassword = password;
+        g_staStaticIp = staticIp;
+        g_staGateway = gateway;
+        g_staSubnet = subnet;
+        g_staDns1 = dns1;
+        g_staDns2 = dns2;
         g_wifiModeSetting = AH_WIFI_MODE_DUAL;
         saveWiFiConfig();
         DEBUG_PRINTF("[WIFI] Saved STA config for SSID: %s\n", g_staSsid.c_str());
@@ -1460,15 +1639,21 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         sendWifiStatus(clientNum, requestId);
 
     } else if (strcmp(type, "wifi_connect_sta") == 0) {
-        sendWsResponse(clientNum, true, "STA switch scheduled", type, requestId);
+        const char* invalid = validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp,
+                                                 g_staGateway, g_staSubnet, g_staDns1, g_staDns2);
+        if (invalid != nullptr) {
+            sendWsResponse(clientNum, false, invalid, type, requestId);
+            return;
+        }
+        sendWsResponse(clientNum, true, "STA switch scheduled", type, requestId, false);
         scheduleWifiAction(WIFI_ACTION_CONNECT_STA);
 
     } else if (strcmp(type, "wifi_start_ap") == 0) {
-        sendWsResponse(clientNum, true, "AP switch scheduled", type, requestId);
+        sendWsResponse(clientNum, true, "AP switch scheduled", type, requestId, false);
         scheduleWifiAction(WIFI_ACTION_START_AP);
 
     } else if (strcmp(type, "wifi_clear_sta") == 0) {
-        sendWsResponse(clientNum, true, "STA config clear scheduled", type, requestId);
+        sendWsResponse(clientNum, true, "STA config clear scheduled", type, requestId, false);
         scheduleWifiAction(WIFI_ACTION_CLEAR_STA);
 
     } else {
@@ -1482,7 +1667,8 @@ void sendWsResponse(
     bool success,
     const char* message,
     const char* commandType,
-    const char* requestId
+    const char* requestId,
+    bool executed
 ) {
     DynamicJsonDocument response(WS_RESPONSE_DOC_CAPACITY);
     response["type"] = "response";
@@ -1498,7 +1684,7 @@ void sendWsResponse(
     }
 
     if (success) {
-        response["data"]["executed"] = true;
+        response["data"]["executed"] = executed;
         if (commandType != nullptr && commandType[0] != '\0') {
             response["data"]["message"] = message;
         }
@@ -1522,6 +1708,10 @@ void sendWifiStatus(uint8_t clientNum, const char* requestId) {
     }
     response["data"]["mode"] = getWifiModeName();
     response["data"]["ip"] = getCurrentIp();
+    response["data"]["sta_connected"] = WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED;
+    if (!g_staMdnsHost.isEmpty()) {
+        response["data"]["mdns_host"] = g_staMdnsHost + ".local";
+    }
     if (!g_staSsid.isEmpty()) {
         response["data"]["sta_ssid"] = g_staSsid;
     }
@@ -1531,6 +1721,7 @@ void sendWifiStatus(uint8_t clientNum, const char* requestId) {
     response["data"]["sta_dns1"] = g_staDns1;
     response["data"]["sta_dns2"] = g_staDns2;
     response["data"]["configured_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
+    response["data"]["switch_pending"] = g_pendingWifiAction != WIFI_ACTION_NONE;
 
     String output;
     serializeJson(response, output);
@@ -1577,6 +1768,7 @@ void broadcastJointStates() {
 
 void loop() {
   wsServer.loop();
+  updateStaMdns();
 
   uint8_t serialBytes = 0;
   while (Serial.available() > 0 && serialBytes < sizeof(g_serialFrameBuffer)) {

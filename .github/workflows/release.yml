@@ -62,6 +62,7 @@ jobs:
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
           ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
+          set -o pipefail
           "./gradlew" :app:assembleRelease -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${APP_VERSION_CODE}" --stacktrace --no-daemon 2>&1 | tee "release-build.log"
           tail -100 "release-build.log"
           test -f "app/build/outputs/apk/release/app-release.apk"
@@ -99,10 +100,25 @@ jobs:
             - Workflow: ${{ github.workflow }}
             - WiFi 配网需搭配同一 Release 中声明 protocol_version=2 的 v0.2.0 左右手固件
           generate_release_notes: true
-          make_latest: true
 
       - name: Upload APK to release
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload ${{ github.ref_name }} "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" --clobber
+
+      - name: Mark release latest after APK and firmware assets are ready
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' | grep -q '^firmware_v0.2.0_lefthand.bin$' && \
+               gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name' | grep -q '^firmware_v0.2.0_righthand.bin$'; then
+              gh release edit "${GITHUB_REF_NAME}" --latest
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Firmware assets missing; keeping release non-latest" >&2
+          exit 1

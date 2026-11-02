@@ -6,6 +6,7 @@ Aero WebSocket Protocol Definition
 """
 
 import json
+import math
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -22,6 +23,29 @@ class CommandType(Enum):
     STATES_RESPONSE = "states_response"
 
 
+# Historical WebSocket names remain stable for existing PC/Android clients.
+# They map to SDK joint indices, not servo/actuator IDs. The thumb CMC flex
+# joint is also addressable as thumb_cmc_flex (new alias).
+JOINT_TO_SDK_INDEX = {
+    "thumb_rotation": 0,
+    "thumb_cmc_flex": 1,
+    "thumb_proximal": 1,
+    "thumb_distal": 2,
+    "index_proximal": 4,
+    "index_middle": 5,
+    "index_distal": 6,
+    "middle_proximal": 7,
+    "middle_middle": 8,
+    "middle_distal": 9,
+    "ring_proximal": 10,
+    "ring_middle": 11,
+    "ring_distal": 12,
+    "pinky_proximal": 13,
+    "pinky_middle": 14,
+    "pinky_distal": 15,
+}
+
+# Preserve the published enumeration for clients which display these indices.
 JOINT_TO_SERVO_ID = {
     "thumb_proximal": 0,
     "thumb_distal": 1,
@@ -38,13 +62,15 @@ JOINT_TO_SERVO_ID = {
     "pinky_middle": 12,
     "pinky_distal": 13,
     "thumb_rotation": 14,
+    "thumb_cmc_flex": 15,
 }
 
 JOINT_ANGLE_LIMITS = {
     "proximal": (0, 90),
     "middle": (0, 90),
     "distal": (0, 90),
-    "rotation": (-30, 30),
+    "rotation": (-30, 30),  # legacy WebSocket degrees; convert at SDK boundary.
+    "cmc_flex": (0, 55),
 }
 
 VALID_JOINT_IDS = set(JOINT_TO_SERVO_ID.keys())
@@ -65,6 +91,8 @@ def get_joint_type(joint_id: str) -> str:
     """从关节ID中提取关节类型"""
     if "rotation" in joint_id:
         return "rotation"
+    if "cmc_flex" in joint_id:
+        return "cmc_flex"
     for joint_type in ["proximal", "middle", "distal"]:
         if joint_type in joint_id:
             return joint_type
@@ -73,6 +101,8 @@ def get_joint_type(joint_id: str) -> str:
 
 def get_angle_limits(joint_id: str) -> tuple:
     """获取关节的角度限制"""
+    if joint_id == 'thumb_proximal':
+        return JOINT_ANGLE_LIMITS['cmc_flex']
     joint_type = get_joint_type(joint_id)
     return JOINT_ANGLE_LIMITS.get(joint_type, (0, 90))
 
@@ -82,19 +112,23 @@ def _coerce_number(value: Any, field_name: str) -> Tuple[Optional[float], Option
     if isinstance(value, bool):
         return None, f"Field '{field_name}' must be a number"
     try:
-        return float(value), None
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None, f"Field '{field_name}' must be a number"
+    if not math.isfinite(number):
+        return None, f"Field '{field_name}' must be a finite number"
+    return number, None
 
 
 def _coerce_int(value: Any, field_name: str) -> Tuple[Optional[int], Optional[str]]:
     """将输入安全转换为 int"""
     if isinstance(value, bool):
         return None, f"Field '{field_name}' must be an integer"
-    try:
+    if isinstance(value, int):
+        return value, None
+    if isinstance(value, str) and value.strip().isdigit():
         return int(value), None
-    except (TypeError, ValueError):
-        return None, f"Field '{field_name}' must be an integer"
+    return None, f"Field '{field_name}' must be an integer"
 
 
 @dataclass
@@ -109,6 +143,8 @@ class JointCommand:
         if self.joint_id not in VALID_JOINT_IDS:
             return False, f"Invalid joint_id: {self.joint_id}", ErrorCode.INVALID_JOINT_ID
 
+        if not isinstance(self.angle, (int, float)) or not math.isfinite(self.angle):
+            return False, "Angle must be finite", ErrorCode.INVALID_ANGLE
         min_angle, max_angle = get_angle_limits(self.joint_id)
         if not (min_angle <= self.angle <= max_angle):
             return False, f"Angle {self.angle} out of range [{min_angle}, {max_angle}]", ErrorCode.INVALID_ANGLE

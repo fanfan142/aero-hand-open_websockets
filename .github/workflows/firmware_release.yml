@@ -95,4 +95,3 @@ jobs:
             firmware_release/*
           overwrite_files: true
           generate_release_notes: true
-          make_latest: true

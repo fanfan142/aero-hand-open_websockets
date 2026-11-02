@@ -31,6 +31,7 @@ classifiers = [
 dependencies = [
     "websockets>=10.0,<16",
     "pyserial>=3.5",
+    "aero-open-sdk>=0.1.0.dev1",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,7 @@ line-length = 100
 target-version = ['py38', 'py39', 'py310', 'py311']
 
 [tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]

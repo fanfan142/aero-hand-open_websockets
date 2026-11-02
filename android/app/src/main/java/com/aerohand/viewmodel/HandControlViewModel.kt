@@ -9,10 +9,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aerohand.gesture.FingerAngles
+import com.aerohand.gesture.GestureCommand
 import com.aerohand.gesture.GestureCommandScheduler
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
+import com.aerohand.wifi.DiscoveredHand
+import com.aerohand.wifi.HandDiscoveryService
 import com.aerohand.wifi.WifiNetworkItem
 import com.aerohand.wifi.WifiScanService
 import com.aerohand.websocket.ConnectionState
@@ -67,6 +70,8 @@ data class HandControlUiState(
     val host: String = "192.168.4.1",
     val port: String = "8765",
     val connectionPanelVisibility: ConnectionPanelVisibility = ConnectionPanelVisibility.COLLAPSED,
+    val discoveredHands: List<DiscoveredHand> = emptyList(),
+    val discoveryStatus: String = "展开 WiFi 面板后搜索局域网设备",
     val wifiConfig: WifiConfigUiState = WifiConfigUiState(),
     val deviceCapabilities: DeviceCapabilities = DeviceCapabilities(),
     val firmwareVersion: String? = null,
@@ -92,6 +97,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private val webSocketService = WebSocketService()
     private val usbSerialService = UsbSerialService(application)
     private val wifiScanService = WifiScanService(application)
+    private val handDiscoveryService = HandDiscoveryService(application)
 
     private val _uiState = MutableStateFlow(HandControlUiState())
     val uiState: StateFlow<HandControlUiState> = _uiState
@@ -104,6 +110,13 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     private val gestureCommandScheduler = GestureCommandScheduler()
     private var lastGestureUiUpdateTimeMs: Long = 0L
     private var pendingWifiTransitionMessage: String? = null
+    private var expectedSta: WifiProvisioningRequest? = null
+    private var awaitingStaStatus = false
+    private val controlSession = ControlSession()
+    private var gestureModeRearmRequired = false
+    private var gestureSendJob: Job? = null
+    private var pendingGestureCommand: GestureCommand? = null
+    private var pendingGestureCapturedAtMs: Long = 0L
 
     companion object {
         private const val GESTURE_UI_UPDATE_INTERVAL_MS = 100L
@@ -111,18 +124,32 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         viewModelScope.launch {
+            handDiscoveryService.devices.collectLatest { devices ->
+                mutateState { copy(discoveredHands = devices) }
+            }
+        }
+        viewModelScope.launch {
+            handDiscoveryService.status.collectLatest { status ->
+                mutateState { copy(discoveryStatus = status) }
+            }
+        }
+        viewModelScope.launch {
             webSocketService.connectionState.collectLatest { state ->
                 val transitionMessage = pendingWifiTransitionMessage
                 if (state is ConnectionState.Connected) {
-                    pendingWifiTransitionMessage = null
+                    if (expectedSta == null) pendingWifiTransitionMessage = null
                 }
                 mutateState {
                     copy(
                         wifiConnected = state is ConnectionState.Connected,
-                        connectedHandType = if (state is ConnectionState.Connected) state.handType else null,
-                        connectedServer = if (state is ConnectionState.Connected) state.server else null,
-                        statusMessage = when (state) {
-                            is ConnectionState.Connected -> "WiFi 已连接 ${state.server}"
+                        connectedHandType = if (state is ConnectionState.Connected && connectionMode == ConnectionMode.WIFI) state.handType else null,
+                        connectedServer = if (state is ConnectionState.Connected && connectionMode == ConnectionMode.WIFI) state.server else null,
+                        statusMessage = if (connectionMode != ConnectionMode.WIFI) statusMessage else when (state) {
+                            is ConnectionState.Connected -> if (expectedSta != null) {
+                                "WiFi 已连接；等待设备上报 STA 模式/IP"
+                            } else {
+                                "WiFi 已连接 ${state.server}"
+                            }
                             is ConnectionState.Connecting -> "WiFi 连接中..."
                             is ConnectionState.Error -> transitionMessage ?: state.message
                             ConnectionState.Disconnected -> if (connectionMode == ConnectionMode.WIFI) {
@@ -145,6 +172,17 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
         viewModelScope.launch {
             webSocketService.wifiStatus.collectLatest { status ->
+                val expected = expectedSta
+                if (expected != null && awaitingStaStatus && _uiState.value.wifiConnected) {
+                    awaitingStaStatus = false
+                    if (com.aerohand.websocket.isStaReady(status, expected)) {
+                        expectedSta = null
+                        pendingWifiTransitionMessage = null
+                        mutateState { copy(statusMessage = "设备已在 STA ${status.ip} 连通") }
+                    } else if (status.mode == "AP" && status.staSsid == expected.ssid) {
+                        mutateState { copy(statusMessage = "设备仍在 AP；STA 未证实连接，请检查路由器或稍后重试") }
+                    }
+                }
                 mutateState {
                     copy(
                         wifiConfig = wifiConfig.copy(
@@ -196,7 +234,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 mutateState {
                     copy(
                         usbConnected = state is UsbConnectionState.Connected,
-                        statusMessage = when (state) {
+                        statusMessage = if (connectionMode != ConnectionMode.USB) statusMessage else when (state) {
                             is UsbConnectionState.Connected -> "USB 已连接 ${state.deviceName} @ 921600"
                             is UsbConnectionState.Error -> state.message
                             UsbConnectionState.Disconnected -> if (connectionMode == ConnectionMode.USB) "USB 未连接" else statusMessage
@@ -215,26 +253,59 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
 
         viewModelScope.launch {
             usbSerialService.compactState.collectLatest { state ->
-                if (state.isNotEmpty()) {
+                if (state.isNotEmpty() && _uiState.value.connectionMode == ConnectionMode.USB &&
+                    _uiState.value.usbConnected) {
                     updateControlValues(state)
                 }
             }
         }
     }
 
+    private fun cancelControlProducers() {
+        controlSession.invalidate()
+        gestureModeRearmRequired = true
+        presetJob?.cancel()
+        presetJob = null
+        sendDebounceJob?.cancel()
+        sendDebounceJob = null
+        resetGestureSendState()
+        mutateState { copy(activePresetId = null, isPresetRunning = false, isMacroRunning = false) }
+    }
+
     fun setConnectionMode(mode: ConnectionMode) {
+        if (_uiState.value.connectionMode == mode) return
+        // Cancel producers before changing the destination; old work must never follow the new mode.
+        cancelControlProducers()
+        wifiProvisionJob?.cancel()
+        wifiProvisionJob = null
+        pendingWifiTransitionMessage = null
+        expectedSta = null
+        awaitingStaStatus = false
+        when (_uiState.value.connectionMode) {
+            ConnectionMode.WIFI -> {
+                handDiscoveryService.stop()
+                webSocketService.disconnect()
+            }
+            ConnectionMode.USB -> usbSerialService.disconnect()
+        }
         mutateState {
             copy(
                 connectionMode = mode,
-                logs = when (mode) {
-                    ConnectionMode.WIFI -> latestWifiLogs
-                    ConnectionMode.USB -> latestUsbLogs
-                },
-                statusMessage = when (mode) {
-                    ConnectionMode.WIFI -> if (wifiConnected) statusMessage else "WiFi 未连接"
-                    ConnectionMode.USB -> if (usbConnected) statusMessage else "USB 未连接"
-                }
+                activePresetId = null,
+                isPresetRunning = false,
+                isMacroRunning = false,
+                wifiConfig = wifiConfig.copy(isProvisioning = false),
+                wifiConnected = if (mode == ConnectionMode.WIFI) wifiConnected else false,
+                usbConnected = if (mode == ConnectionMode.USB) usbConnected else false,
+                connectedHandType = if (mode == ConnectionMode.WIFI) connectedHandType else null,
+                connectedServer = if (mode == ConnectionMode.WIFI) connectedServer else null,
+                logs = if (mode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs,
+                statusMessage = if (mode == ConnectionMode.WIFI) "WiFi 未连接" else "USB 未连接"
             )
+        }
+        if (mode == ConnectionMode.WIFI &&
+            _uiState.value.connectionPanelVisibility == ConnectionPanelVisibility.EXPANDED) {
+            handDiscoveryService.start()
         }
     }
 
@@ -247,19 +318,33 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun cycleConnectionPanelVisibility() {
-        mutateState {
-            copy(
-                connectionPanelVisibility = when (connectionPanelVisibility) {
-                    ConnectionPanelVisibility.EXPANDED -> ConnectionPanelVisibility.COLLAPSED
-                    ConnectionPanelVisibility.COLLAPSED -> ConnectionPanelVisibility.HIDDEN
-                    ConnectionPanelVisibility.HIDDEN -> ConnectionPanelVisibility.EXPANDED
-                }
-            )
+        val next = when (_uiState.value.connectionPanelVisibility) {
+            ConnectionPanelVisibility.EXPANDED -> ConnectionPanelVisibility.COLLAPSED
+            ConnectionPanelVisibility.COLLAPSED -> ConnectionPanelVisibility.HIDDEN
+            ConnectionPanelVisibility.HIDDEN -> ConnectionPanelVisibility.EXPANDED
         }
+        setConnectionPanelVisibility(next)
     }
 
     fun setConnectionPanelVisibility(visibility: ConnectionPanelVisibility) {
         mutateState { copy(connectionPanelVisibility = visibility) }
+        if (visibility == ConnectionPanelVisibility.EXPANDED &&
+            _uiState.value.connectionMode == ConnectionMode.WIFI) {
+            handDiscoveryService.start()
+        } else {
+            handDiscoveryService.stop()
+        }
+    }
+
+    fun connectDiscoveredHand(name: String) {
+        val hand = handDiscoveryService.currentDevice(name) ?: run {
+            mutateState { copy(statusMessage = "设备已离线，请重新搜索或手动输入 IP") }
+            return
+        }
+        if (_uiState.value.connectionMode != ConnectionMode.WIFI) return
+        cancelControlProducers()
+        mutateState { copy(host = hand.host, port = hand.port.toString()) }
+        webSocketService.connect(hand.host, hand.port, requireHandIdentity = true)
     }
 
     fun setGestureTargetHand(targetHand: GestureTargetHand) {
@@ -325,7 +410,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun connect() {
-        resetGestureSendState()
+        cancelControlProducers()
         val state = _uiState.value
         when (state.connectionMode) {
             ConnectionMode.WIFI -> {
@@ -340,6 +425,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     return
                 }
                 webSocketService.connect(host, port)
+                // A socket open alone does not prove STA: request the device's mode/IP.
+                if (expectedSta != null) awaitingStaStatus = true
             }
             ConnectionMode.USB -> {
                 usbSerialService.findAndConnect()
@@ -348,11 +435,12 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun disconnect() {
-        presetJob?.cancel()
-        presetJob = null
+        cancelControlProducers()
+        expectedSta = null
+        awaitingStaStatus = false
         wifiProvisionJob?.cancel()
         wifiProvisionJob = null
-        resetGestureSendState()
+        pendingWifiTransitionMessage = null
         mutateState {
             copy(
                 isPresetRunning = false,
@@ -368,19 +456,22 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun updateControlValue(controlId: String, value: Float) {
+        if (_uiState.value.isPresetRunning) cancelControlProducers()
         val nextValues = _uiState.value.controlValues.toMutableMap().apply {
             this[controlId] = value
         }
         mutateState { copy(controlValues = nextValues) }
 
         sendDebounceJob?.cancel()
+        val epoch = controlSession.snapshot()
         sendDebounceJob = viewModelScope.launch {
             delay(60)
-            sendCurrentState()
+            if (controlSession.isCurrent(epoch)) sendCurrentState()
         }
     }
 
     fun sendHoming() {
+        cancelControlProducers()
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.sendHoming()
             ConnectionMode.USB -> usbSerialService.sendHoming()
@@ -388,9 +479,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun sendAllZeros() {
+        cancelControlProducers()
         val zeros = ControlDefinitions.DEFAULT_CONTROL_STATE.mapValues { 0f }
         mutateState { copy(controlValues = zeros) }
-        sendCurrentState()
+        viewModelScope.launch { sendCurrentState() }
     }
 
     fun requestStates() {
@@ -437,7 +529,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             mutateState { copy(statusMessage = validationError) }
             return
         }
-        resetGestureSendState()
+        cancelControlProducers()
         mutateState {
             copy(
                 wifiConfig = wifiConfig.copy(isProvisioning = true),
@@ -448,8 +540,10 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         wifiProvisionJob = viewModelScope.launch {
             when (val result = webSocketService.provisionWifi(request)) {
                 is WifiProvisioningResult.SwitchScheduled -> {
+                    expectedSta = request
                     pendingWifiTransitionMessage =
-                        "设备已确认配置并开始切 STA；请将手机切到 ${request.ssid}，然后连接 ${result.targetIp}:8765"
+                        "设备已确认切 STA 排程，尚未确认联网；请将手机切到 ${request.ssid}。" +
+                            "在该局域网点击连接 ${result.targetIp}:8765（或手动输入设备 IP）验证。"
                     mutateState {
                         copy(
                             host = result.targetIp,
@@ -469,6 +563,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
                 is WifiProvisioningResult.Failure -> {
+                    expectedSta = null
                     pendingWifiTransitionMessage = null
                     mutateState {
                         copy(
@@ -483,6 +578,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun switchDeviceToAp() {
+        expectedSta = null
+        awaitingStaStatus = false
         val state = _uiState.value
         if (state.connectionMode != ConnectionMode.WIFI || !state.wifiConnected) {
             mutateState { copy(statusMessage = "WiFi 未连接，无法切回 AP") }
@@ -497,6 +594,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         if (state.wifiConfig.isProvisioning) return
+        cancelControlProducers()
         mutateState {
             copy(
                 wifiConfig = wifiConfig.copy(isProvisioning = true),
@@ -529,6 +627,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun clearStaConfig() {
+        expectedSta = null
+        awaitingStaStatus = false
         val state = _uiState.value
         if (state.connectionMode != ConnectionMode.WIFI || !state.wifiConnected) {
             mutateState { copy(statusMessage = "WiFi 未连接，无法清除 STA 配置") }
@@ -543,6 +643,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
         if (state.wifiConfig.isProvisioning) return
+        cancelControlProducers()
         mutateState {
             copy(
                 wifiConfig = wifiConfig.copy(isProvisioning = true),
@@ -646,7 +747,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         refreshLogs()
     }
 
-    private fun sendCurrentState() {
+    private suspend fun sendCurrentState() {
         sendState(_uiState.value.controlValues, ControlDefinitions.DEFAULT_DURATION_MS)
     }
 
@@ -655,13 +756,15 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        presetJob?.cancel()
+        cancelControlProducers()
         val initialStatus = if (isMacro) {
             "执行宏动作：${sequence.size} 项"
         } else {
             "执行预设：${sequence.first().first.label}"
         }
+        val epoch = controlSession.snapshot()
         val job = viewModelScope.launch {
+            if (!controlSession.isCurrent(epoch)) return@launch
             mutateState {
                 copy(
                     activePresetId = sequence.first().first.id,
@@ -684,8 +787,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                             )
                         }
                         preset.steps.forEach { step ->
+                            if (!controlSession.isCurrent(epoch) || !isConnected()) return@launch
+                            val delivered = sendState(step.values, step.durationMs)
+                            if (!delivered) {
+                                mutateState { copy(statusMessage = "预设中断：指令未送达") }
+                                return@launch
+                            }
+                            if (!controlSession.isCurrent(epoch)) return@launch
                             mutateState { copy(controlValues = step.values) }
-                            sendState(step.values, step.durationMs)
                             delay(step.durationMs.toLong())
                         }
                     }
@@ -712,11 +821,14 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         presetJob = job
     }
 
-    private fun sendState(values: Map<String, Float>, durationMs: Int, logControl: Boolean = true): Boolean {
+    private suspend fun sendState(
+        values: Map<String, Float>, durationMs: Int, logControl: Boolean = true
+    ): Boolean {
+        val epoch = controlSession.snapshot()
         val state = _uiState.value
         return when (state.connectionMode) {
             ConnectionMode.WIFI -> {
-                if (state.wifiConnected && !state.wifiConfig.isProvisioning) {
+                if (state.wifiConnected && !state.wifiConfig.isProvisioning && controlSession.isCurrent(epoch)) {
                     webSocketService.sendCompactState(
                         values,
                         durationMs,
@@ -728,9 +840,8 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
             ConnectionMode.USB -> {
-                if (state.usbConnected) {
+                if (state.usbConnected && controlSession.isCurrent(epoch)) {
                     usbSerialService.sendCompactState(values)
-                    true
                 } else {
                     false
                 }
@@ -764,6 +875,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     override fun onCleared() {
+        handDiscoveryService.stop()
         super.onCleared()
         webSocketService.disconnect()
         usbSerialService.release()
@@ -782,23 +894,49 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun resetGestureSendState() {
+        controlSession.disableGesture()
+        gestureSendJob?.cancel()
+        gestureSendJob = null
+        pendingGestureCommand = null
+        pendingGestureCapturedAtMs = 0L
         gestureCommandScheduler.reset()
         lastGestureUiUpdateTimeMs = 0L
     }
 
     fun markGestureControlReady() {
+        if (gestureModeRearmRequired || _uiState.value.isPresetRunning) return
+        controlSession.enableGesture()
         gestureCommandScheduler.markReady()
     }
 
+    fun onGesturePageEntered() {
+        gestureModeRearmRequired = false
+        resetGestureSendState()
+    }
+
     fun updateControlValuesFromGesture(angles: FingerAngles, capturedAtMs: Long = 0L) {
+        if (!controlSession.gestureEnabled || _uiState.value.isPresetRunning || !isConnected()) return
         val now = capturedAtMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
         val command = gestureCommandScheduler.plan(fingerAnglesToCompactState(angles), now) ?: return
-        if (sendState(command.values, command.durationMs, logControl = false)) {
-            gestureCommandScheduler.markSent(command, now)
-            if (now - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
-                lastGestureUiUpdateTimeMs = now
-                updateControlValues(command.values)
+        pendingGestureCommand = command
+        pendingGestureCapturedAtMs = now
+        if (gestureSendJob?.isActive == true) return
+        val epoch = controlSession.snapshot()
+        gestureSendJob = viewModelScope.launch {
+            while (controlSession.acceptsGesture(epoch)) {
+                val next = pendingGestureCommand ?: break
+                val capturedAt = pendingGestureCapturedAtMs
+                pendingGestureCommand = null
+                if (sendState(next.values, next.durationMs, logControl = false) &&
+                    controlSession.acceptsGesture(epoch)) {
+                    gestureCommandScheduler.markSent(next, capturedAt)
+                    if (capturedAt - lastGestureUiUpdateTimeMs >= GESTURE_UI_UPDATE_INTERVAL_MS) {
+                        lastGestureUiUpdateTimeMs = capturedAt
+                        mutateState { copy(controlValues = ControlDefinitions.DEFAULT_CONTROL_STATE + next.values) }
+                    }
+                }
             }
+            gestureSendJob = null
         }
     }
 }
