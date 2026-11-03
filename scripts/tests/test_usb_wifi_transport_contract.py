@@ -42,8 +42,18 @@ def test_usb_ctrl_pos_updates_joint_cache_and_targets_without_changing_frame_dec
     assert "payload[2 * i]" in ctrl_pos
     assert "payload[2 * i + 1]" in ctrl_pos
     assert "mapU16ToRaw((uint8_t)i, u16)" in ctrl_pos
-    assert "updateJointAnglesFromActuatorAngles(g_actuatorAngles, g_jointAngles);" in ctrl_pos
-    assert "copyCurrentJointAnglesToTargets();" in ctrl_pos
+    assert "updateJointAnglesFromActuatorAngles(nextActuatorAngles, nextJointAngles);" in ctrl_pos
+    assert "memcpy(nextTargetJointAngles, nextJointAngles, sizeof(nextJointAngles));" in ctrl_pos
+    for update in (
+        "memcpy(g_actuatorAngles, nextActuatorAngles, sizeof(g_actuatorAngles));",
+        "memcpy(g_targetActuatorAngles, nextActuatorAngles, sizeof(g_targetActuatorAngles));",
+        "memcpy(g_jointAngles, nextJointAngles, sizeof(g_jointAngles));",
+        "memcpy(g_targetJointAngles, nextTargetJointAngles, sizeof(g_targetJointAngles));",
+    ):
+        # BLE and USB both commit the same derived state, only after the servo write.
+        assert ctrl_pos.count(update) == 2
+        assert ctrl_pos.index("hlscl.SyncWritePosEx") < ctrl_pos.index(update)
+        assert ctrl_pos.rindex(update) < ctrl_pos.index("markControlActivity(source)")
     assert ctrl_pos.index("updateJointAnglesFromActuatorAngles") < ctrl_pos.index("markControlActivity")
 
 
