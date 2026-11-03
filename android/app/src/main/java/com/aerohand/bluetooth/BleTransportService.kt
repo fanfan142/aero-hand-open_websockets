@@ -591,7 +591,7 @@ class BleTransportService(private val context: Context) {
         bondGeneration = null
         operationTimeout?.let(mainHandler::removeCallbacks)
         operationTimeout = null
-        activeOperation?.complete(false, null)
+        activeOperation?.complete?.invoke(false, null)
         activeOperation = null
         while (operationQueue.isNotEmpty()) operationQueue.removeFirst().complete(false, null)
         val oldGatt = gatt
