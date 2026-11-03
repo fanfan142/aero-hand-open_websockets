@@ -64,6 +64,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Aero Hand Firmware ${{ github.ref_name }}
+          make_latest: false
           body: |
             Aero Hand WebSocket 固件正式发布。
 

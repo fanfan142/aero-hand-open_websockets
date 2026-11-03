@@ -1,6 +1,6 @@
 package com.aerohand.gesture
 
-import android.graphics.Color
+import android.graphics.Bitmap
 import android.graphics.Rect
 import androidx.camera.core.ImageInfo
 import androidx.camera.core.ImageProxy
@@ -27,10 +27,10 @@ class GestureFrameConverterTest {
 
         assertEquals(2, frame.bitmap.width)
         assertEquals(2, frame.bitmap.height)
-        assertEquals(Color.rgb(40, 40, 20), frame.bitmap.getPixel(0, 0))
-        assertEquals(Color.rgb(80, 40, 20), frame.bitmap.getPixel(1, 0))
-        assertEquals(Color.rgb(40, 80, 20), frame.bitmap.getPixel(0, 1))
-        assertEquals(Color.rgb(80, 80, 20), frame.bitmap.getPixel(1, 1))
+        assertPixelBytes(frame.bitmap, 0, 0, 40, 40, 20)
+        assertPixelBytes(frame.bitmap, 1, 0, 80, 40, 20)
+        assertPixelBytes(frame.bitmap, 0, 1, 40, 80, 20)
+        assertPixelBytes(frame.bitmap, 1, 1, 80, 80, 20)
         assertEquals(90, frame.rotationDegrees)
         assertSame(frame.bitmap, converter.convert(image).bitmap)
     }
@@ -43,8 +43,19 @@ class GestureFrameConverterTest {
         assertEquals(2, frame.detectionSize.height)
         assertEquals(4, frame.cropWidth)
         assertEquals(3, frame.cropHeight)
-        assertEquals(Color.rgb(0, 0, 20), frame.bitmap.getPixel(0, 0))
-        assertEquals(Color.rgb(80, 40, 20), frame.bitmap.getPixel(1, 1))
+        assertPixelBytes(frame.bitmap, 0, 0, 0, 0, 20)
+        assertPixelBytes(frame.bitmap, 1, 1, 80, 40, 20)
+    }
+
+    private fun assertPixelBytes(bitmap: Bitmap, x: Int, y: Int, red: Int, green: Int, blue: Int) {
+        // Verify CameraX bytes are preserved; desktop Skia's getPixel channel packing differs.
+        val bytes = ByteBuffer.allocate(bitmap.byteCount)
+        bitmap.copyPixelsToBuffer(bytes)
+        val offset = y * bitmap.rowBytes + x * 4
+        assertEquals(red, bytes.get(offset).toInt() and 0xFF)
+        assertEquals(green, bytes.get(offset + 1).toInt() and 0xFF)
+        assertEquals(blue, bytes.get(offset + 2).toInt() and 0xFF)
+        assertEquals(255, bytes.get(offset + 3).toInt() and 0xFF)
     }
 
     private fun rgbaImage(crop: Rect, rotation: Int): ImageProxy {
