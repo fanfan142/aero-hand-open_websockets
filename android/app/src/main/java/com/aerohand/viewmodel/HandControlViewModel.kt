@@ -12,6 +12,9 @@ import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCommand
 import com.aerohand.gesture.GestureCommandScheduler
 import com.aerohand.gesture.GestureTargetHand
+import com.aerohand.bluetooth.BleConnectionState
+import com.aerohand.bluetooth.BleScanDevice
+import com.aerohand.bluetooth.BleTransportService
 import com.aerohand.usb.UsbConnectionState
 import com.aerohand.usb.UsbSerialService
 import com.aerohand.wifi.DiscoveredHand
@@ -29,6 +32,9 @@ import com.aerohand.websocket.PresetActions
 import com.aerohand.websocket.WebSocketService
 import com.aerohand.websocket.WifiProvisioningRequest
 import com.aerohand.websocket.WifiProvisioningResult
+import com.aerohand.websocket.buildSerialGetPositionsFrame
+import com.aerohand.websocket.buildSerialHomingFrame
+import com.aerohand.websocket.buildSerialPositionControlFrame
 import com.aerohand.websocket.compactStateFromJointStates
 import com.aerohand.websocket.validateWifiProvisioning
 import kotlinx.coroutines.Job
@@ -65,6 +71,14 @@ data class HandControlUiState(
     val connectionMode: ConnectionMode = ConnectionMode.WIFI,
     val wifiConnected: Boolean = false,
     val usbConnected: Boolean = false,
+    val bleConnected: Boolean = false,
+    val bleDevices: List<BleScanDevice> = emptyList(),
+    val bleSelectedAddress: String? = null,
+    val bleScanning: Boolean = false,
+    val bleConnecting: Boolean = false,
+    val blePermissionRequired: Boolean = false,
+    val bleHandType: String? = null,
+    val bleFirmwareVersion: String? = null,
     val connectedHandType: String? = null,
     val connectedServer: String? = null,
     val host: String = "192.168.4.1",
@@ -90,12 +104,14 @@ data class HandControlUiState(
 
 enum class ConnectionMode {
     WIFI,
-    USB
+    USB,
+    BLE
 }
 
 class HandControlViewModel(application: Application) : AndroidViewModel(application) {
     private val webSocketService = WebSocketService()
     private val usbSerialService = UsbSerialService(application)
+    private val bleTransportService = BleTransportService(application)
     private val wifiScanService = WifiScanService(application)
     private val handDiscoveryService = HandDiscoveryService(application)
 
@@ -230,6 +246,43 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         viewModelScope.launch {
+            bleTransportService.connectionState.collectLatest { state ->
+                mutateState {
+                    copy(
+                        bleConnected = state is BleConnectionState.Connected,
+                        bleScanning = state is BleConnectionState.Scanning,
+                        bleConnecting = state is BleConnectionState.Bonding || state is BleConnectionState.Connecting,
+                        bleHandType = (state as? BleConnectionState.Connected)?.identity?.handType,
+                        bleFirmwareVersion = (state as? BleConnectionState.Connected)?.identity?.firmwareVersion,
+                        statusMessage = if (connectionMode != ConnectionMode.BLE) statusMessage else when (state) {
+                            BleConnectionState.Disconnected -> "BLE 未连接"
+                            BleConnectionState.Scanning -> "正在搜索 Aero Hand 蓝牙设备"
+                            is BleConnectionState.Bonding -> "请在系统配对提示中确认 ${state.deviceName}"
+                            is BleConnectionState.Connecting -> "正在连接 ${state.deviceName} 并验证固件身份"
+                            is BleConnectionState.Connected -> "BLE 已连接 ${state.deviceName} · ${state.identity.handType} · ${state.identity.firmwareVersion}"
+                            is BleConnectionState.Error -> state.message
+                        }
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            bleTransportService.devices.collectLatest { devices ->
+                mutateState { copy(bleDevices = devices) }
+            }
+        }
+
+        viewModelScope.launch {
+            bleTransportService.controlValues.collectLatest { values ->
+                if (values.isNotEmpty() && _uiState.value.connectionMode == ConnectionMode.BLE &&
+                    _uiState.value.bleConnected) {
+                    updateControlValues(values)
+                }
+            }
+        }
+
+        viewModelScope.launch {
             usbSerialService.connectionState.collectLatest { state ->
                 mutateState {
                     copy(
@@ -287,6 +340,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 webSocketService.disconnect()
             }
             ConnectionMode.USB -> usbSerialService.disconnect()
+            ConnectionMode.BLE -> bleTransportService.disconnect()
         }
         mutateState {
             copy(
@@ -297,10 +351,21 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                 wifiConfig = wifiConfig.copy(isProvisioning = false),
                 wifiConnected = if (mode == ConnectionMode.WIFI) wifiConnected else false,
                 usbConnected = if (mode == ConnectionMode.USB) usbConnected else false,
+                bleConnected = if (mode == ConnectionMode.BLE) bleConnected else false,
+                bleSelectedAddress = if (mode == ConnectionMode.BLE) bleSelectedAddress else null,
+                bleScanning = if (mode == ConnectionMode.BLE) bleScanning else false,
                 connectedHandType = if (mode == ConnectionMode.WIFI) connectedHandType else null,
                 connectedServer = if (mode == ConnectionMode.WIFI) connectedServer else null,
-                logs = if (mode == ConnectionMode.WIFI) latestWifiLogs else latestUsbLogs,
-                statusMessage = if (mode == ConnectionMode.WIFI) "WiFi 未连接" else "USB 未连接"
+                logs = when (mode) {
+                    ConnectionMode.WIFI -> latestWifiLogs
+                    ConnectionMode.USB -> latestUsbLogs
+                    ConnectionMode.BLE -> emptyList()
+                },
+                statusMessage = when (mode) {
+                    ConnectionMode.WIFI -> "WiFi 未连接"
+                    ConnectionMode.USB -> "USB 未连接"
+                    ConnectionMode.BLE -> "BLE 未连接"
+                }
             )
         }
         if (mode == ConnectionMode.WIFI &&
@@ -333,6 +398,64 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             handDiscoveryService.start()
         } else {
             handDiscoveryService.stop()
+        }
+    }
+
+    fun startBleScan() {
+        if (_uiState.value.connectionMode != ConnectionMode.BLE) return
+        cancelControlProducers()
+        if (!hasBlePermission()) {
+            mutateState { copy(blePermissionRequired = true, statusMessage = "需要蓝牙附近设备权限才能搜索 Aero Hand") }
+            return
+        }
+        mutateState { copy(blePermissionRequired = false, bleSelectedAddress = null) }
+        bleTransportService.startScan()
+    }
+
+    fun onBlePermissionResult(granted: Boolean) {
+        val permissionStillRequired = !hasBlePermission()
+        mutateState { copy(blePermissionRequired = permissionStillRequired) }
+        if (granted && !permissionStillRequired && _uiState.value.connectionMode == ConnectionMode.BLE) startBleScan()
+        else if (permissionStillRequired) mutateState { copy(statusMessage = "蓝牙权限未完整授予，无法搜索或连接设备") }
+    }
+
+    fun selectBleDevice(address: String) {
+        if (_uiState.value.connectionMode != ConnectionMode.BLE) return
+        if (_uiState.value.bleDevices.none { it.address == address }) {
+            mutateState { copy(statusMessage = "所选设备已不在扫描列表中，请重新搜索") }
+            return
+        }
+        mutateState { copy(bleSelectedAddress = address) }
+    }
+
+    fun connectSelectedBleDevice() {
+        val state = _uiState.value
+        if (state.connectionMode != ConnectionMode.BLE) return
+        val address = state.bleSelectedAddress ?: run {
+            mutateState { copy(statusMessage = "请先从扫描列表中选择设备") }
+            return
+        }
+        if (!hasBlePermission()) {
+            mutateState { copy(blePermissionRequired = true, statusMessage = "需要蓝牙附近设备权限才能连接") }
+            return
+        }
+        if (_uiState.value.bleDevices.none { it.address == address }) {
+            mutateState { copy(bleSelectedAddress = null, statusMessage = "所选设备已离线，请重新扫描") }
+            return
+        }
+        cancelControlProducers()
+        bleTransportService.connect(address)
+    }
+
+    private fun hasBlePermission(): Boolean {
+        val context = getApplication<Application>()
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        return permissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -431,6 +554,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             ConnectionMode.USB -> {
                 usbSerialService.findAndConnect()
             }
+            ConnectionMode.BLE -> startBleScan()
         }
     }
 
@@ -452,6 +576,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.disconnect()
             ConnectionMode.USB -> usbSerialService.disconnect()
+            ConnectionMode.BLE -> bleTransportService.disconnect()
         }
     }
 
@@ -475,6 +600,11 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.sendHoming()
             ConnectionMode.USB -> usbSerialService.sendHoming()
+            ConnectionMode.BLE -> viewModelScope.launch {
+                if (!bleTransportService.sendCommand(buildSerialHomingFrame())) {
+                    mutateState { copy(statusMessage = "BLE 复位指令未送达") }
+                }
+            }
         }
     }
 
@@ -489,6 +619,11 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         when (_uiState.value.connectionMode) {
             ConnectionMode.WIFI -> webSocketService.requestStates()
             ConnectionMode.USB -> usbSerialService.requestStates()
+            ConnectionMode.BLE -> viewModelScope.launch {
+                if (!bleTransportService.sendCommand(buildSerialGetPositionsFrame())) {
+                    mutateState { copy(statusMessage = "BLE 状态查询指令未送达") }
+                }
+            }
         }
     }
 
@@ -846,6 +981,13 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
                     false
                 }
             }
+            ConnectionMode.BLE -> {
+                if (state.bleConnected && controlSession.isCurrent(epoch)) {
+                    bleTransportService.sendPosition(buildSerialPositionControlFrame(values))
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -858,6 +1000,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
             copy(logs = when (connectionMode) {
                 ConnectionMode.WIFI -> latestWifiLogs
                 ConnectionMode.USB -> latestUsbLogs
+                ConnectionMode.BLE -> emptyList()
             })
         }
     }
@@ -867,6 +1010,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         return when (state.connectionMode) {
             ConnectionMode.WIFI -> state.wifiConnected
             ConnectionMode.USB -> state.usbConnected
+            ConnectionMode.BLE -> state.bleConnected
         }
     }
 
@@ -879,6 +1023,7 @@ class HandControlViewModel(application: Application) : AndroidViewModel(applicat
         super.onCleared()
         webSocketService.disconnect()
         usbSerialService.release()
+        bleTransportService.release()
     }
 
     fun fingerAnglesToCompactState(angles: FingerAngles): Map<String, Float> {
