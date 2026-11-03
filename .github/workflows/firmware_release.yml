@@ -68,7 +68,7 @@ jobs:
           make_latest: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            Aero Hand WebSocket 固件正式发布。
+            Aero Hand 固件云端构建。带预发布后缀的标签为候选版，不代表已通过真机验收。
 
             ## 包含固件
 
@@ -80,7 +80,9 @@ jobs:
             | v0.1.5 | firmware_v0.1.5_lefthand.bin | firmware_v0.1.5_righthand.bin |
             | v0.2.0 | firmware_v0.2.0_lefthand.bin | firmware_v0.2.0_righthand.bin |
 
-            v0.2.0 是当前 Android App 的推荐固件，支持 protocol_version=2、关联 ACK 与完整静态 IP 配网。v0.1.x 仅用于历史控制兼容，不支持当前 App 配网。
+            本 Release 的 v0.2.0 是当前 Android App 的推荐固件，支持 BLE、USB、Wi-Fi、protocol_version=2、关联 ACK 与完整静态 IP 配网。旧版 v0.2.0 资产不包含新增 BLE 服务；App 与固件请取自同一 Release。v0.1.x 仅用于历史控制兼容，不支持当前 App 配网或 BLE。
+
+            BLE 使用加密绑定的 Just Works 配对，不具备 MITM 身份认证；名称和 UUID 不是认证。首次验证请断开执行器，仅读取状态；独立通信测试板禁止运动、扭矩或归位命令。断连不是急停，也不能撤回已执行指令。
 
             ## 烧录说明
 

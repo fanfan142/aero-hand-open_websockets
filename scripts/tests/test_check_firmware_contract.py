@@ -468,6 +468,110 @@ int main() {
                 with self.subTest(section=index, forbidden=forbidden):
                     self.assertNotIn(forbidden, critical_section)
 
+    def test_homing_guard_rechecks_after_bus_wait_before_any_side_effect(self) -> None:
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.fail("Guarded homing behavior coverage requires g++ or clang++")
+        homing_source = (V020_FIRMWARE.parent / "Homing.cpp").read_text(encoding="utf-8")
+        homing_header = (V020_FIRMWARE.parent / "Homing.h").read_text(encoding="utf-8")
+        context_start = homing_header.index("struct HomingGuardContext {")
+        context_end = homing_header.index("// Utility", context_start)
+        declarations = homing_header[context_start:context_end]
+        locked = cpp_function_definition(homing_source, "static void zero_all_motors_locked()")
+        guarded = cpp_function_definition(homing_source, "bool HOMING_startGuarded(HomingStartGuard guard, const HomingGuardContext& context)")
+        legacy = cpp_function_definition(homing_source, "void zero_all_motors()") + "\n" + cpp_function_definition(homing_source, "void HOMING_start()")
+        guard = cpp_function_definition(self.source, "static bool bleHomingStartAllowed(const HomingGuardContext& context)")
+        case_start = self.host_handler.index("case HOMING:")
+        case_end = self.host_handler.index("case SET_ID:", case_start)
+        homing_case = self.host_handler[case_start:case_end]
+        harness = r"""
+#include <stdint.h>
+#include <assert.h>
+""" + declarations + r"""
+static bool s_busy = false, busOwned = false, connected = true;
+static int scenario, takes, gives, baselineResets, motorCalls, postHoming, nvs, cancels, acks, marks;
+static uint32_t nowMs;
+static uint32_t g_bleDispatchGeneration = 7, g_bleDispatchArrivedAtMs = 100;
+static uint16_t g_bleDispatchConnHandle = 42;
+static const uint32_t BLE_HOMING_TTL_MS = 3000;
+static const uint8_t HOMING = 0x01;
+static const int JOINT_COUNT = 2, SERVO_COUNT = 7, pdTRUE = 1, portMAX_DELAY = -1;
+static int gBusMux = 1;
+static float g_jointAngles[JOINT_COUNT], g_targetJointAngles[JOINT_COUNT];
+static float g_actuatorAngles[SERVO_COUNT], g_targetActuatorAngles[SERVO_COUNT];
+struct ServoData { int servo_direction, extend_count; };
+static ServoData sd[7];
+static const uint8_t SERVO_IDS[7] = {0, 1, 2, 3, 4, 5, 6};
+enum ControlSource { CONTROL_SOURCE_SERIAL, CONTROL_SOURCE_BLE };
+static uint32_t millis() { return nowMs; }
+static int xSemaphoreTake(int, int) {
+  assert(!busOwned); // Detect recursive acquisition.
+  busOwned = true;
+  ++takes;
+  if (scenario == 1) connected = false; // Disconnect while waiting for the bus.
+  if (scenario == 2) nowMs = 3100; // Expire exactly as the bus becomes available.
+  return pdTRUE;
+}
+static void xSemaphoreGive(int) { assert(busOwned); busOwned = false; ++gives; }
+static bool bleDispatchConnectionIsCurrent(uint32_t generation, uint16_t handle) {
+  assert(busOwned); // The production guard must run after acquisition.
+  return connected && generation == 7 && handle == 42;
+}
+static bool canAcceptControl(ControlSource) { return true; }
+static void resetSdToBaseline() { assert(busOwned); ++baselineResets; sd[0].extend_count = 2048; }
+static void zero_with_current(uint8_t, int, int) { assert(busOwned); ++motorCalls; }
+static void zero_fingers_parallel_with_current(uint8_t, uint8_t, int) { assert(busOwned); ++motorCalls; }
+struct MotorBus {
+  void WritePosEx(uint8_t, int, int, int, int) { assert(busOwned); ++motorCalls; }
+} hlscl;
+static void enforceServoCurrentLimitPostHoming() { ++postHoming; }
+static void cancelPendingWsTarget() { ++cancels; }
+static void saveExtendsToNVS() { ++nvs; }
+static void sendAckFrame(uint8_t, const uint8_t*, unsigned) { ++acks; }
+static void markControlActivity(ControlSource) { ++marks; }
+""" + locked + "\n" + legacy + "\n" + guarded + "\n" + guard + r"""
+static bool dispatchHoming() {
+  const ControlSource source = CONTROL_SOURCE_BLE;
+  switch (HOMING) {
+""" + homing_case + r"""
+    default: return false;
+  }
+}
+int main() {
+  for (scenario = 0; scenario < 3; ++scenario) {
+    connected = true;
+    nowMs = 101;
+    takes = gives = baselineResets = motorCalls = postHoming = nvs = cancels = acks = marks = 0;
+    sd[0].extend_count = 1234;
+    for (int i = 0; i < JOINT_COUNT; ++i) g_jointAngles[i] = g_targetJointAngles[i] = 9;
+    for (int i = 0; i < SERVO_COUNT; ++i) g_actuatorAngles[i] = g_targetActuatorAngles[i] = 9;
+    assert(dispatchHoming());
+    assert(takes == 1 && gives == 1 && !busOwned && !s_busy);
+    if (scenario == 0) {
+      assert(baselineResets == 1 && motorCalls == 11 && postHoming == 1);
+      assert(nvs == 1 && cancels == 1 && acks == 1 && marks == 1);
+      assert(sd[0].extend_count == 2048);
+    } else {
+      assert(baselineResets == 0 && motorCalls == 0 && postHoming == 0);
+      assert(nvs == 0 && cancels == 0 && acks == 0 && marks == 0);
+      assert(sd[0].extend_count == 1234);
+    }
+    const float expected = scenario == 0 ? 0 : 9;
+    for (int i = 0; i < JOINT_COUNT; ++i) assert(g_jointAngles[i] == expected && g_targetJointAngles[i] == expected);
+    for (int i = 0; i < SERVO_COUNT; ++i) assert(g_actuatorAngles[i] == expected && g_targetActuatorAngles[i] == expected);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "homing_guard_contract.cpp"
+            executable = Path(temp_dir) / ("homing_guard_contract.exe" if sys.platform == "win32" else "homing_guard_contract")
+            source.write_text(harness, encoding="utf-8")
+            build = subprocess.run([compiler, "-std=c++11", str(source), "-o", str(executable)], capture_output=True, text=True, check=False)
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_ble_mirror_is_exact(self) -> None:
         self.assertEqual(V020_FIRMWARE.read_bytes(), V020_FIRMWARE_MIRROR.read_bytes())
 

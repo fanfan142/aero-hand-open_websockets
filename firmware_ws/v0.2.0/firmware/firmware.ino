@@ -473,6 +473,12 @@ static bool bleDispatchConnectionIsCurrent(uint32_t generation, uint16_t connHan
   return current;
 }
 
+static bool bleHomingStartAllowed(const HomingGuardContext& context) {
+  if (!bleDispatchConnectionIsCurrent(context.generation, context.connHandle)) return false;
+  const uint32_t remainingMs = static_cast<uint32_t>(context.deadlineMs - millis());
+  return remainingMs != 0 && remainingMs < 0x80000000U;
+}
+
 static void processBleQueue() {
   processBleDisconnect();
   uint8_t frame[16];
@@ -1296,14 +1302,19 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource so
     case SET_SPE:
       return handleSetSpeedCmd(payload);
 
-    case HOMING:
-      if (source == CONTROL_SOURCE_BLE && !bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle)) return true;
+    case HOMING: {
       if (!canAcceptControl(source)) return true;
-      if (source == CONTROL_SOURCE_BLE &&
-          (!bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle) ||
-           static_cast<uint32_t>(millis() - g_bleDispatchArrivedAtMs) >= BLE_HOMING_TTL_MS)) return true;
-      cancelPendingWsTarget();
-      HOMING_start();
+      if (source == CONTROL_SOURCE_BLE) {
+        const HomingGuardContext context = {
+          g_bleDispatchGeneration, g_bleDispatchConnHandle,
+          static_cast<uint32_t>(g_bleDispatchArrivedAtMs + BLE_HOMING_TTL_MS)
+        };
+        if (!HOMING_startGuarded(bleHomingStartAllowed, context)) return true;
+        cancelPendingWsTarget();
+      } else {
+        cancelPendingWsTarget();
+        HOMING_start();
+      }
       saveExtendsToNVS();
       for (int i = 0; i < JOINT_COUNT; ++i) {
         g_jointAngles[i] = 0.0f;
@@ -1316,6 +1327,7 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource so
       sendAckFrame(HOMING, nullptr, 0);
       markControlActivity(source);
       return true;
+    }
 
     case SET_ID:
       return handleSetIdCmd(payload);

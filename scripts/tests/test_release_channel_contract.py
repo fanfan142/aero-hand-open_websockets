@@ -17,6 +17,15 @@ class ReleaseChannelContractTest(unittest.TestCase):
                 )
                 self.assertIn("make_latest: false", source)
 
+    def test_firmware_notes_do_not_claim_candidate_is_accepted(self) -> None:
+        source = (REPO_ROOT / ".github" / "workflows" / "firmware_release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("固件正式发布", source)
+        self.assertIn("不代表已通过真机验收", source)
+        self.assertIn("App 与固件请取自同一 Release", source)
+        self.assertIn("独立通信测试板禁止运动、扭矩或归位命令", source)
+
     def test_candidate_android_release_cannot_be_promoted_to_latest(self) -> None:
         source = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"

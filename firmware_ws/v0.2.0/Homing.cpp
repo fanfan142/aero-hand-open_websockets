@@ -213,9 +213,9 @@ static void zero_fingers_parallel_with_current(uint8_t firstIdx, uint8_t count, 
   }
 }
 
-void zero_all_motors() {
+// Caller owns gBusMux; neither this helper nor its motor helpers acquire it again.
+static void zero_all_motors_locked() {
   resetSdToBaseline();
-  if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
   zero_with_current(0,  sd[0].servo_direction, 950);   // Thumb Abduction
   zero_with_current(1,  sd[1].servo_direction, 950);   // Thumb Flex
   zero_with_current(2,  sd[2].servo_direction, 950);   // Thumb Tendon
@@ -228,7 +228,11 @@ void zero_all_motors() {
   hlscl.WritePosEx(SERVO_IDS[4], sd[4].extend_count, 2400, 0, 1023);   // Middle to extend
   hlscl.WritePosEx(SERVO_IDS[5], sd[5].extend_count, 2400, 0, 1023);   // Ring to extend
   hlscl.WritePosEx(SERVO_IDS[6], sd[6].extend_count, 2400, 0, 1023);   // Pinky to extend
-  
+}
+
+void zero_all_motors() {
+  if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+  zero_all_motors_locked();
   if (gBusMux) xSemaphoreGive(gBusMux);
 }
 
@@ -237,4 +241,24 @@ void HOMING_start() {
   zero_all_motors();
   enforceServoCurrentLimitPostHoming();
   s_busy = false;
+}
+
+bool HOMING_startGuarded(HomingStartGuard guard, const HomingGuardContext& context) {
+  if (!guard || s_busy) return false;
+  s_busy = true;
+  if (gBusMux && xSemaphoreTake(gBusMux, portMAX_DELAY) != pdTRUE) {
+    s_busy = false;
+    return false;
+  }
+  // A BLE command can disconnect or expire while waiting for the servo bus.
+  if (!guard(context)) {
+    if (gBusMux) xSemaphoreGive(gBusMux);
+    s_busy = false;
+    return false;
+  }
+  zero_all_motors_locked();
+  enforceServoCurrentLimitPostHoming();
+  if (gBusMux) xSemaphoreGive(gBusMux);
+  s_busy = false;
+  return true;
 }
