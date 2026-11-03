@@ -2,6 +2,12 @@ package com.aerohand.ui.pages
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
@@ -31,16 +37,22 @@ class GestureCalibrationControlsTest {
         var restarts = 0
         compose.setContent {
             MaterialTheme {
-                Box(Modifier.width(280.dp)) {
-                    GestureCalibrationControls(
-                        state = GestureCameraState(
-                            calibrationState = CalibrationState.CALIBRATING_THUMB_IN,
-                            calibrationSampleCount = 5,
-                            feedbackMessage = "校准失败：拇指内收幅度太小，请重新记录"
-                        ),
-                        onStartCalibration = { restarts++ },
-                        onRecordCalibrationPose = { clicks++ }
-                    )
+                GestureCameraPreviewContainer(
+                    modifier = Modifier.width(280.dp).height(240.dp),
+                    controls = {
+                        GestureCalibrationControls(
+                            state = GestureCameraState(
+                                calibrationState = CalibrationState.CALIBRATING_THUMB_IN,
+                                calibrationSampleCount = 5,
+                                feedbackMessage = "校准失败：拇指内收幅度太小，请重新记录"
+                            ),
+                            onStartCalibration = { restarts++ },
+                            onRecordCalibrationPose = { clicks++ }
+                        )
+                    }
+                ) {
+                    Box(Modifier.fillMaxSize().background(Color.Black))
+                    Text("检测状态", modifier = Modifier.align(Alignment.TopEnd))
                 }
             }
         }

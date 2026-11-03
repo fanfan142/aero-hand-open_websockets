@@ -104,7 +104,14 @@ fun GestureFollowPage(
         ) {
             // Camera preview - portrait ratio
             if (hasCameraPermission) {
-                Box(
+                GestureCameraPreviewContainer(
+                    controls = {
+                        GestureCalibrationControls(
+                            state = cameraState,
+                            onStartCalibration = onStartCalibration,
+                            onRecordCalibrationPose = onRecordCalibrationPose
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(previewHeight)
@@ -208,12 +215,6 @@ fun GestureFollowPage(
                             }
                         }
                     }
-                    GestureCalibrationControls(
-                        state = cameraState,
-                        onStartCalibration = onStartCalibration,
-                        onRecordCalibrationPose = onRecordCalibrationPose,
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp)
-                    )
                 }
             } else {
                 // No camera permission

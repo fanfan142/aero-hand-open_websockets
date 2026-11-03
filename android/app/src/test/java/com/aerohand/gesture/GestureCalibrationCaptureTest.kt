@@ -100,6 +100,39 @@ class GestureCalibrationCaptureTest {
     }
 
     @Test
+    fun twoDistinctHandsNeverChooseAnAutomaticControlSourceOrCalibrationSample() {
+        service.startCalibration()
+        setDetected()
+        repeat(5) { remember(FingerAngles(thumbSwing = 50f)) }
+        val hands = listOf("Left", "Right").map {
+            TrackedHand(MediaPipeRawHand(List(21) { GestureLandmark(0.5f, 0.5f) }, it, 0.95f))
+        }
+        val frame = GestureFrame(
+            bitmap = mock(android.graphics.Bitmap::class.java),
+            sourceSize = android.util.Size(640, 480),
+            detectionSize = android.util.Size(256, 192),
+            displaySize = android.util.Size(480, 640),
+            rotationDegrees = 90,
+            cropWidth = 640,
+            cropHeight = 480
+        )
+        val source = androidx.camera.view.transform.OutputTransform(
+            android.graphics.Matrix(), android.util.Size(640, 480)
+        )
+        val method = GestureCameraService::class.java.getDeclaredMethod(
+            "processHands", List::class.java, Float::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            String::class.java, GestureFrame::class.java,
+            androidx.camera.view.transform.OutputTransform::class.java
+        ).apply { isAccessible = true }
+        method.invoke(service, hands, 30f, 480, 640, "test", frame, source)
+        assertFalse(service.state.value.handDetected)
+        assertFalse(service.controlFrame.value.allowed)
+        assertTrue(service.state.value.feedbackMessage.contains("多只手"))
+        assertNull(sample())
+    }
+
+    @Test
     fun expiredSamplesCannotRecordPose() {
         service.startCalibration()
         setDetected()

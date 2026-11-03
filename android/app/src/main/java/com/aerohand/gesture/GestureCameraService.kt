@@ -419,6 +419,11 @@ class GestureCameraService(
             return
         }
 
+        if (hands.size > 1) {
+            markNoHand(fps, "检测到多只手，请仅保留目标手入镜", frameWidth, frameHeight, hands.map { it.raw })
+            return
+        }
+
         val resolvedHands = hands.map { hand ->
             ResolvedHand(hand, resolveHandedness(hand))
         }
