@@ -240,9 +240,10 @@ internal object GestureCalibrationMapper {
     }
 
     fun validateThumbRange(profile: GestureCalibrationProfile): CalibrationValidationFailure? {
-        if (abs(profile.openThumbSwing - profile.thumbInSwing) < MIN_RANGE_DEGREES) {
+        val inwardRange = profile.thumbInSwing - profile.openThumbSwing
+        if (!inwardRange.isFinite() || inwardRange < MIN_RANGE_DEGREES) {
             return CalibrationValidationFailure(
-                "校准失败：拇指内收幅度太小，请重新采集",
+                "校准失败：拇指内收幅度不足或方向相反，请保持掌心朝向镜头，让拇指靠向食指后重新采集",
                 CalibrationRetryState.THUMB_IN
             )
         }
@@ -270,7 +271,7 @@ internal object GestureCalibrationMapper {
         }
 
         val thumbSwingRange = profile.openThumbSwing - profile.thumbInSwing
-        if (abs(thumbSwingRange) >= MIN_RANGE_DEGREES) {
+        if (thumbSwingRange <= -MIN_RANGE_DEGREES) {
             mapped[GestureTuningChannel.THUMB_ABD.ordinal] =
                 ((profile.openThumbSwing - thumbSwing) / thumbSwingRange * GestureTuningChannel.THUMB_ABD.maxValue)
                     .coerceIn(0f, GestureTuningChannel.THUMB_ABD.maxValue)

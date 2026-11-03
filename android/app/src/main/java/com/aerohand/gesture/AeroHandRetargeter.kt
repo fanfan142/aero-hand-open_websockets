@@ -24,6 +24,7 @@ object AeroHandRetargeter {
                 (palmAxis.first * thumbAxis.first + palmAxis.second * thumbAxis.second).toDouble()
             )
         ).toFloat()
+        // For an unmirrored, palm-facing hand, swing increases as the thumb approaches the index.
         val thumbSwing = imageThumbAngle * if (physicalHand == "Right") -1f else 1f
         return FingerAngles(
             thumbAbd = ((thumbSwing + 45f) / 90f * 100f).coerceIn(0f, 100f),

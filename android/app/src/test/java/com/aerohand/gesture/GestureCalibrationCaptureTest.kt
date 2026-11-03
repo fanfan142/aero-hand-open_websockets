@@ -23,7 +23,7 @@ class GestureCalibrationCaptureTest {
     private val service = GestureCameraService(context, mock(LifecycleOwner::class.java))
     private val open = pose(10f, 50f)
     private val fist = pose(50f, 30f)
-    private val thumbIn = pose(10f, 10f)
+    private val thumbIn = pose(10f, 90f)
 
     @After
     fun close() {
@@ -52,7 +52,7 @@ class GestureCalibrationCaptureTest {
         assertEquals(CalibrationState.CALIBRATING_THUMB_IN, service.state.value.calibrationState)
         capture(thumbIn)
         assertEquals(CalibrationState.CALIBRATED, service.state.value.calibrationState)
-        assertEquals(10f, service.state.value.calibrationProfile!!.thumbInSwing, 0f)
+        assertEquals(90f, service.state.value.calibrationProfile!!.thumbInSwing, 0f)
         assertTrue(GestureCalibrationStore(context).loadProfiles().isNotEmpty())
         assertFalse("Completion must wait for a NEW live control frame", service.controlFrame.value.allowed)
     }
@@ -123,7 +123,7 @@ class GestureCalibrationCaptureTest {
         service.startCalibration()
         capture(open)
         capture(fist)
-        capture(pose(50f, 10f))
+        capture(pose(50f, 90f))
         assertEquals(CalibrationRetryState.THUMB_IN, service.state.value.calibrationRetryState)
         assertEquals(CalibrationState.CALIBRATING_THUMB_IN, service.state.value.calibrationState)
         assertFalse(service.controlFrame.value.allowed)

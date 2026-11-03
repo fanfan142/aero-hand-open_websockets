@@ -147,7 +147,7 @@ class GestureControlLogicTest {
 
     @Test
     fun calibrationMapsRecordedEndpointsToFullControlRange() {
-        val profile = calibrationProfile(openThumbSwing = 30f, thumbInSwing = 10f)
+        val profile = calibrationProfile(openThumbSwing = 30f, thumbInSwing = 50f)
 
         val open = GestureCalibrationMapper.remap(
             profile = profile,
@@ -253,7 +253,7 @@ class GestureControlLogicTest {
 
     private fun calibrationProfile(
         openThumbSwing: Float = 30f,
-        thumbInSwing: Float = 10f,
+        thumbInSwing: Float = 50f,
         hand: String = "Right",
         facing: GestureCameraFacing = GestureCameraFacing.FRONT,
         mirror: GestureMirrorMode = GestureMirrorMode.SELFIE
