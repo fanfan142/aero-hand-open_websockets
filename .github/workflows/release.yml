@@ -44,6 +44,16 @@ jobs:
           chmod +x "./gradlew"
           "./gradlew" :app:testDebugUnitTest -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${APP_VERSION_CODE}" --stacktrace --no-daemon
 
+      - name: Upload Android unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+
       - name: Prepare signing keystore from secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
@@ -76,6 +86,25 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk"
           ls -la android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk
 
+      - name: Verify APK signature and record metadata
+        run: |
+          APK="android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$APK" | tee android/apk-signature.txt
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" > android/apk-metadata.txt
+          grep -F "versionName='${VERSION_NAME}'" android/apk-metadata.txt
+          grep -F "versionCode='${APP_VERSION_CODE}'" android/apk-metadata.txt
+          (cd android/app/build/outputs/apk/release && sha256sum "HandControl-${VERSION_NAME}.apk" > ANDROID_SHA256SUMS.txt)
+
+      - name: Upload APK verification evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-verification
+          path: |
+            android/apk-signature.txt
+            android/apk-metadata.txt
+            android/app/build/outputs/apk/release/ANDROID_SHA256SUMS.txt
+
       - name: Upload release build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -96,6 +125,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Aero Hand Console ${{ github.ref_name }}
+          make_latest: false
           body: |
             Android 正式发布构建。
 
@@ -108,7 +138,10 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.ref_name }} "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" --clobber
+        run: |
+          gh release upload ${{ github.ref_name }} \
+            "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/HandControl-${VERSION_NAME}.apk" \
+            "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/ANDROID_SHA256SUMS.txt" --clobber
 
       - name: Mark release latest after APK and firmware assets are ready
         if: success()

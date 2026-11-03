@@ -140,6 +140,8 @@ data class GestureCameraState(
     val smoothedAngles: FingerAngles = FingerAngles(),
     val calibratedAngles: FingerAngles = FingerAngles(),
     val calibrationState: CalibrationState = CalibrationState.NOT_CALIBRATED,
+    val calibrationSampleCount: Int = 0,
+    val calibrationSamplesRequired: Int = GestureCameraService.CALIBRATION_SAMPLE_MIN,
     val calibrationProfile: GestureCalibrationProfile? = null,
     val tuningProfile: GestureTuningProfile = GestureTuningProfile.default(),
     val cameraFacing: GestureCameraFacing = GestureCameraFacing.FRONT,

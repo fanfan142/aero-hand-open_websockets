@@ -16,8 +16,8 @@ android {
 
         // CI_VERSION_CODE / CI_VERSION_NAME 由 workflow 通过 -P 传入。
         // 云端使用同一提交的提交计数，确保 Debug 与 Release 的 versionCode 一致且单调递增。
-        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 100155
-        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.5.5"
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 100158
+        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.5.8"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -75,6 +75,10 @@ android {
         )
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -119,4 +123,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 }

@@ -39,7 +39,7 @@ jobs:
     needs: python-tests
     runs-on: ubuntu-latest
     env:
-      BASE_VERSION_NAME: 1.5.5
+      BASE_VERSION_NAME: 1.5.8
 
     steps:
       - name: Checkout
@@ -73,6 +73,16 @@ jobs:
         run: |
           chmod +x "./gradlew"
           "./gradlew" :app:testDebugUnitTest -PCI_VERSION_NAME="$PREVIEW_VERSION_NAME" -PCI_VERSION_CODE="$PREVIEW_VERSION_CODE" --stacktrace --no-daemon
+
+      - name: Upload Android unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
 
       - name: Prepare preview signing keystore
         if: github.event_name != 'pull_request'

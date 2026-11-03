@@ -96,7 +96,7 @@ class UsbSerialService(context: Context) {
         ioScope.launch {
             if (requestedGeneration != connectionGeneration.get()) return@launch
             val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
-            val supportedDrivers = drivers.filter { driver -> driver.device.vendorId in SUPPORTED_VENDOR_IDS }
+            val supportedDrivers = drivers.filter { driver -> UsbSerialDevicePolicy.supportsVendor(driver.device.vendorId) }
             if (requestedGeneration != connectionGeneration.get()) return@launch
             if (supportedDrivers.isEmpty()) {
                 _connectionState.value = UsbConnectionState.Error("未检测到受支持的 USB 串口设备")
@@ -355,6 +355,5 @@ class UsbSerialService(context: Context) {
 
     companion object {
         private const val ACTION_USB_PERMISSION = "com.aerohand.USB_PERMISSION"
-        private val SUPPORTED_VENDOR_IDS = setOf(1027, 11914, 6790, 4292)
     }
 }

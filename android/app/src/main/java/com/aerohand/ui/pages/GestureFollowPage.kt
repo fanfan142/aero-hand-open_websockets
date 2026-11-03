@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -43,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,6 +64,7 @@ fun GestureFollowPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val previewHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.6f).coerceIn(240.dp, 480.dp)
     val cameraState by gestureService.state.collectAsState()
     val hasVisibleSkeleton = cameraState.handDetected && cameraState.landmarks.size >= 21
     val previewView = remember {
@@ -104,10 +104,17 @@ fun GestureFollowPage(
         ) {
             // Camera preview - portrait ratio
             if (hasCameraPermission) {
-                Box(
+                GestureCameraPreviewContainer(
+                    controls = {
+                        GestureCalibrationControls(
+                            state = cameraState,
+                            onStartCalibration = onStartCalibration,
+                            onRecordCalibrationPose = onRecordCalibrationPose
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(9f / 16f)
+                        .height(previewHeight)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.Black)
                 ) {
@@ -120,8 +127,6 @@ fun GestureFollowPage(
                     if (showSkeletonOverlay) {
                         SkeletonOverlay(
                             landmarks = cameraState.landmarks,
-                            frameWidth = cameraState.frameWidth,
-                            frameHeight = cameraState.frameHeight,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -216,7 +221,7 @@ fun GestureFollowPage(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(9f / 16f)
+                        .height(previewHeight)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.DarkGray),
                     contentAlignment = Alignment.Center
@@ -348,57 +353,6 @@ fun GestureFollowPage(
                 onReset = { gestureService.resetTuning() }
             )
 
-            // Calibration buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (hasCameraPermission && cameraState.calibrationState != CalibrationState.CALIBRATED) {
-                    Button(
-                        onClick = onStartCalibration,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary
-                        )
-                    ) {
-                        Text("开始校准")
-                    }
-                    if (cameraState.calibrationState == CalibrationState.CALIBRATING_OPEN ||
-                        cameraState.calibrationState == CalibrationState.CALIBRATING_FIST ||
-                        cameraState.calibrationState == CalibrationState.CALIBRATING_THUMB_IN
-                    ) {
-                        Button(
-                            onClick = onRecordCalibrationPose,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text(
-                                when (cameraState.calibrationState) {
-                                    CalibrationState.CALIBRATING_OPEN -> "记录张开"
-                                    CalibrationState.CALIBRATING_FIST -> "记录握拳"
-                                    CalibrationState.CALIBRATING_THUMB_IN -> "记录拇指内收"
-                                    else -> "记录姿势"
-                                }
-                            )
-                        }
-                    }
-                } else if (cameraState.calibrationState == CalibrationState.CALIBRATED) {
-                    Text(
-                        "实时手势控制已启用",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF166534),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedButton(
-                        onClick = onStartCalibration,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Text("重新校准")
-                    }
-                }
-            }
         }
     }
 }

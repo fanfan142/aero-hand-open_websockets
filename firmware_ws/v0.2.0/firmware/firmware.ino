@@ -53,6 +53,16 @@ enum PendingWifiAction {
 static volatile uint8_t g_pendingWifiAction = WIFI_ACTION_NONE;
 static uint32_t g_pendingWifiActionAt = 0;
 
+enum StaAssociationState {
+  STA_ASSOCIATION_IDLE = 0,
+  STA_ASSOCIATION_CONNECTING = 1,
+};
+static StaAssociationState g_staAssociationState = STA_ASSOCIATION_IDLE;
+static uint32_t g_staConnectionStartedAt = 0;
+static bool g_staFallbackToAp = false;
+static bool g_staSetDualOnSuccess = false;
+static constexpr uint32_t STA_ASSOCIATION_TIMEOUT_MS = 15000;
+
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
 static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
@@ -177,7 +187,8 @@ void loadWiFiConfig();
 void saveWiFiConfig();
 void clearWiFiConfig();
 void startApMode();
-bool connectToSta(bool fallbackToAp);
+void connectToSta(bool fallbackToAp, bool setDualOnSuccess = false);
+void processStaAssociation();
 const char* getWifiModeName();
 String getCurrentIp();
 void sendWifiStatus(uint8_t clientNum, const char* requestId = nullptr);
@@ -271,19 +282,21 @@ static void sendSetIdAck(uint8_t oldId, uint8_t newId, uint16_t curLimitWord) {
 }
 // ---- Helper function to save and loadManual extends from NVS ------
 static void loadManualExtendsFromNVS() {
-  prefs.begin("hand", true);  // read-only
+  if (!prefs.begin("hand", false)) return;
   for (uint8_t i = 0; i < 7; ++i) {
     // Store extends per logical channel index, not servo bus ID.
     String key = "ext" + String(i);
-    int v = prefs.getInt(key.c_str(), -1);
+    if (!prefs.isKey(key.c_str())) continue;
+    int v = prefs.getInt(key.c_str());
     if (v >= 0 && v <= 4095) {
       sd[i].extend_count = v;
     }
   }
+  prefs.end();
 }
 
 static void saveExtendsToNVS() {
-  prefs.begin("hand", false);  // RW
+  if (!prefs.begin("hand", false)) return;
   for (uint8_t i = 0; i < 7; ++i) {
     // Store extends per logical channel index, not servo bus ID.
     String kext = "ext" + String(i);
@@ -481,6 +494,9 @@ static void updateJointAnglesFromActuatorAngles(const float actuatorAngles[SERVO
 }
 
 static bool canAcceptControl(ControlSource source, int16_t wsClient = -1) {
+  if (source == CONTROL_SOURCE_WEBSOCKET &&
+      (g_pendingWifiAction != WIFI_ACTION_NONE ||
+       g_staAssociationState == STA_ASSOCIATION_CONNECTING)) return false;
   uint32_t now = millis();
   if (g_activeControlSource == CONTROL_SOURCE_NONE) return true;
   uint32_t lastActivity = (g_activeControlSource == CONTROL_SOURCE_WEBSOCKET) ? g_lastWsActivity : g_lastSerialActivity;
@@ -531,6 +547,14 @@ static void cancelPendingWsTarget() {
   g_useActuatorTargets = false;
   copyCurrentJointAnglesToTargets();
   copyCurrentActuatorAnglesToTargets();
+}
+
+static void cancelWebSocketControlLease() {
+  cancelPendingWsTarget();
+  g_wsControlOwner = -1;
+  if (g_activeControlSource == CONTROL_SOURCE_WEBSOCKET) {
+    g_activeControlSource = CONTROL_SOURCE_NONE;
+  }
 }
 
 static void buildServoTargetsFromActuatorAngles(const float actuatorAngles[SERVO_COUNT], int16_t pos[SERVO_COUNT]) {
@@ -785,9 +809,10 @@ static bool handleTrimCmd(const uint8_t* payload) {
   if (new_ext > 4095) new_ext = 4095;
   sd[ch].extend_count = (uint16_t)new_ext;
   // Persist to NVS
-  prefs.begin("hand", false);
-  prefs.putInt(String("ext" + String(ch)).c_str(), sd[ch].extend_count);
-  prefs.end();
+  if (prefs.begin("hand", false)) {
+    prefs.putInt(String("ext" + String(ch)).c_str(), sd[ch].extend_count);
+    prefs.end();
+  }
   // ACK payload: ch (u16, LE), extend_count (u16, LE)
   uint8_t ack[4];
   ack[0] = (uint8_t)(ch & 0xFF);
@@ -857,6 +882,9 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
         g_actuatorAngles[i] = lower + (((float)u16 / 65535.0f) * (upper - lower));
         g_targetActuatorAngles[i] = g_actuatorAngles[i];
       }
+
+      updateJointAnglesFromActuatorAngles(g_actuatorAngles, g_jointAngles);
+      copyCurrentJointAnglesToTargets();
 
       uint16_t torque_eff[SERVO_COUNT];
       for (int i = 0; i < SERVO_COUNT; ++i) {
@@ -977,7 +1005,6 @@ void setup() {
   hlscl.pSerial = &Serial2;
 
   resetSdToBaseline();
-  prefs.begin("hand", false);
   loadManualExtendsFromNVS();
   // USB CDC is exclusively the official 16-byte binary protocol.
   // Never emit text here, including during boot or homing.
@@ -1048,15 +1075,15 @@ void setup() {
 // ============================================
 
 void loadWiFiConfig() {
-    wifiPrefs.begin("wifi", true);
-    g_wifiModeSetting = wifiPrefs.getUChar("mode", WIFI_MODE);
-    g_staSsid = wifiPrefs.getString("sta_ssid", STA_SSID);
-    g_staPassword = wifiPrefs.getString("sta_pass", STA_PASSWORD);
-    g_staStaticIp = wifiPrefs.getString("sta_ip", STA_STATIC_IP);
-    g_staGateway = wifiPrefs.getString("sta_gw", STA_GATEWAY);
-    g_staSubnet = wifiPrefs.getString("sta_mask", STA_SUBNET);
-    g_staDns1 = wifiPrefs.getString("sta_dns1", STA_DNS1);
-    g_staDns2 = wifiPrefs.getString("sta_dns2", STA_DNS2);
+    if (!wifiPrefs.begin("wifi", false)) return;
+    if (wifiPrefs.isKey("mode")) g_wifiModeSetting = wifiPrefs.getUChar("mode");
+    if (wifiPrefs.isKey("sta_ssid")) g_staSsid = wifiPrefs.getString("sta_ssid");
+    if (wifiPrefs.isKey("sta_pass")) g_staPassword = wifiPrefs.getString("sta_pass");
+    if (wifiPrefs.isKey("sta_ip")) g_staStaticIp = wifiPrefs.getString("sta_ip");
+    if (wifiPrefs.isKey("sta_gw")) g_staGateway = wifiPrefs.getString("sta_gw");
+    if (wifiPrefs.isKey("sta_mask")) g_staSubnet = wifiPrefs.getString("sta_mask");
+    if (wifiPrefs.isKey("sta_dns1")) g_staDns1 = wifiPrefs.getString("sta_dns1");
+    if (wifiPrefs.isKey("sta_dns2")) g_staDns2 = wifiPrefs.getString("sta_dns2");
     wifiPrefs.end();
     if (g_wifiModeSetting != AH_WIFI_MODE_AP &&
         validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp, g_staGateway,
@@ -1067,7 +1094,7 @@ void loadWiFiConfig() {
 }
 
 void saveWiFiConfig() {
-    wifiPrefs.begin("wifi", false);
+    if (!wifiPrefs.begin("wifi", false)) return;
     wifiPrefs.putUChar("mode", g_wifiModeSetting);
     wifiPrefs.putString("sta_ssid", g_staSsid);
     wifiPrefs.putString("sta_pass", g_staPassword);
@@ -1088,16 +1115,17 @@ void clearWiFiConfig() {
     g_staDns1 = STA_DNS1;
     g_staDns2 = STA_DNS2;
     g_wifiModeSetting = AH_WIFI_MODE_AP;
-    wifiPrefs.begin("wifi", false);
-    wifiPrefs.remove("sta_ssid");
-    wifiPrefs.remove("sta_pass");
-    wifiPrefs.remove("sta_ip");
-    wifiPrefs.remove("sta_gw");
-    wifiPrefs.remove("sta_mask");
-    wifiPrefs.remove("sta_dns1");
-    wifiPrefs.remove("sta_dns2");
-    wifiPrefs.putUChar("mode", g_wifiModeSetting);
-    wifiPrefs.end();
+    if (wifiPrefs.begin("wifi", false)) {
+        wifiPrefs.remove("sta_ssid");
+        wifiPrefs.remove("sta_pass");
+        wifiPrefs.remove("sta_ip");
+        wifiPrefs.remove("sta_gw");
+        wifiPrefs.remove("sta_mask");
+        wifiPrefs.remove("sta_dns1");
+        wifiPrefs.remove("sta_dns2");
+        wifiPrefs.putUChar("mode", g_wifiModeSetting);
+        wifiPrefs.end();
+    }
 }
 
 // Android sends all seven STA fields. Reject partial updates rather than carrying
@@ -1252,11 +1280,14 @@ static void updateStaMdns(bool immediate = false) {
 }
 
 void startApMode() {
+    cancelWebSocketControlLease();
+    g_staAssociationState = STA_ASSOCIATION_IDLE;
+    g_staFallbackToAp = false;
+    g_staSetDualOnSuccess = false;
     stopStaMdns();
     WiFi.persistent(false);
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true, false);
-    delay(150);
     WiFi.mode(WIFI_AP);
     WiFi.setSleep(false);
     IPAddress apIp(192, 168, 4, 1);
@@ -1264,7 +1295,6 @@ void startApMode() {
     IPAddress apSubnet(255, 255, 255, 0);
     bool configOk = WiFi.softAPConfig(apIp, apGateway, apSubnet);
     bool started = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
-    delay(100);
     DEBUG_PRINTF("[WIFI] AP config=%s started=%s ssid=%s ip=%s\n",
                  configOk ? "ok" : "fail",
                  started ? "ok" : "fail",
@@ -1272,48 +1302,60 @@ void startApMode() {
                  WiFi.softAPIP().toString().c_str());
 }
 
-bool connectToSta(bool fallbackToAp) {
+void connectToSta(bool fallbackToAp, bool setDualOnSuccess) {
     const char* invalid = validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp,
                                              g_staGateway, g_staSubnet, g_staDns1, g_staDns2);
     if (invalid != nullptr) {
         DEBUG_PRINTF("[WIFI] Refusing invalid STA config: %s\n", invalid);
         if (fallbackToAp) startApMode();
-        return false;
+        return;
     }
 
+    cancelWebSocketControlLease();
     stopStaMdns();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true, false);
-    delay(100);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     if (!applyStaStaticConfig()) {
         DEBUG_PRINTLN("[WIFI] STA static IP configuration failed");
         if (fallbackToAp) startApMode();
-        return false;
+        return;
     }
     WiFi.begin(g_staSsid.c_str(), g_staPassword.c_str());
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        delay(500);
-        DEBUG_PRINT(".");
-        attempts++;
-    }
+    g_staConnectionStartedAt = millis();
+    g_staFallbackToAp = fallbackToAp;
+    g_staSetDualOnSuccess = setDualOnSuccess;
+    g_staAssociationState = STA_ASSOCIATION_CONNECTING;
+}
+
+void processStaAssociation() {
+    if (g_staAssociationState != STA_ASSOCIATION_CONNECTING) return;
+
     if (WiFi.status() == WL_CONNECTED) {
-        DEBUG_PRINTLN();
+        g_staAssociationState = STA_ASSOCIATION_IDLE;
+        g_staFallbackToAp = false;
+        if (g_staSetDualOnSuccess) {
+            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
+            saveWiFiConfig();
+        }
+        g_staSetDualOnSuccess = false;
         DEBUG_PRINT("[WIFI] Connected! IP: ");
         DEBUG_PRINTLN(WiFi.localIP());
         updateStaMdns(true);
-        return true;
+        return;
     }
 
-    DEBUG_PRINTLN();
+    if (millis() - g_staConnectionStartedAt < STA_ASSOCIATION_TIMEOUT_MS) return;
+
+    g_staAssociationState = STA_ASSOCIATION_IDLE;
+    g_staSetDualOnSuccess = false;
     DEBUG_PRINTLN("[WIFI] STA connection failed");
-    if (fallbackToAp) {
+    if (g_staFallbackToAp) {
+        g_staFallbackToAp = false;
         DEBUG_PRINTLN("[WIFI] Falling back to AP");
         startApMode();
     }
-    return false;
 }
 
 
@@ -1350,6 +1392,7 @@ void setupWiFi() {
 }
 
 void scheduleWifiAction(PendingWifiAction action) {
+    cancelWebSocketControlLease();
     g_pendingWifiAction = action;
     g_pendingWifiActionAt = millis() + 500;
 }
@@ -1363,11 +1406,7 @@ void processPendingWifiAction() {
     g_pendingWifiAction = WIFI_ACTION_NONE;
 
     if (action == WIFI_ACTION_CONNECT_STA) {
-        bool connected = connectToSta(true);
-        if (connected) {
-            g_wifiModeSetting = AH_WIFI_MODE_DUAL;
-            saveWiFiConfig();
-        }
+        connectToSta(true, true);
     } else if (action == WIFI_ACTION_START_AP) {
         g_wifiModeSetting = AH_WIFI_MODE_AP;
         saveWiFiConfig();
@@ -1377,6 +1416,7 @@ void processPendingWifiAction() {
         startApMode();
     }
 }
+
 
 // WebSocket事件处理
 void wsEventHandler(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
@@ -1468,6 +1508,10 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         : nullptr;
 
     if (strcmp(type, "joint_control") == 0) {
+        if (HOMING_isBusy()) {
+            sendWsResponse(clientNum, false, "Homing in progress", type, requestId);
+            return;
+        }
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
             sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
@@ -1494,6 +1538,10 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
 
     } else if (strcmp(type, "actuator_control") == 0) {
+        if (HOMING_isBusy()) {
+            sendWsResponse(clientNum, false, "Homing in progress", type, requestId);
+            return;
+        }
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
             sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
@@ -1533,6 +1581,10 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
         markControlActivity(CONTROL_SOURCE_WEBSOCKET, clientNum);
 
     } else if (strcmp(type, "multi_joint_control") == 0) {
+        if (HOMING_isBusy()) {
+            sendWsResponse(clientNum, false, "Homing in progress", type, requestId);
+            return;
+        }
         if (!canAcceptControl(CONTROL_SOURCE_WEBSOCKET, clientNum)) {
             sendWsResponse(clientNum, false, "Control busy: another source active");
             return;
@@ -1582,6 +1634,7 @@ void processJsonCommand(uint8_t clientNum, const JsonDocument& doc) {
             return;
         }
         if (!HOMING_isBusy()) {
+            cancelPendingWsTarget();
             HOMING_start();
             saveExtendsToNVS();
             for (int i = 0; i < JOINT_COUNT; i++) {
@@ -1721,7 +1774,8 @@ void sendWifiStatus(uint8_t clientNum, const char* requestId) {
     response["data"]["sta_dns1"] = g_staDns1;
     response["data"]["sta_dns2"] = g_staDns2;
     response["data"]["configured_mode"] = (g_wifiModeSetting == AH_WIFI_MODE_AP) ? "AP" : (g_wifiModeSetting == AH_WIFI_MODE_STA ? "STA" : "DUAL");
-    response["data"]["switch_pending"] = g_pendingWifiAction != WIFI_ACTION_NONE;
+    response["data"]["switch_pending"] = g_pendingWifiAction != WIFI_ACTION_NONE ||
+                                            g_staAssociationState == STA_ASSOCIATION_CONNECTING;
 
     String output;
     serializeJson(response, output);
@@ -1768,6 +1822,7 @@ void broadcastJointStates() {
 
 void loop() {
   wsServer.loop();
+  processStaAssociation();
   updateStaMdns();
 
   uint8_t serialBytes = 0;
