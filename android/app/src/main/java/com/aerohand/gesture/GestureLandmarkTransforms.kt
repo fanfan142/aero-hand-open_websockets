@@ -1,15 +1,28 @@
 package com.aerohand.gesture
 
+/** MediaPipe landmarks are normalized to the cropped detection bitmap.
+ * CameraX maps those crop-relative coordinates to the visible PreviewView bounds.
+ * The raw MediaPipe normalized/world landmarks are never mutated.
+ */
 object GestureLandmarkTransforms {
-    @Suppress("UNUSED_PARAMETER")
     fun forPreview(
         landmarks: List<GestureLandmark>,
-        rotationDegrees: Int,
-        mirrorMode: GestureMirrorMode
+        cropWidth: Int,
+        cropHeight: Int,
+        previewWidth: Int,
+        previewHeight: Int,
+        mapPoint: (FloatArray) -> Unit
     ): List<GestureLandmark> {
-        if (landmarks.isEmpty()) return landmarks
-        // MediaPipe 的 ImageProcessingOptions 已经按 ImageProxy.rotationDegrees 处理图像。
-        // 返回的归一化坐标属于已处理后的图像坐标系，绘制层只需要按预览尺寸缩放。
-        return landmarks
+        if (cropWidth <= 0 || cropHeight <= 0 || previewWidth <= 0 || previewHeight <= 0) {
+            return emptyList()
+        }
+        return landmarks.map { landmark ->
+            val point = floatArrayOf(
+                landmark.x * cropWidth,
+                landmark.y * cropHeight
+            )
+            mapPoint(point)
+            landmark.copy(x = point[0] / previewWidth, y = point[1] / previewHeight)
+        }
     }
 }

@@ -129,27 +129,16 @@ internal object GestureCalibrationProfiles {
 }
 
 internal object GestureHandednessResolver {
-    fun resolve(
-        rawHandedness: String,
-        inferredHandedness: String,
-        mirrorMode: GestureMirrorMode
-    ): String {
+    /** MediaPipe Tasks labels the subject's hand; swap only when input pixels were mirrored. */
+    fun resolve(rawHandedness: String, inputMirrored: Boolean): String {
         val raw = canonical(rawHandedness)
-        if (raw.isNotBlank()) {
-            return if (mirrorMode == GestureMirrorMode.SELFIE) swap(raw) else raw
-        }
-        return canonical(inferredHandedness)
+        if (raw.isBlank() || !inputMirrored) return raw
+        return if (raw == "Left") "Right" else "Left"
     }
 
     private fun canonical(hand: String): String = when {
         hand.equals("Left", ignoreCase = true) -> "Left"
         hand.equals("Right", ignoreCase = true) -> "Right"
-        else -> ""
-    }
-
-    private fun swap(hand: String): String = when (hand) {
-        "Left" -> "Right"
-        "Right" -> "Left"
         else -> ""
     }
 }

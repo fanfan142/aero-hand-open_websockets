@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import android.util.Size
+import android.view.View
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -11,8 +12,13 @@ import androidx.camera.core.Preview
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.camera.view.TransformExperimental
+import androidx.camera.view.transform.CoordinateTransform
+import androidx.camera.view.transform.ImageProxyTransformFactory
+import androidx.camera.view.transform.OutputTransform
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.Observer
 import com.google.mediapipe.tasks.core.Delegate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +27,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
+@OptIn(TransformExperimental::class)
 class GestureCameraService(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner
@@ -55,6 +62,10 @@ class GestureCameraService(
 
     private val calibrationStore = GestureCalibrationStore(context)
     private val frameConverter = GestureFrameConverter(DETECTION_BITMAP_MAX_SIDE)
+    private val imageProxyTransformFactory = ImageProxyTransformFactory().apply {
+        setUsingCropRect(true)
+        setUsingRotationDegrees(true)
+    }
     private val smoother = GestureSmoother()
 
     private var cameraProvider: ProcessCameraProvider? = null
@@ -62,6 +73,14 @@ class GestureCameraService(
     private var handTracker: HandTracker? = null
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var cameraPreviewView: PreviewView? = null
+    private var previewTransformListener: View.OnLayoutChangeListener? = null
+    @Volatile
+    private var previewOutputTransform: OutputTransform? = null
+    @Volatile
+    private var previewSize = Size(0, 0)
+    @Volatile
+    private var previewStreamState = PreviewView.StreamState.IDLE
+    private var previewStreamObserver: Observer<PreviewView.StreamState>? = null
     private var preferredDelegate: Delegate? = Delegate.GPU
     private val analysisGeneration = AtomicLong(0L)
     private val processingContextGeneration = AtomicLong(0L)
@@ -70,6 +89,8 @@ class GestureCameraService(
     private var desiredRunning = false
     @Volatile
     private var released = false
+    @Volatile
+    private var cameraSetupInProgress = false
 
     private val _state = MutableStateFlow(GestureCameraState(tuningProfile = calibrationStore.loadTuning()))
     val state: StateFlow<GestureCameraState> = _state
@@ -104,7 +125,9 @@ class GestureCameraService(
         val requestGeneration = synchronized(this) {
             if (released) return
             desiredRunning = true
+            detachPreviewTransformObservers()
             cameraPreviewView = previewView
+            attachPreviewTransformObservers(previewView)
             if (cameraExecutor.isShutdown) {
                 cameraExecutor = Executors.newSingleThreadExecutor()
             }
@@ -143,15 +166,83 @@ class GestureCameraService(
             cameraPreviewView === previewView
     }
 
+    @OptIn(TransformExperimental::class)
+    private fun attachPreviewTransformObservers(previewView: PreviewView) {
+        detachPreviewTransformObservers()
+        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        val previewTransformListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            refreshPreviewTransform(previewView)
+            if (previewView.viewPort != null && !_state.value.isRunning && !cameraSetupInProgress) {
+                setupCamera(previewView, cameraRequestGeneration.get())
+            }
+        }.also(previewView::addOnLayoutChangeListener)
+        this.previewTransformListener = previewTransformListener
+        val observer = Observer<PreviewView.StreamState> { state ->
+            previewStreamState = state ?: PreviewView.StreamState.IDLE
+            refreshPreviewTransform(previewView)
+        }
+        previewStreamObserver = observer
+        previewView.previewStreamState.observe(lifecycleOwner, observer)
+        previewView.post {
+            refreshPreviewTransform(previewView)
+            if (previewView.viewPort != null && desiredRunning && !_state.value.isRunning && !cameraSetupInProgress) {
+                setupCamera(previewView, cameraRequestGeneration.get())
+            }
+        }
+    }
+
+    private fun detachPreviewTransformObservers() {
+        val previewView = cameraPreviewView
+        if (previewView != null) {
+            previewTransformListener?.let(previewView::removeOnLayoutChangeListener)
+            previewStreamObserver?.let(previewView.previewStreamState::removeObserver)
+        }
+        previewTransformListener = null
+        previewStreamObserver = null
+        previewOutputTransform = null
+        previewSize = Size(0, 0)
+        previewStreamState = PreviewView.StreamState.IDLE
+    }
+
+    @OptIn(TransformExperimental::class)
+    private fun refreshPreviewTransform(previewView: PreviewView) {
+        if (previewStreamState != PreviewView.StreamState.STREAMING) return
+        previewOutputTransform = previewView.outputTransform
+        previewSize = Size(previewView.width, previewView.height)
+    }
+
+    @OptIn(TransformExperimental::class)
+    private fun coordinateTransformFor(source: OutputTransform): CoordinateTransform? {
+        val target = previewOutputTransform ?: return null
+        if (previewStreamState != PreviewView.StreamState.STREAMING) return null
+        return CoordinateTransform(source, target)
+    }
+
     @Suppress("DEPRECATION")
     private fun setupCamera(previewView: PreviewView, requestGeneration: Long) {
-        if (!isCameraRequestCurrent(requestGeneration, previewView)) return
-        val provider = cameraProvider ?: return
+        if (!isCameraRequestCurrent(requestGeneration, previewView) || cameraSetupInProgress) return
+        cameraSetupInProgress = true
+        val provider = cameraProvider ?: run {
+            cameraSetupInProgress = false
+            return
+        }
         val generation = analysisGeneration.incrementAndGet()
         provider.unbindAll()
         synchronized(this) {
-            if (!isCameraRequestCurrent(requestGeneration, previewView)) return
+            if (!isCameraRequestCurrent(requestGeneration, previewView)) {
+                cameraSetupInProgress = false
+                return
+            }
             resetDetectionLoop(clearSmoothing = true)
+            _state.value = _state.value.copy(
+                isRunning = false,
+                handDetected = false,
+                rawHands = emptyList(),
+                landmarks = emptyList()
+            )
+            previewOutputTransform = null
+            previewSize = Size(0, 0)
+            previewStreamState = PreviewView.StreamState.IDLE
             _controlFrame.value = GestureControlFrame(false, message = "相机正在切换")
         }
         val targetRotation = previewView.display.rotation
@@ -176,26 +267,36 @@ class GestureCameraService(
         }
 
         try {
-            if (!isCameraRequestCurrent(requestGeneration, previewView)) return
+            if (!isCameraRequestCurrent(requestGeneration, previewView)) {
+                cameraSetupInProgress = false
+                return
+            }
             val viewPort = previewView.viewPort
             if (viewPort == null) {
-                Log.w(TAG, "PreviewView viewport unavailable; binding camera without shared viewport")
-                provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
-            } else {
-                val useCaseGroup = UseCaseGroup.Builder()
-                    .addUseCase(preview)
-                    .addUseCase(analysis)
-                    .setViewPort(viewPort)
-                    .build()
-                provider.bindToLifecycle(lifecycleOwner, selector, useCaseGroup)
+                Log.w(TAG, "PreviewView viewport unavailable; waiting for layout before binding")
+                cameraSetupInProgress = false
+                previewView.postDelayed({
+                    if (isCameraRequestCurrent(requestGeneration, previewView) && !_state.value.isRunning) {
+                        setupCamera(previewView, requestGeneration)
+                    }
+                }, 100L)
+                return
             }
+            val useCaseGroup = UseCaseGroup.Builder()
+                .addUseCase(preview)
+                .addUseCase(analysis)
+                .setViewPort(viewPort)
+                .build()
+            provider.bindToLifecycle(lifecycleOwner, selector, useCaseGroup)
             synchronized(this) {
                 if (!isCameraRequestCurrent(requestGeneration, previewView)) {
                     analysis.clearAnalyzer()
                     provider.unbindAll()
+                    cameraSetupInProgress = false
                     return
                 }
                 imageAnalysis = analysis
+                cameraSetupInProgress = false
                 publishUiState(
                     _state.value.copy(
                         isRunning = true,
@@ -210,6 +311,7 @@ class GestureCameraService(
                 )
             }
         } catch (e: Exception) {
+            cameraSetupInProgress = false
             analysis.clearAnalyzer()
             Log.e(TAG, "Camera binding failed", e)
             synchronized(this) {
@@ -241,6 +343,7 @@ class GestureCameraService(
 
             val convertStartNs = System.nanoTime()
             frame = frameConverter.convert(imageProxy)
+            val imageOutputTransform = imageProxyTransformFactory.getOutputTransform(imageProxy)
             if (!isFrameCurrent(generation, frameContextGeneration)) return
             val detectStartNs = System.nanoTime()
             val hands = tracker.detect(
@@ -267,8 +370,9 @@ class GestureCameraService(
                     fps = fps,
                     frameWidth = frame.displaySize.width,
                     frameHeight = frame.displaySize.height,
-                    rotationDegrees = frame.rotationDegrees,
-                    trackerBackend = tracker.backendName
+                    trackerBackend = tracker.backendName,
+                    frame = frame,
+                    imageOutputTransform = imageOutputTransform
                 )
             }
         } catch (e: Exception) {
@@ -307,8 +411,9 @@ class GestureCameraService(
         fps: Float,
         frameWidth: Int,
         frameHeight: Int,
-        rotationDegrees: Int,
-        trackerBackend: String
+        trackerBackend: String,
+        frame: GestureFrame,
+        imageOutputTransform: OutputTransform
     ) {
         if (hands.isEmpty()) {
             markNoHand(fps, "未检测到手，请将目标手完整放入画面", frameWidth, frameHeight)
@@ -318,23 +423,37 @@ class GestureCameraService(
         val resolvedHands = hands.map { hand ->
             ResolvedHand(hand, resolveHandedness(hand))
         }
+        if (resolvedHands.size != resolvedHands.map { it.handedness }.filter { it.isNotBlank() }.toSet().size) {
+            markNoHand(fps, "手别结果不明确，请仅放入一只手", frameWidth, frameHeight, hands.map { it.raw })
+            return
+        }
         val chosen = selectHand(resolvedHands) ?: run {
-            markNoHand(fps, "无法确认目标手，请调整手掌方向", frameWidth, frameHeight)
+            markNoHand(fps, "无法确认目标手，请调整手掌方向", frameWidth, frameHeight, hands.map { it.raw })
             return
         }
         val detectedHand = chosen.handedness
         if (detectedHand.isBlank()) {
-            markNoHand(fps, "已检测到手，但无法确认左右手", frameWidth, frameHeight)
+            markNoHand(fps, "已检测到手，但无法确认左右手", frameWidth, frameHeight, hands.map { it.raw })
             return
         }
         val targetMatched = targetHand.matches(detectedHand)
-        val controlLandmarks = chosen.tracked.landmarks
-        val previewLandmarks = GestureLandmarkTransforms.forPreview(
-            landmarks = controlLandmarks,
-            rotationDegrees = rotationDegrees,
-            mirrorMode = currentMirror()
-        )
-        val rawAngles = GestureAngleEstimator.estimate(controlLandmarks, detectedHand)
+        val transform = coordinateTransformFor(imageOutputTransform)
+        val mappedPreviewLandmarks = if (transform != null && previewSize.width > 0 && previewSize.height > 0) {
+            GestureLandmarkTransforms.forPreview(
+                landmarks = chosen.tracked.landmarks,
+                cropWidth = frame.cropWidth,
+                cropHeight = frame.cropHeight,
+                previewWidth = previewSize.width,
+                previewHeight = previewSize.height
+            ) { transform.mapPoints(it) }
+        } else {
+            emptyList()
+        }
+        if (mappedPreviewLandmarks.isEmpty()) {
+            markNoHand(fps, "预览坐标尚未就绪，暂不输出骨架控制", frameWidth, frameHeight, hands.map { it.raw })
+            return
+        }
+        val rawAngles = AeroHandRetargeter.retarget(chosen.tracked.raw, detectedHand)
         val smoothedAngles = smoother.apply(
             rawAngles, detectedHand, SystemClock.elapsedRealtime()
         )
@@ -398,10 +517,11 @@ class GestureCameraService(
             cameraFacing = currentFacing(),
             mirrorMode = currentMirror(),
             fps = fps,
-            frameWidth = frameWidth,
-            frameHeight = frameHeight,
+            frameWidth = previewSize.width,
+            frameHeight = previewSize.height,
             trackerBackend = trackerBackend,
-            landmarks = previewLandmarks
+            rawHands = hands.map { it.raw },
+            landmarks = mappedPreviewLandmarks
         )
         publishUiState(
             nextState,
@@ -412,20 +532,15 @@ class GestureCameraService(
                 oldState.cameraFacing != currentFacing() ||
                 oldState.mirrorMode != currentMirror() ||
                 oldState.feedbackMessage != feedback ||
-                oldState.frameWidth != frameWidth ||
-                oldState.frameHeight != frameHeight ||
+                oldState.frameWidth != previewSize.width ||
+                oldState.frameHeight != previewSize.height ||
                 oldState.trackerBackend != nextState.trackerBackend
         )
     }
 
     private fun selectHand(hands: List<ResolvedHand>): ResolvedHand? {
         if (hands.isEmpty()) return null
-        val targetMatches = hands.filter { targetHand.matches(it.handedness) && it.handedness.isNotBlank() }
-        val candidates = if (targetHand == GestureTargetHand.AUTO || targetMatches.isEmpty()) {
-            hands
-        } else {
-            targetMatches
-        }
+        val candidates = hands.filter { it.handedness.isNotBlank() && targetHand.matches(it.handedness) }
         return candidates.maxWithOrNull(
             compareBy<ResolvedHand> { handSelectionScore(it) }
                 .thenBy { it.tracked.confidence }
@@ -444,8 +559,7 @@ class GestureCameraService(
     private fun resolveHandedness(hand: TrackedHand): String {
         return GestureHandednessResolver.resolve(
             rawHandedness = hand.handedness,
-            inferredHandedness = GestureAngleEstimator.inferHandedness(hand.landmarks),
-            mirrorMode = currentMirror()
+            inputMirrored = false
         )
     }
 
@@ -454,12 +568,20 @@ class GestureCameraService(
             analysisGeneration.incrementAndGet()
             processingContextGeneration.incrementAndGet()
             useFrontCamera = !useFrontCamera
+            cameraSetupInProgress = false
             resetDetectionLoop(clearSmoothing = true)
+            _state.value = _state.value.copy(
+                isRunning = false,
+                handDetected = false,
+                rawHands = emptyList(),
+                landmarks = emptyList()
+            )
             _controlFrame.value = GestureControlFrame(false, message = "相机正在切换")
             val previewView = cameraPreviewView?.takeIf { desiredRunning }
             useFrontCamera to previewView?.let { it to cameraRequestGeneration.get() }
         }
         if (restartRequest != null) {
+            cameraProvider?.unbindAll()
             setupCamera(restartRequest.first, restartRequest.second)
         } else {
             cameraProvider?.unbindAll()
@@ -688,6 +810,8 @@ class GestureCameraService(
             desiredRunning = false
             cameraRequestGeneration.incrementAndGet()
             analysisGeneration.incrementAndGet()
+            cameraSetupInProgress = false
+            detachPreviewTransformObservers()
             cameraPreviewView = null
             val currentProvider = cameraProvider
             val currentAnalysis = imageAnalysis
@@ -699,6 +823,7 @@ class GestureCameraService(
                     isRunning = false,
                     handDetected = false,
                     feedbackMessage = "相机未运行",
+                    rawHands = emptyList(),
                     landmarks = emptyList()
                 ),
                 force = true
@@ -818,7 +943,11 @@ class GestureCameraService(
             return if (sameHandProfileFor(hand) != null) {
                 "检测到其它摄像头的历史标定，请为当前${currentFacing().label}重新校准"
             } else {
-                "未校准，请先完成三步标定"
+                if (calibrationStore.needsRecalibration()) {
+                    "手别语义已修正，旧标定已失效；请核对左右手并重新完成三步标定"
+                } else {
+                    "未校准，请先完成三步标定"
+                }
             }
         }
         if (!profile.matchesHand(hand)) {
@@ -853,15 +982,17 @@ class GestureCameraService(
         fps: Float,
         message: String,
         frameWidth: Int = _state.value.frameWidth,
-        frameHeight: Int = _state.value.frameHeight
+        frameHeight: Int = _state.value.frameHeight,
+        rawHands: List<MediaPipeRawHand> = emptyList()
     ) {
         val now = System.currentTimeMillis()
         val capturedAtMs = SystemClock.elapsedRealtime()
         val oldState = _state.value
         val keepLastAngles = now - lastHandDetectedMs < MAX_LOST_FRAME_MS
-        val keepControl = keepLastAngles &&
+        val keepControl = keepLastAngles && rawHands.isEmpty() &&
             oldState.targetHandMatched &&
             oldState.calibrationState == CalibrationState.CALIBRATED
+        if (!keepControl) smoother.reset()
         _controlFrame.value = if (keepControl) {
             GestureControlFrame(true, oldState.calibratedAngles, message, capturedAtMs)
         } else {
@@ -878,6 +1009,7 @@ class GestureCameraService(
                 frameWidth = frameWidth,
                 frameHeight = frameHeight,
                 trackerBackend = oldState.trackerBackend,
+                rawHands = rawHands,
                 landmarks = emptyList()
             ),
             force = oldState.handDetected || oldState.feedbackMessage != message

@@ -34,12 +34,16 @@ class MediaPipeHandTracker private constructor(
             }
             val result = landmarker.detectForVideo(mpImage, options, timestampMs)
             result.landmarks().mapIndexedNotNull { index, landmarks ->
-                if (landmarks.size < 21) return@mapIndexedNotNull null
+                if (landmarks.size != 21) return@mapIndexedNotNull null
                 val category = result.handedness().getOrNull(index)?.firstOrNull()
                 TrackedHand(
-                    landmarks = landmarks.map { GestureLandmark(it.x(), it.y(), it.z()) },
-                    handedness = GestureAngleEstimator.canonicalHandedness(category?.categoryName().orEmpty()),
-                    confidence = category?.score() ?: 0f
+                    MediaPipeRawHand(
+                        normalizedLandmarks = landmarks.map { GestureLandmark(it.x(), it.y(), it.z()) },
+                        category = category?.categoryName().orEmpty(),
+                        confidence = category?.score() ?: 0f,
+                        worldLandmarks = result.worldLandmarks().getOrNull(index)
+                            ?.map { GestureLandmark(it.x(), it.y(), it.z()) }.orEmpty()
+                    )
                 )
             }
         } finally {

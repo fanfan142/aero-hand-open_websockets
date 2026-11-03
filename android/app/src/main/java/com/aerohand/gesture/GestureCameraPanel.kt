@@ -22,8 +22,7 @@ private fun mapWithFitCenter(
     canvasWidth: Float,
     canvasHeight: Float,
     frameWidth: Int,
-    frameHeight: Int,
-    mirrorX: Boolean
+    frameHeight: Int
 ): List<Offset> {
     val sourceWidth = if (frameWidth > 0) frameWidth.toFloat() else canvasWidth
     val sourceHeight = if (frameHeight > 0) frameHeight.toFloat() else canvasHeight
@@ -34,7 +33,7 @@ private fun mapWithFitCenter(
     val offsetY = (canvasHeight - contentHeight) * 0.5f
     return landmarks.map { landmark ->
         Offset(
-            x = offsetX + (if (mirrorX) 1f - landmark.x else landmark.x) * contentWidth,
+            x = offsetX + landmark.x * contentWidth,
             y = offsetY + landmark.y * contentHeight
         )
     }
@@ -45,7 +44,6 @@ fun SkeletonOverlay(
     landmarks: List<GestureLandmark>,
     frameWidth: Int = 0,
     frameHeight: Int = 0,
-    mirrorX: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     if (landmarks.isEmpty()) return
@@ -53,7 +51,7 @@ fun SkeletonOverlay(
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
-        val points = mapWithFitCenter(landmarks, w, h, frameWidth, frameHeight, mirrorX)
+        val points = mapWithFitCenter(landmarks, w, h, frameWidth, frameHeight)
         val pointStroke = 2.5f
         val pointRadius = 6f
         val lineStroke = 4f
