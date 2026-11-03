@@ -86,7 +86,7 @@ def test_wifi_transitions_cancel_queued_websocket_targets_and_report_pending_ass
 def test_websocket_motion_cannot_be_queued_or_applied_during_homing() -> None:
     source = FIRMWARE.read_text(encoding="utf-8")
     command_handler = function_body(source, "void processJsonCommand(")
-    target_application = function_body(source, "static void applyPendingWsTarget(")
+    target_application = function_body(source, "static void applyPendingWsTarget()")
 
     for command in ("joint_control", "actuator_control", "multi_joint_control"):
         branch_start = command_handler.index(f'strcmp(type, "{command}") == 0')
@@ -94,3 +94,32 @@ def test_websocket_motion_cannot_be_queued_or_applied_during_homing() -> None:
         assert "HOMING_isBusy()" in branch
         assert '"Homing in progress"' in branch
     assert "if (HOMING_isBusy()) return;" in target_application
+
+
+def test_preferences_namespaces_are_opened_safely_and_closed() -> None:
+    source = FIRMWARE.read_text(encoding="utf-8")
+    manual_load = function_body(source, "static void loadManualExtendsFromNVS()")
+    manual_save = function_body(source, "static void saveExtendsToNVS()")
+    wifi_load = function_body(source, "void loadWiFiConfig()")
+    wifi_save = function_body(source, "void saveWiFiConfig()")
+    wifi_clear = function_body(source, "void clearWiFiConfig()")
+    trim = function_body(source, "static bool handleTrimCmd(")
+    setup = function_body(source, "void setup()")
+
+    assert 'if (!prefs.begin("hand", false)) return;' in manual_load
+    assert 'if (!prefs.isKey(key.c_str())) continue;' in manual_load
+    assert "prefs.end();" in manual_load
+    assert 'if (!prefs.begin("hand", false)) return;' in manual_save
+    assert "prefs.end();" in manual_save
+    assert 'if (!wifiPrefs.begin("wifi", false)) return;' in wifi_load
+    for key in ("mode", "sta_ssid", "sta_pass", "sta_ip", "sta_gw", "sta_mask", "sta_dns1", "sta_dns2"):
+        assert f'wifiPrefs.isKey("{key}")' in wifi_load
+        assert f'wifiPrefs.getString("{key}", ' not in wifi_load
+    assert "wifiPrefs.end();" in wifi_load
+    assert 'if (!wifiPrefs.begin("wifi", false)) return;' in wifi_save
+    assert "wifiPrefs.end();" in wifi_save
+    assert 'if (wifiPrefs.begin("wifi", false)) {' in wifi_clear
+    assert "wifiPrefs.end();" in wifi_clear
+    assert 'prefs.begin("hand", false);' not in setup
+    assert 'if (prefs.begin("hand", false)) {' in trim
+    assert "prefs.end();" in trim

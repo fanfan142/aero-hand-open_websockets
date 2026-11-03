@@ -282,19 +282,21 @@ static void sendSetIdAck(uint8_t oldId, uint8_t newId, uint16_t curLimitWord) {
 }
 // ---- Helper function to save and loadManual extends from NVS ------
 static void loadManualExtendsFromNVS() {
-  prefs.begin("hand", true);  // read-only
+  if (!prefs.begin("hand", false)) return;
   for (uint8_t i = 0; i < 7; ++i) {
     // Store extends per logical channel index, not servo bus ID.
     String key = "ext" + String(i);
-    int v = prefs.getInt(key.c_str(), -1);
+    if (!prefs.isKey(key.c_str())) continue;
+    int v = prefs.getInt(key.c_str());
     if (v >= 0 && v <= 4095) {
       sd[i].extend_count = v;
     }
   }
+  prefs.end();
 }
 
 static void saveExtendsToNVS() {
-  prefs.begin("hand", false);  // RW
+  if (!prefs.begin("hand", false)) return;
   for (uint8_t i = 0; i < 7; ++i) {
     // Store extends per logical channel index, not servo bus ID.
     String kext = "ext" + String(i);
@@ -807,9 +809,10 @@ static bool handleTrimCmd(const uint8_t* payload) {
   if (new_ext > 4095) new_ext = 4095;
   sd[ch].extend_count = (uint16_t)new_ext;
   // Persist to NVS
-  prefs.begin("hand", false);
-  prefs.putInt(String("ext" + String(ch)).c_str(), sd[ch].extend_count);
-  prefs.end();
+  if (prefs.begin("hand", false)) {
+    prefs.putInt(String("ext" + String(ch)).c_str(), sd[ch].extend_count);
+    prefs.end();
+  }
   // ACK payload: ch (u16, LE), extend_count (u16, LE)
   uint8_t ack[4];
   ack[0] = (uint8_t)(ch & 0xFF);
@@ -1002,7 +1005,6 @@ void setup() {
   hlscl.pSerial = &Serial2;
 
   resetSdToBaseline();
-  prefs.begin("hand", false);
   loadManualExtendsFromNVS();
   // USB CDC is exclusively the official 16-byte binary protocol.
   // Never emit text here, including during boot or homing.
@@ -1073,15 +1075,15 @@ void setup() {
 // ============================================
 
 void loadWiFiConfig() {
-    wifiPrefs.begin("wifi", true);
-    g_wifiModeSetting = wifiPrefs.getUChar("mode", WIFI_MODE);
-    g_staSsid = wifiPrefs.getString("sta_ssid", STA_SSID);
-    g_staPassword = wifiPrefs.getString("sta_pass", STA_PASSWORD);
-    g_staStaticIp = wifiPrefs.getString("sta_ip", STA_STATIC_IP);
-    g_staGateway = wifiPrefs.getString("sta_gw", STA_GATEWAY);
-    g_staSubnet = wifiPrefs.getString("sta_mask", STA_SUBNET);
-    g_staDns1 = wifiPrefs.getString("sta_dns1", STA_DNS1);
-    g_staDns2 = wifiPrefs.getString("sta_dns2", STA_DNS2);
+    if (!wifiPrefs.begin("wifi", false)) return;
+    if (wifiPrefs.isKey("mode")) g_wifiModeSetting = wifiPrefs.getUChar("mode");
+    if (wifiPrefs.isKey("sta_ssid")) g_staSsid = wifiPrefs.getString("sta_ssid");
+    if (wifiPrefs.isKey("sta_pass")) g_staPassword = wifiPrefs.getString("sta_pass");
+    if (wifiPrefs.isKey("sta_ip")) g_staStaticIp = wifiPrefs.getString("sta_ip");
+    if (wifiPrefs.isKey("sta_gw")) g_staGateway = wifiPrefs.getString("sta_gw");
+    if (wifiPrefs.isKey("sta_mask")) g_staSubnet = wifiPrefs.getString("sta_mask");
+    if (wifiPrefs.isKey("sta_dns1")) g_staDns1 = wifiPrefs.getString("sta_dns1");
+    if (wifiPrefs.isKey("sta_dns2")) g_staDns2 = wifiPrefs.getString("sta_dns2");
     wifiPrefs.end();
     if (g_wifiModeSetting != AH_WIFI_MODE_AP &&
         validateStaConfig(g_staSsid, g_staPassword, g_staStaticIp, g_staGateway,
@@ -1092,7 +1094,7 @@ void loadWiFiConfig() {
 }
 
 void saveWiFiConfig() {
-    wifiPrefs.begin("wifi", false);
+    if (!wifiPrefs.begin("wifi", false)) return;
     wifiPrefs.putUChar("mode", g_wifiModeSetting);
     wifiPrefs.putString("sta_ssid", g_staSsid);
     wifiPrefs.putString("sta_pass", g_staPassword);
@@ -1113,16 +1115,17 @@ void clearWiFiConfig() {
     g_staDns1 = STA_DNS1;
     g_staDns2 = STA_DNS2;
     g_wifiModeSetting = AH_WIFI_MODE_AP;
-    wifiPrefs.begin("wifi", false);
-    wifiPrefs.remove("sta_ssid");
-    wifiPrefs.remove("sta_pass");
-    wifiPrefs.remove("sta_ip");
-    wifiPrefs.remove("sta_gw");
-    wifiPrefs.remove("sta_mask");
-    wifiPrefs.remove("sta_dns1");
-    wifiPrefs.remove("sta_dns2");
-    wifiPrefs.putUChar("mode", g_wifiModeSetting);
-    wifiPrefs.end();
+    if (wifiPrefs.begin("wifi", false)) {
+        wifiPrefs.remove("sta_ssid");
+        wifiPrefs.remove("sta_pass");
+        wifiPrefs.remove("sta_ip");
+        wifiPrefs.remove("sta_gw");
+        wifiPrefs.remove("sta_mask");
+        wifiPrefs.remove("sta_dns1");
+        wifiPrefs.remove("sta_dns2");
+        wifiPrefs.putUChar("mode", g_wifiModeSetting);
+        wifiPrefs.end();
+    }
 }
 
 // Android sends all seven STA fields. Reject partial updates rather than carrying
