@@ -41,8 +41,6 @@ class GesturePreviewTransformTest {
                         val transform = CoordinateTransform(source, previewTransform(crop, rotation, mirrored, viewSize))
                         val mapped = GestureLandmarkTransforms.forPreview(
                             landmarks = landmarks,
-                            cropLeft = crop.left,
-                            cropTop = crop.top,
                             cropWidth = crop.width(),
                             cropHeight = crop.height(),
                             previewWidth = viewSize.width,

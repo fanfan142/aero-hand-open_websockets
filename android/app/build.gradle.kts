@@ -75,6 +75,10 @@ android {
         )
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -121,4 +125,5 @@ dependencies {
     testImplementation("org.json:json:20231013")
     testImplementation("org.robolectric:robolectric:4.12.2")
     testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 }

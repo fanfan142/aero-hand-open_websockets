@@ -13,8 +13,6 @@ data class GestureFrame(
     val detectionSize: Size,
     val displaySize: Size,
     val rotationDegrees: Int,
-    val cropLeft: Int,
-    val cropTop: Int,
     val cropWidth: Int,
     val cropHeight: Int
 )
@@ -54,8 +52,6 @@ class GestureFrameConverter(
             detectionSize = Size(bitmap.width, bitmap.height),
             displaySize = displaySize,
             rotationDegrees = rotation,
-            cropLeft = imageProxy.cropRect.left,
-            cropTop = imageProxy.cropRect.top,
             cropWidth = imageProxy.cropRect.width(),
             cropHeight = imageProxy.cropRect.height()
         )

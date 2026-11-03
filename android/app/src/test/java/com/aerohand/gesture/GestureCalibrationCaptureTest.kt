@@ -58,6 +58,22 @@ class GestureCalibrationCaptureTest {
     }
 
     @Test
+    fun rejectionRemainsVisibleAcrossLiveFeedbackUpdates() {
+        service.startCalibration()
+        setDetected()
+        service.recordCalibrationPose()
+        val method = GestureCameraService::class.java.getDeclaredMethod(
+            "feedbackFor", String::class.java, Boolean::class.javaPrimitiveType,
+            GestureCalibrationProfile::class.java, CalibrationState::class.java
+        ).apply { isAccessible = true }
+        repeat(5) {
+            val feedback = method.invoke(service, "Right", true, null, CalibrationState.CALIBRATING_OPEN) as String
+            assertTrue(feedback, feedback.contains("有效采样不足"))
+            assertTrue(feedback, feedback.contains("1/3"))
+        }
+    }
+
+    @Test
     fun trackingLossDiscardsSamplesSoReappearingHandCannotRecordOldPose() {
         service.startCalibration()
         setDetected()
@@ -81,6 +97,18 @@ class GestureCalibrationCaptureTest {
         assertFalse(service.controlFrame.value.allowed)
         remember(angles)
         service.recordCalibrationPose()
+    }
+
+    @Test
+    fun expiredSamplesCannotRecordPose() {
+        service.startCalibration()
+        setDetected()
+        repeat(5) { remember(FingerAngles(thumbSwing = 50f)) }
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(1501))
+        assertNull(sample())
+        service.recordCalibrationPose()
+        assertEquals(CalibrationState.CALIBRATING_OPEN, service.state.value.calibrationState)
+        assertFalse(service.controlFrame.value.allowed)
     }
 
     @Suppress("UNCHECKED_CAST")
