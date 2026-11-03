@@ -61,7 +61,7 @@ class GestureCalibrationStore(context: Context) {
     private fun profileKeys(): Set<String> = prefs.getStringSet("profileKeys", emptySet()).orEmpty()
 
     private fun loadProfile(key: String): GestureCalibrationProfile? {
-        // v5 profiles used mirrored hand labels; they must never arm the new physical-hand gate.
+        // Legacy profiles predate guided capture and must not arm the new control gate.
         if (prefs.getInt("$key.schemaVersion", 0) != SCHEMA_VERSION) return null
         val hand = prefs.getString("$key.handSide", null).orEmpty()
         if (hand.isBlank()) return null
@@ -102,7 +102,7 @@ class GestureCalibrationStore(context: Context) {
     }
 
     companion object {
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 7
         private const val TUNING_SCHEMA_VERSION = 1
     }
 }

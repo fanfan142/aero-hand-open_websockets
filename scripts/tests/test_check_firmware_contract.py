@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,9 +45,9 @@ def source_with_markers(markers: tuple[str, ...] = REQUIRED_PROTOCOL_MARKERS) ->
     return "\n".join(declarations) + "\n"
 
 
-def run_checker(*targets: Path) -> subprocess.CompletedProcess[str]:
+def run_checker(*targets: Path, require_ble: bool = False) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(CHECKER), *(str(target) for target in targets)],
+        [sys.executable, str(CHECKER), *(["--require-ble"] if require_ble else []), *(str(target) for target in targets)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -82,6 +83,26 @@ class FirmwareContractCliTest(unittest.TestCase):
             result = run_checker(artifact)
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_ble_binary_gate_requires_every_uuid_only_when_requested(self) -> None:
+        uuids = tuple(f"8c6f4a20-6c0b-4b7a-9d27-6df8a321000{index}" for index in range(1, 5))
+        protocol = b"\x00".join(marker.encode("ascii") for marker in REQUIRED_PROTOCOL_MARKERS)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "firmware.bin"
+            artifact.write_bytes(protocol)
+            standalone = run_checker(artifact)
+            self.assertEqual(0, standalone.returncode, standalone.stdout + standalone.stderr)
+            artifact.write_bytes(protocol + b"\x00" + b"\x00".join(uuid.encode("ascii") for uuid in uuids))
+            accepted = run_checker(artifact, require_ble=True)
+            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+            for missing in uuids:
+                with self.subTest(missing=missing):
+                    artifact.write_bytes(protocol + b"\x00" + b"\x00".join(
+                        uuid.encode("ascii") for uuid in uuids if uuid != missing
+                    ))
+                    rejected = run_checker(artifact, require_ble=True)
+                    self.assertEqual(1, rejected.returncode, rejected.stdout + rejected.stderr)
+                    self.assertIn(missing, rejected.stdout)
 
     def test_rejects_compiled_binary_missing_protocol_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -179,6 +200,275 @@ void processJsonCommand(const char* type) {
         result = run_checker(STANDALONE_FIRMWARE, V020_FIRMWARE, V020_FIRMWARE_MIRROR)
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(V020_FIRMWARE.read_bytes(), V020_FIRMWARE_MIRROR.read_bytes())
+
+
+def cpp_function_definition(source: str, signature: str) -> str:
+    # Include the opening brace so a forward declaration cannot match.
+    start = source.index(signature + " {")
+    end = source.index("\n}", start) + len("\n}")
+    return source[start:end]
+
+
+class FirmwareWsBleSourceContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.source = V020_FIRMWARE.read_text(encoding="utf-8")
+        self.host_handler = cpp_function_definition(
+            self.source,
+            "static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource source)",
+        )
+        self.ble_setup = cpp_function_definition(self.source, "static void setupBlePeripheral()")
+
+    def test_function_extraction_ignores_forward_declarations(self) -> None:
+        source = "static void example();\nconst char* password;\nstatic void example() {\n  return;\n}\n"
+        definition = cpp_function_definition(source, "static void example()")
+        self.assertEqual("static void example() {\n  return;\n}", definition)
+        self.assertNotIn("password", definition)
+
+    def test_ble_uuid_contract_and_pinned_dependency(self) -> None:
+        expected_uuids = (
+            "8c6f4a20-6c0b-4b7a-9d27-6df8a3210001",
+            "8c6f4a20-6c0b-4b7a-9d27-6df8a3210002",
+            "8c6f4a20-6c0b-4b7a-9d27-6df8a3210003",
+            "8c6f4a20-6c0b-4b7a-9d27-6df8a3210004",
+        )
+        uuid_names = ("BLE_SERVICE_UUID", "BLE_COMMAND_UUID", "BLE_RESPONSE_UUID", "BLE_IDENTITY_UUID")
+        for name, uuid in zip(uuid_names, expected_uuids):
+            with self.subTest(name=name):
+                self.assertIn(f'{name}[] = "{uuid}"', self.source)
+        generator = (REPO_ROOT / "scripts" / "build_versions.py").read_text(encoding="utf-8")
+        self.assertIn("h2zero/NimBLE-Arduino@2.3.6", generator)
+        self.assertIn('"espressif32@6.10.0" if ble_enabled else "espressif32"', generator)
+        self.assertIn("NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC", self.source)
+        self.assertIn("NIMBLE_PROPERTY::NOTIFY", self.source)
+        self.assertIn("NIMBLE_PROPERTY::READ", self.source)
+        self.assertIn(r'\"capabilities\":[\"CTRL_POS\",\"GET_POS\",\"HOMING\"]', self.source)
+        self.assertNotIn("password", self.ble_setup)
+        self.assertNotIn("sta_pass", self.ble_setup)
+
+    def test_ble_command_requires_encrypted_bonded_exact_frame(self) -> None:
+        self.assertIn("NimBLEDevice::setSecurityAuth(true, false, true)", self.source)
+        self.assertIn("Just Works", self.source)
+        self.assertIn("!connInfo.isEncrypted() || !connInfo.isBonded() || value.size() != 16", self.source)
+        self.assertIn("connInfo.getConnHandle() != g_bleActiveConnHandle", self.source)
+        self.assertIn("g_hostResponseSource = source", self.source)
+        response = cpp_function_definition(self.source, "static void sendHostPacket(const uint8_t* packet, size_t length)")
+        dispatch = cpp_function_definition(self.source, "static void processBleQueue()")
+        dequeue = dispatch.index("g_bleCommandQueue.takeNext(")
+        handle_snapshot = dispatch.index("const uint16_t connHandle = g_bleActiveConnHandle", dequeue)
+        unlock = dispatch.index("portEXIT_CRITICAL(&g_bleQueueMux)", handle_snapshot)
+        self.assertLess(dequeue, handle_snapshot)
+        self.assertLess(handle_snapshot, unlock)
+        self.assertIn("g_bleDispatchConnHandle = connHandle", dispatch)
+        self.assertIn("g_bleDispatchGeneration = generation", dispatch)
+        self.assertIn("g_hostResponseConnHandle = (source == CONTROL_SOURCE_BLE) ? g_bleDispatchConnHandle : 0xFFFF", self.host_handler)
+        self.assertIn("g_hostResponseGeneration = (source == CONTROL_SOURCE_BLE) ? g_bleDispatchGeneration : 0", self.host_handler)
+        self.assertIn("const uint16_t connHandle = g_hostResponseConnHandle", response)
+        self.assertIn("bleDispatchConnectionIsCurrent(generation, connHandle)", response)
+        self.assertIn("g_bleResponseCharacteristic->notify(connHandle)", response)
+        self.assertNotIn("g_bleActiveConnHandle", response)
+        self.assertIn("Serial.write(packet, length)", response)
+
+    def test_ble_callback_only_queues_allowed_commands(self) -> None:
+        start = self.source.index("class AeroBleCommandCallbacks")
+        end = self.source.index("\n};", start) + len("\n};")
+        callback_section = self.source[start:end]
+        self.assertIn("op != CTRL_POS && op != GET_POS && op != HOMING", callback_section)
+        self.assertIn("g_bleCommandQueue.enqueue(frame, generation, sequence, arrivedAtMs)", callback_section)
+        self.assertIn("const uint32_t arrivedAtMs = millis()", callback_section)
+        for forbidden in ("hlscl.", "HOMING_start(", "handleHostFrame(", "SyncWritePosEx(", "WriteEle("):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, callback_section)
+
+    def test_ble_queue_runs_from_main_loop_and_cancels_disconnected_generation(self) -> None:
+        loop_start = self.source.index("void loop() {")
+        loop_end = self.source.index("\n}", loop_start)
+        self.assertIn("processBleQueue();", self.source[loop_start:loop_end])
+        self.assertIn("handleHostFrame(op, &frame[2], CONTROL_SOURCE_BLE)", self.source)
+        self.assertIn("g_bleCommandQueue.discardGeneration(disconnectedGeneration)", self.source)
+        self.assertIn("g_bleConnectionGeneration == generation", self.source)
+
+        server_start = self.source.index("class AeroBleServerCallbacks")
+        server_end = self.source.index("\n};", server_start) + len("\n};")
+        server_callbacks = self.source[server_start:server_end]
+        connect_start = server_callbacks.index("void onConnect")
+        connect_end = server_callbacks.index("void onDisconnect", connect_start)
+        connect_callback = server_callbacks[connect_start:connect_end]
+        self.assertIn("if (g_bleConnected)", connect_callback)
+        self.assertIn("server->disconnect(connInfo)", connect_callback)
+        self.assertIn("g_bleActiveConnHandle = connInfo.getConnHandle()", connect_callback)
+
+        get_pos_start = self.host_handler.index("case GET_POS:")
+        get_pos_end = self.host_handler.index("case GET_VEL:", get_pos_start)
+        get_pos_body = self.host_handler[get_pos_start:get_pos_end]
+        self.assertNotIn("g_lastBleActivity", get_pos_body)
+        self.assertNotIn("markControlActivity(", get_pos_body)
+        dispatch = cpp_function_definition(self.source, "static void processBleQueue()")
+        self.assertNotIn("g_lastBleActivity", dispatch)
+        self.assertNotIn("markControlActivity(", dispatch)
+
+        constants_end = self.source.index("static const uint8_t SET_TOR")
+        callbacks_start = self.source.index("class AeroBleCommandCallbacks")
+        handler_prototype = self.source.index("static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource source);")
+        self.assertLess(constants_end, callbacks_start)
+        self.assertLess(handler_prototype, callbacks_start)
+
+    def test_ble_queue_policy_coalesces_expires_discards_and_orders_wraparound(self) -> None:
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if compiler is None:
+            self.fail("BLE queue behavior coverage requires g++ or clang++ (provided by Firmware CI)")
+
+        start = self.source.index("// BLE_QUEUE_POLICY_BEGIN") + len("// BLE_QUEUE_POLICY_BEGIN")
+        end = self.source.index("// BLE_QUEUE_POLICY_END", start)
+        policy = self.source[start:end]
+        harness = r"""
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+static const uint8_t CTRL_POS = 0x11;
+static const uint8_t GET_POS = 0x22;
+static const uint8_t HOMING = 0x01;
+""" + policy + r"""
+static void makeFrame(uint8_t frame[16], uint8_t op, uint8_t fill) {
+  memset(frame, fill, 16);
+  frame[0] = op;
+}
+int main() {
+  BleCommandQueue queue;
+  uint8_t frame[16], out[16];
+  uint32_t generation, sequence, arrivedAt;
+  makeFrame(frame, CTRL_POS, 1);
+  queue.enqueue(frame, 7, 0xFFFFFFFEU, 100);
+  makeFrame(frame, CTRL_POS, 2);
+  queue.enqueue(frame, 7, 0xFFFFFFFFU, 110);
+  assert(queue.takeNext(120, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[1] == 2 && generation == 7 && sequence == 0xFFFFFFFFU && arrivedAt == 110);
+
+  makeFrame(frame, CTRL_POS, 3);
+  queue.enqueue(frame, 7, 0xFFFFFFFFU, 200);
+  makeFrame(frame, GET_POS, 4);
+  queue.enqueue(frame, 7, 0, 201);
+  assert(queue.takeNext(202, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == CTRL_POS && sequence == 0xFFFFFFFFU);
+  assert(queue.takeNext(202, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == GET_POS && sequence == 0);
+
+  // The safe command must also win when it precedes the latest position across wrap.
+  makeFrame(frame, GET_POS, 1);
+  queue.enqueue(frame, 7, 0xFFFFFFFFU, 210);
+  makeFrame(frame, CTRL_POS, 2);
+  queue.enqueue(frame, 7, 0, 211);
+  assert(queue.takeNext(212, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == GET_POS && sequence == 0xFFFFFFFFU);
+  assert(queue.takeNext(212, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == CTRL_POS && sequence == 0);
+
+  // Polling entries coalesce too, without reordering an earlier homing command.
+  makeFrame(frame, GET_POS, 1);
+  queue.enqueue(frame, 7, 1, 220);
+  makeFrame(frame, HOMING, 2);
+  queue.enqueue(frame, 7, 2, 221);
+  makeFrame(frame, GET_POS, 3);
+  queue.enqueue(frame, 7, 3, 222);
+  assert(queue.takeNext(223, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == HOMING);
+  assert(queue.takeNext(223, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == GET_POS && out[1] == 3 && arrivedAt == 222);
+  assert(!queue.takeNext(223, 7, out, &generation, &sequence, &arrivedAt));
+
+  makeFrame(frame, CTRL_POS, 5);
+  queue.enqueue(frame, 7, 2, 300);
+  assert(!queue.takeNext(600, 7, out, &generation, &sequence, &arrivedAt));
+  makeFrame(frame, GET_POS, 6);
+  queue.enqueue(frame, 7, 3, 700);
+  assert(queue.takeNext(1699, 7, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == GET_POS && arrivedAt == 700);
+  makeFrame(frame, GET_POS, 7);
+  queue.enqueue(frame, 7, 4, 2000);
+  assert(!queue.takeNext(3000, 7, out, &generation, &sequence, &arrivedAt));
+  makeFrame(frame, HOMING, 8);
+  queue.enqueue(frame, 7, 5, 3700);
+  assert(!queue.takeNext(6700, 7, out, &generation, &sequence, &arrivedAt));
+
+  makeFrame(frame, CTRL_POS, 9);
+  queue.enqueue(frame, 7, 6, 0xFFFFFFF0U);
+  assert(!queue.takeNext(0x0000011CU, 7, out, &generation, &sequence, &arrivedAt));
+
+  makeFrame(frame, CTRL_POS, 7);
+  queue.enqueue(frame, 7, 4, 4000);
+  makeFrame(frame, GET_POS, 8);
+  queue.enqueue(frame, 7, 5, 4000);
+  makeFrame(frame, HOMING, 9);
+  queue.enqueue(frame, 7, 6, 4000);
+  queue.discardGeneration(7);
+  assert(!queue.takeNext(4001, 7, out, &generation, &sequence, &arrivedAt));
+
+  // Reconnection never dispatches an old generation, even without an explicit purge.
+  makeFrame(frame, CTRL_POS, 1);
+  queue.enqueue(frame, 7, 7, 7000);
+  makeFrame(frame, GET_POS, 2);
+  queue.enqueue(frame, 7, 8, 7000);
+  makeFrame(frame, HOMING, 3);
+  queue.enqueue(frame, 7, 9, 7000);
+  assert(!queue.takeNext(7001, 8, out, &generation, &sequence, &arrivedAt));
+
+  // A delayed disconnect purge leaves the new central's frames intact.
+  makeFrame(frame, CTRL_POS, 4);
+  queue.enqueue(frame, 7, 10, 7100);
+  makeFrame(frame, GET_POS, 5);
+  queue.enqueue(frame, 8, 11, 7100);
+  makeFrame(frame, HOMING, 6);
+  queue.enqueue(frame, 7, 12, 7100);
+  queue.discardGeneration(7);
+  assert(queue.takeNext(7101, 8, out, &generation, &sequence, &arrivedAt));
+  assert(out[0] == GET_POS && generation == 8 && out[1] == 5);
+  assert(!queue.takeNext(7101, 8, out, &generation, &sequence, &arrivedAt));
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "ble_queue_contract.cpp"
+            executable = Path(temp_dir) / ("ble_queue_contract.exe" if sys.platform == "win32" else "ble_queue_contract")
+            source.write_text(harness, encoding="utf-8")
+            build = subprocess.run(
+                [compiler, "-std=c++11", str(source), "-o", str(executable)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_ble_control_changes_revalidate_after_bus_wait_before_cache_commit(self) -> None:
+        ctrl_start = self.host_handler.index("case CTRL_POS:")
+        ctrl_end = self.host_handler.index("case CTRL_TOR:", ctrl_start)
+        ctrl_body = self.host_handler[ctrl_start:ctrl_end]
+        bus_wait = ctrl_body.index("xSemaphoreTake(gBusMux, portMAX_DELAY)")
+        freshness_check = ctrl_body.index("bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle)", bus_wait)
+        servo_write = ctrl_body.index("hlscl.SyncWritePosEx", freshness_check)
+        cache_commit = ctrl_body.index("memcpy(g_actuatorAngles", servo_write)
+        self.assertLess(bus_wait, freshness_check)
+        self.assertLess(freshness_check, servo_write)
+        self.assertLess(servo_write, cache_commit)
+        self.assertIn("millis() - g_bleDispatchArrivedAtMs", ctrl_body)
+        self.assertNotIn("memcpy(g_actuatorAngles", ctrl_body[:freshness_check])
+        self.assertNotIn("cancelPendingWsTarget()", ctrl_body[:freshness_check])
+        self.assertIn("g_bleActiveConnHandle == g_bleDispatchConnHandle", ctrl_body)
+        self.assertIn("if (bleSessionStillCurrent) {", ctrl_body)
+
+    def test_ble_critical_sections_never_cover_io_or_motion(self) -> None:
+        marker = "portENTER_CRITICAL(&g_bleQueueMux);"
+        for index, section in enumerate(self.source.split(marker)[1:]):
+            # Include early-return unlock paths and the normal-path final unlock.
+            final_unlock = section.rindex("portEXIT_CRITICAL(&g_bleQueueMux);")
+            critical_section = section[:final_unlock]
+            for forbidden in ("hlscl.", "HOMING_start(", "handleHostFrame(",
+                              "xSemaphoreTake(", "->notify(", "->setValue(", "server->disconnect("):
+                with self.subTest(section=index, forbidden=forbidden):
+                    self.assertNotIn(forbidden, critical_section)
+
+    def test_ble_mirror_is_exact(self) -> None:
         self.assertEqual(V020_FIRMWARE.read_bytes(), V020_FIRMWARE_MIRROR.read_bytes())
 
 

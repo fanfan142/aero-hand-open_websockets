@@ -25,6 +25,7 @@
 #include <ESPmDNS.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>
+#include <NimBLEDevice.h>
 
 #include "webSocketServer.h"
 #include "esp_system.h"
@@ -73,6 +74,7 @@ static constexpr uint32_t AP_START_RETRY_INTERVAL_MS = 1000;
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
 static inline void sendU16Frame(uint8_t header, const uint16_t data[7]);
+static void sendHostPacket(const uint8_t* packet, size_t length);
 
 // 前置声明 (热保护函数)
 static inline bool isHot(uint8_t ch);
@@ -90,12 +92,38 @@ enum ControlSource {
   CONTROL_SOURCE_NONE = 0,
   CONTROL_SOURCE_SERIAL = 1,
   CONTROL_SOURCE_WEBSOCKET = 2,
+  CONTROL_SOURCE_BLE = 3,
 };
 static ControlSource g_activeControlSource = CONTROL_SOURCE_NONE;
+// Only the main loop dispatches host frames and owns the response context.
+static ControlSource g_hostResponseSource = CONTROL_SOURCE_SERIAL;
+static uint32_t g_hostResponseGeneration = 0;
+static uint16_t g_hostResponseConnHandle = 0xFFFF;
+static uint16_t g_bleDispatchConnHandle = 0xFFFF;
+static uint32_t g_bleDispatchGeneration = 0;
+static uint32_t g_bleDispatchArrivedAtMs = 0;
 static uint32_t g_lastSerialActivity = 0;
+static volatile uint32_t g_lastBleActivity = 0;
 static constexpr uint32_t CONTROL_SOURCE_TIMEOUT_MS = 500;
 static uint8_t g_serialFrameBuffer[16] = {0};
 static uint8_t g_serialFrameIndex = 0;
+
+static constexpr char BLE_SERVICE_UUID[] = "8c6f4a20-6c0b-4b7a-9d27-6df8a3210001";
+static constexpr char BLE_COMMAND_UUID[] = "8c6f4a20-6c0b-4b7a-9d27-6df8a3210002";
+static constexpr char BLE_RESPONSE_UUID[] = "8c6f4a20-6c0b-4b7a-9d27-6df8a3210003";
+static constexpr char BLE_IDENTITY_UUID[] = "8c6f4a20-6c0b-4b7a-9d27-6df8a3210004";
+static NimBLEServer* g_bleServer = nullptr;
+static NimBLECharacteristic* g_bleResponseCharacteristic = nullptr;
+static uint16_t g_bleActiveConnHandle = 0xFFFF;
+static volatile bool g_bleConnected = false;
+static volatile bool g_bleSecureConnection = false;
+static volatile bool g_bleDisconnectPending = false;
+static portMUX_TYPE g_bleQueueMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t g_bleConnectionGeneration = 0;
+static uint32_t g_bleDisconnectGeneration = 0;
+static uint32_t g_bleQueueSequence = 0;
+static uint32_t g_bleActiveGeneration = 0;
+static bool g_bleAdvertisingRestartPending = false;
 
 // 当前关节角度记录 (用于get_states命令)
 static float g_jointAngles[JOINT_COUNT] = {0};
@@ -138,6 +166,122 @@ static const uint8_t GET_TEMP  = 0x25;
 static const uint8_t GET_WIFI_DIAG = 0x26;
 static const uint8_t SET_SPE   = 0x31;
 static const uint8_t SET_TOR   = 0x32;
+
+// BLE_QUEUE_POLICY_BEGIN
+static constexpr uint32_t BLE_CTRL_POS_TTL_MS = 300;
+static constexpr uint32_t BLE_GET_POS_TTL_MS = 1000;
+static constexpr uint32_t BLE_HOMING_TTL_MS = 3000;
+
+struct BleQueuedHostFrame {
+  uint8_t bytes[16];
+  uint32_t generation;
+  uint32_t sequence;
+  uint32_t arrivedAtMs;
+};
+
+class BleCommandQueue {
+ public:
+  void enqueue(const uint8_t frame[16], uint32_t generation, uint32_t sequence, uint32_t arrivedAtMs) {
+    if (frame[0] == CTRL_POS) {
+      memcpy(ctrlPos_.bytes, frame, 16);
+      ctrlPos_.generation = generation;
+      ctrlPos_.sequence = sequence;
+      ctrlPos_.arrivedAtMs = arrivedAtMs;
+      ctrlPosPending_ = true;
+      return;
+    }
+
+    for (uint8_t i = 0; i < safeCount_; ++i) {
+      if (safeFrames_[i].bytes[0] == frame[0]) {
+        copyFrame(safeFrames_[i], frame, generation, sequence, arrivedAtMs);
+        return;
+      }
+    }
+    if (safeCount_ < 4) {
+      copyFrame(safeFrames_[safeCount_++], frame, generation, sequence, arrivedAtMs);
+    }
+  }
+
+  void discardGeneration(uint32_t generation) {
+    if (ctrlPosPending_ && ctrlPos_.generation == generation) ctrlPosPending_ = false;
+    for (uint8_t i = 0; i < safeCount_;) {
+      if (safeFrames_[i].generation == generation) removeSafeFrame(i);
+      else ++i;
+    }
+  }
+
+  bool takeNext(uint32_t nowMs, uint32_t generation, uint8_t frame[16],
+                uint32_t* frameGeneration, uint32_t* frameSequence, uint32_t* frameArrivedAtMs) {
+    if (ctrlPosPending_ && !isFresh(ctrlPos_, nowMs, generation)) ctrlPosPending_ = false;
+    for (uint8_t i = 0; i < safeCount_;) {
+      if (!isFresh(safeFrames_[i], nowMs, generation)) removeSafeFrame(i);
+      else ++i;
+    }
+
+    uint8_t earliestSafe = 0;
+    for (uint8_t i = 1; i < safeCount_; ++i) {
+      if (sequenceBefore(safeFrames_[i].sequence, safeFrames_[earliestSafe].sequence)) earliestSafe = i;
+    }
+    if (ctrlPosPending_ && (safeCount_ == 0 ||
+        sequenceBefore(ctrlPos_.sequence, safeFrames_[earliestSafe].sequence))) {
+      copyOut(ctrlPos_, frame, frameGeneration, frameSequence, frameArrivedAtMs);
+      ctrlPosPending_ = false;
+      return true;
+    }
+    if (safeCount_ == 0) return false;
+    copyOut(safeFrames_[earliestSafe], frame, frameGeneration, frameSequence, frameArrivedAtMs);
+    removeSafeFrame(earliestSafe);
+    return true;
+  }
+
+ private:
+  BleQueuedHostFrame ctrlPos_ = {};
+  BleQueuedHostFrame safeFrames_[4] = {};
+  uint8_t safeCount_ = 0;
+  bool ctrlPosPending_ = false;
+
+  static bool sequenceBefore(uint32_t left, uint32_t right) {
+    const uint32_t distance = static_cast<uint32_t>(left - right);
+    return distance != 0 && distance > 0x7FFFFFFFU;
+  }
+
+  static uint32_t ttlFor(uint8_t op) {
+    if (op == CTRL_POS) return BLE_CTRL_POS_TTL_MS;
+    if (op == GET_POS) return BLE_GET_POS_TTL_MS;
+    if (op == HOMING) return BLE_HOMING_TTL_MS;
+    return 0;
+  }
+
+  static bool isFresh(const BleQueuedHostFrame& queued, uint32_t nowMs, uint32_t generation) {
+    const uint32_t ttl = ttlFor(queued.bytes[0]);
+    return queued.generation == generation && ttl != 0 &&
+        static_cast<uint32_t>(nowMs - queued.arrivedAtMs) < ttl;
+  }
+
+  static void copyFrame(BleQueuedHostFrame& destination, const uint8_t frame[16],
+                        uint32_t generation, uint32_t sequence, uint32_t arrivedAtMs) {
+    memcpy(destination.bytes, frame, 16);
+    destination.generation = generation;
+    destination.sequence = sequence;
+    destination.arrivedAtMs = arrivedAtMs;
+  }
+
+  static void copyOut(const BleQueuedHostFrame& source, uint8_t frame[16],
+                      uint32_t* generation, uint32_t* sequence, uint32_t* arrivedAtMs) {
+    memcpy(frame, source.bytes, 16);
+    *generation = source.generation;
+    *sequence = source.sequence;
+    *arrivedAtMs = source.arrivedAtMs;
+  }
+
+  void removeSafeFrame(uint8_t index) {
+    for (uint8_t i = index; i + 1 < safeCount_; ++i) safeFrames_[i] = safeFrames_[i + 1];
+    --safeCount_;
+  }
+};
+// BLE_QUEUE_POLICY_END
+
+static BleCommandQueue g_bleCommandQueue;
 
 // ---- Defaults for SyncWritePosEx ----
 static uint16_t g_speed[7]  = {32766,32766,32766,32766,32766,32766,32766};
@@ -215,6 +359,11 @@ void broadcastJointStates();
 void blinkLED(int times);
 void scheduleWifiAction(PendingWifiAction action);
 void processPendingWifiAction();
+static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource source);
+static void setupBlePeripheral();
+static void processBleQueue();
+static void processBleDisconnect();
+static bool bleDispatchConnectionIsCurrent(uint32_t generation, uint16_t connHandle);
 
 // 关节名称映射 (新增)
 static const char* const JOINT_NAMES[JOINT_COUNT] = {
@@ -226,6 +375,130 @@ uint8_t getJointNumber(const char* jointId);
 
 bool HOMING_isBusy();
 void HOMING_start();
+
+class AeroBleServerCallbacks : public NimBLEServerCallbacks {
+ public:
+  void onConnect(NimBLEServer* server, NimBLEConnInfo& connInfo) override {
+    bool rejectConnection = false;
+    portENTER_CRITICAL(&g_bleQueueMux);
+    if (g_bleConnected) {
+      rejectConnection = g_bleActiveConnHandle != connInfo.getConnHandle();
+    } else {
+      ++g_bleConnectionGeneration;
+      g_bleActiveConnHandle = connInfo.getConnHandle();
+      g_bleConnected = true;
+      g_bleSecureConnection = false;
+    }
+    portEXIT_CRITICAL(&g_bleQueueMux);
+    if (rejectConnection) server->disconnect(connInfo);
+  }
+
+  void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override {
+    (void)server;
+    (void)connInfo;
+    (void)reason;
+    portENTER_CRITICAL(&g_bleQueueMux);
+    if (connInfo.getConnHandle() == g_bleActiveConnHandle) {
+      g_bleConnected = false;
+      g_bleSecureConnection = false;
+      g_bleActiveConnHandle = 0xFFFF;
+      g_bleDisconnectGeneration = g_bleConnectionGeneration;
+      g_bleDisconnectPending = true;
+      g_bleAdvertisingRestartPending = true;
+    }
+    portEXIT_CRITICAL(&g_bleQueueMux);
+  }
+
+  void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+    portENTER_CRITICAL(&g_bleQueueMux);
+    if (connInfo.getConnHandle() == g_bleActiveConnHandle) {
+      g_bleSecureConnection = connInfo.isEncrypted() && connInfo.isBonded();
+    }
+    portEXIT_CRITICAL(&g_bleQueueMux);
+  }
+};
+
+class AeroBleCommandCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override {
+    const NimBLEAttValue& value = characteristic->getAttVal();
+    if (!connInfo.isEncrypted() || !connInfo.isBonded() || value.size() != 16) return;
+    const uint8_t* frame = value.data();
+    const uint8_t op = frame[0];
+    if (op != CTRL_POS && op != GET_POS && op != HOMING) return;
+
+    portENTER_CRITICAL(&g_bleQueueMux);
+    if (!g_bleConnected || !g_bleSecureConnection ||
+        connInfo.getConnHandle() != g_bleActiveConnHandle) {
+      portEXIT_CRITICAL(&g_bleQueueMux);
+      return;
+    }
+    const uint32_t generation = g_bleConnectionGeneration;
+    const uint32_t sequence = ++g_bleQueueSequence;
+    const uint32_t arrivedAtMs = millis();
+    g_bleCommandQueue.enqueue(frame, generation, sequence, arrivedAtMs);
+    portEXIT_CRITICAL(&g_bleQueueMux);
+  }
+};
+
+static void processBleDisconnect() {
+  uint32_t disconnectedGeneration = 0;
+  bool disconnected = false;
+  portENTER_CRITICAL(&g_bleQueueMux);
+  if (g_bleDisconnectPending) {
+    disconnected = true;
+    disconnectedGeneration = g_bleDisconnectGeneration;
+    g_bleDisconnectPending = false;
+    g_bleCommandQueue.discardGeneration(disconnectedGeneration);
+  }
+  const bool restartAdvertising = g_bleAdvertisingRestartPending && !g_bleConnected;
+  if (restartAdvertising) g_bleAdvertisingRestartPending = false;
+  portEXIT_CRITICAL(&g_bleQueueMux);
+
+  if (disconnected && g_activeControlSource == CONTROL_SOURCE_BLE &&
+      (g_bleActiveGeneration == disconnectedGeneration ||
+       g_bleActiveGeneration != g_bleConnectionGeneration)) {
+    g_activeControlSource = CONTROL_SOURCE_NONE;
+    g_wsControlOwner = -1;
+  }
+  if (restartAdvertising) NimBLEDevice::startAdvertising();
+}
+
+static bool bleDispatchConnectionIsCurrent(uint32_t generation, uint16_t connHandle) {
+  bool current = false;
+  portENTER_CRITICAL(&g_bleQueueMux);
+  current = g_bleConnected && g_bleSecureConnection &&
+      g_bleConnectionGeneration == generation && g_bleActiveConnHandle == connHandle;
+  portEXIT_CRITICAL(&g_bleQueueMux);
+  return current;
+}
+
+static void processBleQueue() {
+  processBleDisconnect();
+  uint8_t frame[16];
+  uint32_t generation = 0;
+  uint32_t sequence = 0;
+  uint32_t arrivedAtMs = 0;
+  portENTER_CRITICAL(&g_bleQueueMux);
+  const uint32_t now = millis();
+  const bool hasFrame = g_bleCommandQueue.takeNext(
+      now, g_bleConnectionGeneration, frame, &generation, &sequence, &arrivedAtMs);
+  // Snapshot the handle under the same lock as the queued generation.
+  const uint16_t connHandle = g_bleActiveConnHandle;
+  const bool canDispatch = hasFrame && g_bleConnected && g_bleSecureConnection &&
+      generation == g_bleConnectionGeneration;
+  portEXIT_CRITICAL(&g_bleQueueMux);
+  (void)sequence;
+  if (!canDispatch || !bleDispatchConnectionIsCurrent(generation, connHandle)) return;
+  const uint8_t op = frame[0];
+  if (op != CTRL_POS && op != GET_POS && op != HOMING) return;
+  if (!HOMING_isBusy()) {
+    g_bleDispatchConnHandle = connHandle;
+    g_bleDispatchGeneration = generation;
+    g_bleDispatchArrivedAtMs = arrivedAtMs;
+    handleHostFrame(op, &frame[2], CONTROL_SOURCE_BLE);
+  }
+}
 
 // ---- Helper function to read latest temp from servo
 static inline uint8_t getTempC(uint8_t ch) {
@@ -505,10 +778,15 @@ static bool canAcceptControl(ControlSource source, int16_t wsClient = -1) {
   if (source == CONTROL_SOURCE_WEBSOCKET &&
       (g_pendingWifiAction != WIFI_ACTION_NONE ||
        g_staAssociationState == STA_ASSOCIATION_CONNECTING)) return false;
+  if (source == CONTROL_SOURCE_BLE && (!g_bleConnected || !g_bleSecureConnection)) return false;
   uint32_t now = millis();
   if (g_activeControlSource == CONTROL_SOURCE_NONE) return true;
-  uint32_t lastActivity = (g_activeControlSource == CONTROL_SOURCE_WEBSOCKET) ? g_lastWsActivity : g_lastSerialActivity;
+  uint32_t lastActivity = g_lastSerialActivity;
+  if (g_activeControlSource == CONTROL_SOURCE_WEBSOCKET) lastActivity = g_lastWsActivity;
+  else if (g_activeControlSource == CONTROL_SOURCE_BLE) lastActivity = g_lastBleActivity;
   if (now - lastActivity > CONTROL_SOURCE_TIMEOUT_MS) return true;
+  if (source == CONTROL_SOURCE_BLE && g_activeControlSource == CONTROL_SOURCE_BLE &&
+      g_bleActiveGeneration != g_bleConnectionGeneration) return false;
   if (g_activeControlSource != source) return false;
   // A second socket cannot take over a live WS stream; USB retains its own lease.
   return source != CONTROL_SOURCE_WEBSOCKET || wsClient == g_wsControlOwner;
@@ -523,6 +801,10 @@ static void markControlActivity(ControlSource source, int16_t wsClient = -1) {
   } else if (source == CONTROL_SOURCE_SERIAL) {
     g_wsControlOwner = -1;
     g_lastSerialActivity = now;
+  } else if (source == CONTROL_SOURCE_BLE) {
+    g_wsControlOwner = -1;
+    g_lastBleActivity = now;
+    g_bleActiveGeneration = g_bleDispatchGeneration;
   }
 }
 
@@ -654,27 +936,44 @@ static inline void copy7_u16(uint16_t dst[7], const uint16_t src[7]) {
   for (int i = 0; i < 7; ++i) dst[i] = src[i];
 }
 
-// ----- Helper function to send u16 frame for POS,SPD,VEL,CURR and sendACK Packet ----
-static inline void sendU16Frame(uint8_t header, const uint16_t data[7]) {
-  uint8_t out[2 + 7*2];
-  out[0] = header;
-  out[1] = 0x00; // filler
-  for (int i = 0; i < 7; ++i) {
-    out[2 + 2*i + 0] = (uint8_t)(data[i] & 0xFF);
-    out[2 + 2*i + 1] = (uint8_t)((data[i] >> 8) & 0xFF);
+// ----- Source-aware host frame output ----
+static void sendHostPacket(const uint8_t* packet, size_t length) {
+  if (g_hostResponseSource == CONTROL_SOURCE_BLE) {
+    const uint32_t generation = g_hostResponseGeneration;
+    const uint16_t connHandle = g_hostResponseConnHandle;
+    if (g_bleResponseCharacteristic && bleDispatchConnectionIsCurrent(generation, connHandle)) {
+      g_bleResponseCharacteristic->setValue(packet, length);
+      // Do not hold a spinlock across NimBLE calls or use a newly connected peer's handle.
+      if (bleDispatchConnectionIsCurrent(generation, connHandle)) {
+        g_bleResponseCharacteristic->notify(connHandle);
+      }
+    }
+    return;
   }
-  Serial.write(out, sizeof(out));
+  Serial.write(packet, length);
 }
+
+static inline void sendU16Frame(uint8_t header, const uint16_t data[7]) {
+  uint8_t out[2 + 7 * 2];
+  out[0] = header;
+  out[1] = 0x00;
+  for (int i = 0; i < 7; ++i) {
+    out[2 + 2 * i] = (uint8_t)(data[i] & 0xFF);
+    out[3 + 2 * i] = (uint8_t)((data[i] >> 8) & 0xFF);
+  }
+  sendHostPacket(out, sizeof(out));
+}
+
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n) {
   uint8_t out[16];
   out[0] = header;
-  out[1] = 0x00; // filler
+  out[1] = 0x00;
   memset(out + 2, 0, 14);
   if (payload && n) {
     if (n > 14) n = 14;
     memcpy(out + 2, payload, n);
   }
-  Serial.write(out, sizeof(out));
+  sendHostPacket(out, sizeof(out));
 }
 
 // ----- Functions to Send POS, VEL, CURR, TEMP -----
@@ -889,46 +1188,71 @@ static bool handleSetTorCmd(const uint8_t* payload)
 }
 
 // ----- Returns true if a valid 16-byte frame was consumed and handled -----
-static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
+static bool handleHostFrame(uint8_t op, const uint8_t* payload, ControlSource source) {
+  g_hostResponseSource = source;
+  g_hostResponseGeneration = (source == CONTROL_SOURCE_BLE) ? g_bleDispatchGeneration : 0;
+  g_hostResponseConnHandle = (source == CONTROL_SOURCE_BLE) ? g_bleDispatchConnHandle : 0xFFFF;
   switch (op) {
     case CTRL_POS: {
-      if (!canAcceptControl(CONTROL_SOURCE_SERIAL)) {
-        return true;
-      }
-      cancelPendingWsTarget();
+      if (!canAcceptControl(source)) return true;
+
       int16_t pos[SERVO_COUNT];
+      float nextActuatorAngles[SERVO_COUNT];
+      float nextJointAngles[JOINT_COUNT];
+      float nextTargetJointAngles[JOINT_COUNT];
+      uint16_t torque_eff[SERVO_COUNT];
       for (int i = 0; i < SERVO_COUNT; ++i) {
         uint16_t u16 = (uint16_t)payload[2 * i] | ((uint16_t)payload[2 * i + 1] << 8);
         pos[i] = mapU16ToRaw((uint8_t)i, u16);
-        float lower = ACTUATION_LOWER_LIMITS[i];
-        float upper = ACTUATION_UPPER_LIMITS[i];
-        g_actuatorAngles[i] = lower + (((float)u16 / 65535.0f) * (upper - lower));
-        g_targetActuatorAngles[i] = g_actuatorAngles[i];
-      }
-
-      updateJointAnglesFromActuatorAngles(g_actuatorAngles, g_jointAngles);
-      copyCurrentJointAnglesToTargets();
-
-      uint16_t torque_eff[SERVO_COUNT];
-      for (int i = 0; i < SERVO_COUNT; ++i) {
+        const float lower = ACTUATION_LOWER_LIMITS[i];
+        const float upper = ACTUATION_UPPER_LIMITS[i];
+        nextActuatorAngles[i] = lower + (((float)u16 / 65535.0f) * (upper - lower));
         uint16_t base = g_torque[i];
-        if (isHot((uint8_t)i)) {
-          base = u16_min(base, HOT_TORQUE_LIMIT);
-        }
+        if (isHot((uint8_t)i)) base = u16_min(base, HOT_TORQUE_LIMIT);
         torque_eff[i] = base;
       }
+      updateJointAnglesFromActuatorAngles(nextActuatorAngles, nextJointAngles);
+      memcpy(nextTargetJointAngles, nextJointAngles, sizeof(nextJointAngles));
 
       if (gBusMux) xSemaphoreTake(gBusMux, portMAX_DELAY);
+      const bool bleFrameFresh = source != CONTROL_SOURCE_BLE ||
+          (bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle) &&
+           static_cast<uint32_t>(millis() - g_bleDispatchArrivedAtMs) < BLE_CTRL_POS_TTL_MS);
+      if (!bleFrameFresh || !canAcceptControl(source)) {
+        if (gBusMux) xSemaphoreGive(gBusMux);
+        return true;
+      }
       if (g_currentMode != MODE_POS) {
-        for (int i = 0; i < SERVO_COUNT; ++i) {
-          hlscl.ServoMode(SERVO_IDS[i]);
-        }
+        for (int i = 0; i < SERVO_COUNT; ++i) hlscl.ServoMode(SERVO_IDS[i]);
         g_currentMode = MODE_POS;
       }
       hlscl.SyncWritePosEx((uint8_t*)SERVO_IDS, SERVO_COUNT, pos, g_speed, g_accel, torque_eff);
+      bool bleSessionStillCurrent = true;
+      if (source == CONTROL_SOURCE_BLE) {
+        portENTER_CRITICAL(&g_bleQueueMux);
+        bleSessionStillCurrent = g_bleConnected && g_bleSecureConnection &&
+            g_bleConnectionGeneration == g_bleDispatchGeneration &&
+            g_bleActiveConnHandle == g_bleDispatchConnHandle &&
+            static_cast<uint32_t>(millis() - g_bleDispatchArrivedAtMs) < BLE_CTRL_POS_TTL_MS;
+        if (bleSessionStillCurrent) {
+          cancelPendingWsTarget();
+          memcpy(g_actuatorAngles, nextActuatorAngles, sizeof(g_actuatorAngles));
+          memcpy(g_targetActuatorAngles, nextActuatorAngles, sizeof(g_targetActuatorAngles));
+          memcpy(g_jointAngles, nextJointAngles, sizeof(g_jointAngles));
+          memcpy(g_targetJointAngles, nextTargetJointAngles, sizeof(g_targetJointAngles));
+        }
+        portEXIT_CRITICAL(&g_bleQueueMux);
+      } else {
+        cancelPendingWsTarget();
+        memcpy(g_actuatorAngles, nextActuatorAngles, sizeof(g_actuatorAngles));
+        memcpy(g_targetActuatorAngles, nextActuatorAngles, sizeof(g_targetActuatorAngles));
+        memcpy(g_jointAngles, nextJointAngles, sizeof(g_jointAngles));
+        memcpy(g_targetJointAngles, nextTargetJointAngles, sizeof(g_targetJointAngles));
+      }
       if (gBusMux) xSemaphoreGive(gBusMux);
+      if (!bleSessionStillCurrent) return true;
 
-      markControlActivity(CONTROL_SOURCE_SERIAL);
+      markControlActivity(source);
       return true;
     }
 
@@ -973,9 +1297,11 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       return handleSetSpeedCmd(payload);
 
     case HOMING:
-      if (!canAcceptControl(CONTROL_SOURCE_SERIAL)) {
-        return true;
-      }
+      if (source == CONTROL_SOURCE_BLE && !bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle)) return true;
+      if (!canAcceptControl(source)) return true;
+      if (source == CONTROL_SOURCE_BLE &&
+          (!bleDispatchConnectionIsCurrent(g_bleDispatchGeneration, g_bleDispatchConnHandle) ||
+           static_cast<uint32_t>(millis() - g_bleDispatchArrivedAtMs) >= BLE_HOMING_TTL_MS)) return true;
       cancelPendingWsTarget();
       HOMING_start();
       saveExtendsToNVS();
@@ -988,7 +1314,7 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
         g_targetActuatorAngles[i] = 0.0f;
       }
       sendAckFrame(HOMING, nullptr, 0);
-      markControlActivity(CONTROL_SOURCE_SERIAL);
+      markControlActivity(source);
       return true;
 
     case SET_ID:
@@ -1020,6 +1346,42 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
     default:
       return true;
   }
+}
+
+static void setupBlePeripheral() {
+  NimBLEDevice::init("Aero Hand");
+  // Just Works bonding encrypts and bonds the link but does not authenticate the peer against MITM.
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+  g_bleServer = NimBLEDevice::createServer();
+  g_bleServer->setCallbacks(new AeroBleServerCallbacks());
+  NimBLEService* service = g_bleServer->createService(BLE_SERVICE_UUID);
+
+  NimBLECharacteristic* command = service->createCharacteristic(
+      BLE_COMMAND_UUID,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+  command->setCallbacks(new AeroBleCommandCallbacks());
+
+  g_bleResponseCharacteristic = service->createCharacteristic(
+      BLE_RESPONSE_UUID,
+      NIMBLE_PROPERTY::NOTIFY);
+
+  NimBLECharacteristic* identity = service->createCharacteristic(
+      BLE_IDENTITY_UUID,
+      NIMBLE_PROPERTY::READ);
+#if defined(LEFT_HAND)
+  identity->setValue("{\"firmware_type\":\"firmware_ws\",\"firmware_version\":\"v0.2.0\",\"hand_type\":\"Left\",\"protocol_version\":2,\"capabilities\":[\"CTRL_POS\",\"GET_POS\",\"HOMING\"]}");
+#elif defined(RIGHT_HAND)
+  identity->setValue("{\"firmware_type\":\"firmware_ws\",\"firmware_version\":\"v0.2.0\",\"hand_type\":\"Right\",\"protocol_version\":2,\"capabilities\":[\"CTRL_POS\",\"GET_POS\",\"HOMING\"]}");
+#else
+  identity->setValue("{\"firmware_type\":\"firmware_ws\",\"firmware_version\":\"v0.2.0\",\"hand_type\":\"Unknown\",\"protocol_version\":2,\"capabilities\":[\"CTRL_POS\",\"GET_POS\",\"HOMING\"]}");
+#endif
+  service->start();
+
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(BLE_SERVICE_UUID);
+  advertising->start();
 }
 
 void setup() {
@@ -1056,6 +1418,7 @@ void setup() {
   gBusMux =xSemaphoreCreateMutex();
   gMetricsMux = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(TaskSyncRead_Core1, "SyncRead", 4096, NULL, 1, NULL, 1); // run on Core1
+  setupBlePeripheral();
 
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, HIGH);
@@ -1877,6 +2240,7 @@ void broadcastJointStates() {
 
 void loop() {
   wsServer.loop();
+  processBleQueue();
   processStaAssociation();
   processApStartRetry();
   updateStaMdns();
@@ -1897,7 +2261,7 @@ void loop() {
     uint8_t op = g_serialFrameBuffer[0];
     if (!HOMING_isBusy()) {
       const uint8_t* payload = &g_serialFrameBuffer[2];
-      handleHostFrame(op, payload);
+      handleHostFrame(op, payload, CONTROL_SOURCE_SERIAL);
     }
     g_serialFrameIndex = 0;
     wsServer.loop();

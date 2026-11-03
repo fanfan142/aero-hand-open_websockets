@@ -109,7 +109,8 @@ fun GestureFollowPage(
                         GestureCalibrationControls(
                             state = cameraState,
                             onStartCalibration = onStartCalibration,
-                            onRecordCalibrationPose = onRecordCalibrationPose
+                            onRecordCalibrationPose = onRecordCalibrationPose,
+                            onRetryCalibrationPose = gestureService::retryCalibrationPose
                         )
                     },
                     modifier = Modifier

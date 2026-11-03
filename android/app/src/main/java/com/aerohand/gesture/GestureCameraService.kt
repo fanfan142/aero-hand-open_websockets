@@ -21,7 +21,6 @@ import androidx.lifecycle.Observer
 import com.google.mediapipe.tasks.core.Delegate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -31,14 +30,6 @@ class GestureCameraService(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner
 ) {
-    private data class GestureSample(
-        val hand: String,
-        val facing: GestureCameraFacing,
-        val mirrorMode: GestureMirrorMode,
-        val angles: FingerAngles,
-        val capturedAtMs: Long
-    )
-
     private data class ResolvedHand(
         val tracked: TrackedHand,
         val handedness: String
@@ -53,10 +44,8 @@ class GestureCameraService(
         private const val HAND_STATE_LOG_INTERVAL_MS = 1500L
         private const val DETECTION_BITMAP_MAX_SIDE = 256
         const val CALIBRATION_SAMPLE_MIN = 5
-        private const val CALIBRATION_SAMPLE_MAX_AGE_MS = 1500L
-        private const val CALIBRATION_SAMPLE_TARGET = 14
-        private const val SAMPLE_HISTORY_LIMIT = 40
-        private const val MAX_LOST_FRAME_MS = 240L
+        const val CALIBRATION_SAMPLE_INTERVAL_MS = 150L
+        const val CALIBRATION_SAMPLE_MIN_SPAN_MS = 600L
         private val FRONT_ANALYSIS_TARGET_SIZE = Size(320, 240)
         private val BACK_ANALYSIS_TARGET_SIZE = Size(320, 240)
     }
@@ -107,7 +96,11 @@ class GestureCameraService(
     private var pendingFacing = currentFacing()
     private var pendingMirror = currentMirror()
 
-    private val sampleHistory = ArrayDeque<GestureSample>()
+    private val calibrationCapture = CalibrationPoseCapture(
+        minimumSamples = CALIBRATION_SAMPLE_MIN,
+        minimumSampleIntervalMs = CALIBRATION_SAMPLE_INTERVAL_MS,
+        minimumSpanMs = CALIBRATION_SAMPLE_MIN_SPAN_MS
+    )
     private var calibrationIssue = ""
 
     private var latestProcessingFps = 0f
@@ -458,10 +451,8 @@ class GestureCameraService(
             return
         }
         val rawAngles = AeroHandRetargeter.retarget(chosen.tracked.raw, detectedHand)
-        val smoothedAngles = smoother.apply(
-            rawAngles, detectedHand, SystemClock.elapsedRealtime()
-        )
-        rememberSample(detectedHand, smoothedAngles)
+        val frameCapturedAtMs = SystemClock.elapsedRealtime()
+        val smoothedAngles = smoother.apply(rawAngles, detectedHand, frameCapturedAtMs)
 
         val activeProfile = activeProfileFor(detectedHand)
         val calibrationState = activeCalibrationState(detectedHand)
@@ -516,7 +507,8 @@ class GestureCameraService(
             smoothedAngles = smoothedAngles,
             calibratedAngles = calibratedAngles,
             calibrationState = calibrationState,
-            calibrationSampleCount = calibrationSamples(detectedHand).size.coerceAtMost(CALIBRATION_SAMPLE_MIN),
+            calibrationCaptureElapsedMs = oldState.calibrationCaptureElapsedMs,
+            calibrationSampleCount = if (calibrationCapture.isCollecting) calibrationCapture.sampleCount else 0,
             calibrationProfile = activeProfile,
             tuningProfile = tuningProfile,
             cameraFacing = currentFacing(),
@@ -541,6 +533,12 @@ class GestureCameraService(
                 oldState.frameWidth != previewSize.width ||
                 oldState.frameHeight != previewSize.height ||
                 oldState.trackerBackend != nextState.trackerBackend
+        )
+        updateCalibrationCapture(
+            hand = detectedHand,
+            targetMatched = targetMatched,
+            rawAngles = rawAngles,
+            capturedAtMs = frameCapturedAtMs
         )
     }
 
@@ -626,46 +624,110 @@ class GestureCameraService(
     @Synchronized
     fun startCalibration() {
         processingContextGeneration.incrementAndGet()
-        pendingOpen = FloatArray(GestureTuningChannel.entries.size) { 0f }
-        pendingFist = FloatArray(GestureTuningChannel.entries.size) { 0f }
+        pendingOpen.fill(0f)
+        pendingFist.fill(0f)
         pendingOpenThumbSwing = 0f
         pendingHandSide = ""
         pendingFacing = currentFacing()
         pendingMirror = currentMirror()
         calibrationIssue = ""
         resetDetectionLoop(clearSmoothing = true)
-        _controlFrame.value = GestureControlFrame(
-            false,
-            message = "校准进行中",
-            capturedAtMs = SystemClock.elapsedRealtime()
-        )
+        _controlFrame.value = GestureControlFrame(false, message = "校准进行中")
         publishUiState(
             _state.value.copy(
                 calibrationState = CalibrationState.CALIBRATING_OPEN,
+                calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+                calibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+                calibrationCaptureElapsedMs = 0L,
+                calibrationRetryState = CalibrationRetryState.NONE,
                 calibrationSampleCount = 0,
                 calibrationProfile = null,
-                feedbackMessage = "校准 1/3：张开目标手，至少采样 $CALIBRATION_SAMPLE_MIN 帧后记录张开"
+                feedbackMessage = "张开手，拇指向外展开。只放入一只目标手，摆好姿势后点击开始采集。"
             ),
             force = true
         )
     }
 
     @Synchronized
+    fun retryCalibrationPose(calibrationStep: CalibrationState) {
+        val state = _state.value
+        val allowed = when (state.calibrationRetryState) {
+            CalibrationRetryState.OPEN_FIST -> calibrationStep == CalibrationState.CALIBRATING_OPEN ||
+                calibrationStep == CalibrationState.CALIBRATING_FIST
+            CalibrationRetryState.THUMB_IN -> calibrationStep == CalibrationState.CALIBRATING_THUMB_IN
+            CalibrationRetryState.NONE -> false
+        }
+        if (!allowed) return
+        if (!sameCalibrationContext(state.handedness)) {
+            startCalibration()
+            return
+        }
+        if (calibrationStep == CalibrationState.CALIBRATING_OPEN) {
+            pendingOpen.fill(0f)
+            pendingOpenThumbSwing = 0f
+            pendingFist.fill(0f)
+        } else if (calibrationStep == CalibrationState.CALIBRATING_FIST) {
+            pendingFist.fill(0f)
+        }
+        calibrationIssue = ""
+        processingContextGeneration.incrementAndGet()
+        resetDetectionLoop(clearSmoothing = true)
+        publishUiState(
+            _state.value.copy(
+                calibrationState = calibrationStep,
+                calibrationRetryState = CalibrationRetryState.NONE,
+                calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+                calibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+                calibrationCaptureElapsedMs = 0L,
+                calibrationSampleCount = 0,
+                feedbackMessage = "旧样本已丢弃。摆好姿势后，请重新点击开始采集。"
+            ),
+            force = true
+        )
+    }
+
+    // Kept as the existing screen callback: tapping now ARMS capture, never records old frames.
+    @Synchronized
     fun recordCalibrationPose() {
         val state = _state.value
-        if (!state.handDetected || state.handedness.isBlank()) {
-            calibrationFailure(state, "校准失败：未检测到可识别的左右手")
+        if (!isCalibrating(state.calibrationState) || calibrationCapture.isCollecting ||
+            state.calibrationRetryState != CalibrationRetryState.NONE
+        ) return
+        if (!state.handDetected || state.rawHands.size > 1 || state.handedness !in setOf("Left", "Right") ||
+            !state.targetHandMatched || !targetHand.matches(state.handedness)
+        ) {
+            calibrationFailure(state, "请只放入一只可识别的目标手，再点击开始采集。")
             return
         }
-        if (!state.targetHandMatched) {
-            calibrationFailure(state, "校准失败：检测手与目标手不一致")
+        if (state.calibrationState != CalibrationState.CALIBRATING_OPEN &&
+            !sameCalibrationContext(state.handedness)
+        ) {
+            startCalibration()
             return
         }
-        val sample = medianCalibrationSample(state.handedness)
-        if (sample == null) {
-            calibrationFailure(state, "校准失败：有效采样不足 $CALIBRATION_SAMPLE_MIN 帧，请保持手掌入镜后重试")
-            return
-        }
+        // Invalidate inference started before this tap, and clear ALL old sample history.
+        processingContextGeneration.incrementAndGet()
+        resetDetectionLoop(clearSmoothing = true)
+        calibrationIssue = ""
+        calibrationCapture.arm(
+            CalibrationCaptureContext(state.handedness, currentFacing(), currentMirror(), targetHand),
+            SystemClock.elapsedRealtime()
+        )
+        _controlFrame.value = GestureControlFrame(false, message = "校准采集中")
+        publishUiState(
+            _state.value.copy(
+                calibrationCapturePhase = CalibrationCapturePhase.COLLECTING,
+                calibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+                calibrationCaptureElapsedMs = 0L,
+                calibrationSampleCount = 0,
+                feedbackMessage = "采集已开始，保持不动；稳定后自动确认。只点一次，不用连点5次。"
+            ),
+            force = true
+        )
+    }
+
+    private fun completeCalibrationPose(sample: FingerAngles) {
+        val state = _state.value
         calibrationIssue = ""
         when (state.calibrationState) {
             CalibrationState.CALIBRATING_OPEN -> {
@@ -677,72 +739,85 @@ class GestureCameraService(
                 processingContextGeneration.incrementAndGet()
                 resetDetectionLoop(clearSmoothing = true)
                 publishUiState(
-                    state.copy(
+                    _state.value.copy(
                         calibrationState = CalibrationState.CALIBRATING_FIST,
-                        calibrationSampleCount = 0,
-                        feedbackMessage = "校准 2/3：保持同一只${handLabel(state.handedness)}握拳，稳定后记录握拳"
+                        calibrationCaptureNotice = CalibrationCaptureNotice.READY,
+                        feedbackMessage = "张开已自动确认。只保留同一只手，握紧拳头后点击开始采集握拳。"
                     ),
                     force = true
                 )
             }
             CalibrationState.CALIBRATING_FIST -> {
-                if (!sameCalibrationContext(state.handedness)) {
-                    calibrationFailure(state, "校准失败：手别或摄像头已变化，请重新开始")
+                pendingFist = sample.toControlArray()
+                val pair = pendingProfile(sample.thumbSwing)
+                val failure = GestureCalibrationMapper.validateOpenFist(pair)
+                if (failure != null) {
+                    // The rejected fist can never be silently reused. Open is retained only for an explicit retry.
+                    pendingFist.fill(0f)
+                    calibrationValidationFailure(failure, CalibrationState.CALIBRATING_FIST)
                     return
                 }
-                pendingFist = sample.toControlArray()
                 processingContextGeneration.incrementAndGet()
                 resetDetectionLoop(clearSmoothing = true)
                 publishUiState(
-                    state.copy(
+                    _state.value.copy(
                         calibrationState = CalibrationState.CALIBRATING_THUMB_IN,
-                        calibrationSampleCount = 0,
-                        feedbackMessage = "校准 3/3：张开手并让拇指内收，稳定后记录拇指内收"
+                        calibrationCaptureNotice = CalibrationCaptureNotice.READY,
+                        feedbackMessage = "握拳已自动确认。其它四指张开，仅将拇指靠向食指，再点击开始采集拇指内收。"
                     ),
                     force = true
                 )
             }
             CalibrationState.CALIBRATING_THUMB_IN -> {
-                if (!sameCalibrationContext(state.handedness)) {
-                    calibrationFailure(state, "校准失败：手别或摄像头已变化，请重新开始")
+                val poseFailure = GestureCalibrationMapper.validateThumbPose(pendingOpen, sample.toControlArray())
+                if (poseFailure != null) {
+                    calibrationValidationFailure(poseFailure, CalibrationState.CALIBRATING_THUMB_IN)
                     return
                 }
-                val profile = GestureCalibrationProfile(
-                    schemaVersion = GestureCalibrationStore.SCHEMA_VERSION,
-                    handSide = state.handedness,
-                    cameraFacing = currentFacing(),
-                    mirrorMode = currentMirror(),
-                    openAngles = pendingOpen.copyOf(),
-                    fistAngles = pendingFist.copyOf(),
-                    openThumbSwing = pendingOpenThumbSwing,
-                    thumbInSwing = sample.thumbSwing
-                )
-                val validation = GestureCalibrationMapper.validate(profile)
-                if (validation != null) {
-                    calibrationFailure(state, validation)
+                val profile = pendingProfile(sample.thumbSwing)
+                val failure = GestureCalibrationMapper.validateOpenFist(profile)
+                    ?: GestureCalibrationMapper.validateThumbRange(profile)
+                if (failure != null) {
+                    if (failure.retryState == CalibrationRetryState.OPEN_FIST) pendingFist.fill(0f)
+                    calibrationValidationFailure(
+                        failure,
+                        if (failure.retryState == CalibrationRetryState.OPEN_FIST) CalibrationState.CALIBRATING_FIST
+                        else CalibrationState.CALIBRATING_THUMB_IN
+                    )
                     return
                 }
                 profiles[profile.key] = profile
                 calibrationStore.saveProfile(profile)
-                val smoothed = state.smoothedAngles
-                val calibrated = tuningProfile.applyTo(
-                    GestureCalibrationMapper.remap(profile, smoothed.toControlArray(), smoothed.thumbSwing)
-                )
+                processingContextGeneration.incrementAndGet()
+                resetDetectionLoop(clearSmoothing = true)
+                _controlFrame.value = GestureControlFrame(false, message = "校准完成，等待新的有效跟随帧")
                 publishUiState(
-                    state.copy(
+                    _state.value.copy(
                         calibrationState = CalibrationState.CALIBRATED,
-                        calibrationSampleCount = 0,
+                        calibrationCaptureNotice = CalibrationCaptureNotice.READY,
+                        calibrationRetryState = CalibrationRetryState.NONE,
                         calibrationProfile = profile,
-                        calibratedAngles = calibrated,
-                        tuningProfile = tuningProfile,
-                        feedbackMessage = "校准完成，当前${profile.cameraFacing.label}/${handLabel(profile.handSide)}实时跟随已启用"
+                        feedbackMessage = "校准完成，等待新的有效跟随帧。"
                     ),
                     force = true
                 )
             }
-            else -> startCalibration()
+            else -> Unit
         }
     }
+
+    private fun pendingProfile(thumbInSwing: Float) = GestureCalibrationProfile(
+        handSide = pendingHandSide,
+        cameraFacing = pendingFacing,
+        mirrorMode = pendingMirror,
+        openAngles = pendingOpen.copyOf(),
+        fistAngles = pendingFist.copyOf(),
+        openThumbSwing = pendingOpenThumbSwing,
+        thumbInSwing = thumbInSwing
+    )
+
+    private fun isCalibrating(state: CalibrationState): Boolean = state == CalibrationState.CALIBRATING_OPEN ||
+        state == CalibrationState.CALIBRATING_FIST || state == CalibrationState.CALIBRATING_THUMB_IN
 
     @Synchronized
     fun adjustTuning(
@@ -887,50 +962,83 @@ class GestureCameraService(
         }
     }
 
+    // Deterministic retargeted-frame seam shared by the analyzer and focused capture tests.
+    @Synchronized
+    internal fun updateCalibrationCapture(
+        hand: String,
+        targetMatched: Boolean,
+        rawAngles: FingerAngles,
+        capturedAtMs: Long
+    ) {
+        if (!calibrationCapture.isCollecting) return
+        val context = CalibrationCaptureContext(hand, currentFacing(), currentMirror(), targetHand)
+        when (val result = calibrationCapture.addFrame(context, targetMatched, rawAngles, capturedAtMs)) {
+            is CalibrationCaptureResult.Collecting -> {
+                publishUiState(
+                    _state.value.copy(
+                        calibrationCapturePhase = CalibrationCapturePhase.COLLECTING,
+                        calibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+                        calibrationCaptureElapsedMs = result.elapsedMs,
+                        calibrationSampleCount = result.sampleCount,
+                        feedbackMessage = if (result.restartedForInstability) {
+                            "姿势变化较大，已重新计时。保持不动，无需再点。"
+                        } else {
+                            "采集中，保持不动；稳定后自动确认。"
+                        }
+                    ),
+                    force = true
+                )
+            }
+            is CalibrationCaptureResult.Complete -> completeCalibrationPose(result.angles)
+            CalibrationCaptureResult.Cancelled -> interruptCalibrationCapture(
+                "手别、摄像头或帧间隔已变化，本次采集已丢弃。恢复目标手后请重新点击开始采集。"
+            )
+            CalibrationCaptureResult.Ignored -> Unit
+        }
+    }
+
+    private fun interruptCalibrationCapture(message: String) {
+        calibrationCapture.cancel()
+        calibrationIssue = message
+        _controlFrame.value = GestureControlFrame(false, message = message)
+        publishUiState(
+            _state.value.copy(
+                calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+                calibrationCaptureNotice = CalibrationCaptureNotice.INTERRUPTED,
+                calibrationCaptureElapsedMs = 0L,
+                calibrationSampleCount = 0,
+                feedbackMessage = message
+            ),
+            force = true
+        )
+    }
+
     private fun calibrationFailure(state: GestureCameraState, message: String) {
         calibrationIssue = message
-        publishUiState(state.copy(
-            feedbackMessage = message,
-            calibrationSampleCount = calibrationSamples(state.handedness).size.coerceAtMost(CALIBRATION_SAMPLE_MIN)
-        ), force = true)
+        publishUiState(state.copy(feedbackMessage = message, calibrationSampleCount = 0), force = true)
     }
 
-    private fun rememberSample(hand: String, angles: FingerAngles) {
-        val previous = sampleHistory.peekLast()
-        if (previous != null && (previous.hand != hand || previous.facing != currentFacing() ||
-                previous.mirrorMode != currentMirror())) {
-            sampleHistory.clear()
-        }
-        sampleHistory.addLast(
-            GestureSample(
-                hand = hand,
-                facing = currentFacing(),
-                mirrorMode = currentMirror(),
-                angles = angles,
-                capturedAtMs = SystemClock.elapsedRealtime()
-            )
+    private fun calibrationValidationFailure(
+        failure: CalibrationValidationFailure,
+        step: CalibrationState
+    ) {
+        calibrationIssue = failure.message
+        processingContextGeneration.incrementAndGet()
+        resetDetectionLoop(clearSmoothing = true)
+        _controlFrame.value = GestureControlFrame(false, message = failure.message)
+        publishUiState(
+            _state.value.copy(
+                calibrationState = step,
+                calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+                calibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+                calibrationCaptureElapsedMs = 0L,
+                calibrationRetryState = failure.retryState,
+                calibrationSampleCount = 0,
+                calibrationProfile = null,
+                feedbackMessage = failure.message
+            ),
+            force = true
         )
-        while (sampleHistory.size > SAMPLE_HISTORY_LIMIT) {
-            sampleHistory.removeFirst()
-        }
-    }
-
-    private fun calibrationSamples(hand: String): List<GestureSample> {
-        val now = SystemClock.elapsedRealtime()
-        return sampleHistory.filter {
-            it.hand == hand && it.facing == currentFacing() && it.mirrorMode == currentMirror() &&
-                now - it.capturedAtMs in 0L..CALIBRATION_SAMPLE_MAX_AGE_MS
-        }.takeLast(CALIBRATION_SAMPLE_TARGET)
-    }
-
-    private fun medianCalibrationSample(hand: String): FingerAngles? {
-        val candidates = calibrationSamples(hand).map { it.angles }
-        if (candidates.size < CALIBRATION_SAMPLE_MIN) return null
-        val values = FloatArray(GestureTuningChannel.entries.size) { index ->
-            candidates.map { it.toControlArray()[index] }.median()
-        }
-        val thumbSwing = candidates.map { it.thumbSwing }.median()
-        return anglesFromArray(values, thumbSwing)
     }
 
     private fun activeCalibrationState(hand: String): CalibrationState {
@@ -955,16 +1063,20 @@ class GestureCameraService(
         calibrationState: CalibrationState
     ): String {
         if (!targetMatched) {
-            return "当前检测到${handLabel(detectedHand)}，请切换到${targetHand.label}"
+            val handFeedback = "当前检测到${handLabel(detectedHand)}，请切换到${targetHand.label}"
+            return listOf(calibrationIssue, handFeedback).filter { it.isNotBlank() }.joinToString("\n")
         }
-        val instruction = when (calibrationState) {
-            CalibrationState.CALIBRATING_OPEN -> "校准 1/3：张开目标手，保持姿势并记录张开"
-            CalibrationState.CALIBRATING_FIST -> "校准 2/3：保持同一只手握拳并记录握拳"
-            CalibrationState.CALIBRATING_THUMB_IN -> "校准 3/3：张开手并让拇指靠向食指，记录拇指内收"
-            else -> null
-        }
-        if (instruction != null) {
-            return listOf(calibrationIssue, instruction).filter { it.isNotBlank() }.joinToString("\n")
+        if (isCalibrating(calibrationState)) {
+            if (_state.value.calibrationRetryState != CalibrationRetryState.NONE ||
+                _state.value.calibrationCaptureNotice == CalibrationCaptureNotice.INTERRUPTED
+            ) return _state.value.feedbackMessage
+            if (calibrationCapture.isCollecting) return _state.value.feedbackMessage
+            return when (calibrationState) {
+                CalibrationState.CALIBRATING_OPEN -> "只放入一只目标手，张开手和拇指后点击开始采集。"
+                CalibrationState.CALIBRATING_FIST -> "只保留同一只目标手，握紧拳头后点击开始采集。"
+                CalibrationState.CALIBRATING_THUMB_IN -> "只保留同一只目标手，其它四指张开，拇指靠向食指后点击开始采集。"
+                else -> ""
+            }
         }
         if (calibrationState != CalibrationState.CALIBRATED) {
             return calibrationFeedbackFor(detectedHand, profile)
@@ -1023,28 +1135,28 @@ class GestureCameraService(
         frameHeight: Int = _state.value.frameHeight,
         rawHands: List<MediaPipeRawHand> = emptyList()
     ) {
-        val now = System.currentTimeMillis()
         val capturedAtMs = SystemClock.elapsedRealtime()
         val oldState = _state.value
-        sampleHistory.clear()
-        val keepLastAngles = now - lastHandDetectedMs < MAX_LOST_FRAME_MS
-        val keepControl = keepLastAngles && rawHands.isEmpty() &&
-            oldState.targetHandMatched &&
-            oldState.calibrationState == CalibrationState.CALIBRATED
-        if (!keepControl) smoother.reset()
-        _controlFrame.value = if (keepControl) {
-            GestureControlFrame(true, oldState.calibratedAngles, message, capturedAtMs)
-        } else {
-            GestureControlFrame(false, message = message, capturedAtMs = capturedAtMs)
-        }
+        val interrupted = calibrationCapture.cancel()
+        val notice = if (interrupted) CalibrationCaptureNotice.INTERRUPTED else oldState.calibrationCaptureNotice
+        val feedback = listOf(
+            calibrationIssue.takeIf { oldState.calibrationRetryState != CalibrationRetryState.NONE },
+            message,
+            "本次采集已丢弃，请恢复目标手后重新点击开始采集。".takeIf { interrupted }
+        ).filterNotNull().joinToString("\n")
+        smoother.reset()
+        _controlFrame.value = GestureControlFrame(false, message = message, capturedAtMs = capturedAtMs)
         publishUiState(
             oldState.copy(
                 handDetected = false,
                 handedness = "",
                 targetHand = targetHand,
                 targetHandMatched = targetHand == GestureTargetHand.AUTO,
+                calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+                calibrationCaptureNotice = notice,
+                calibrationCaptureElapsedMs = 0L,
                 calibrationSampleCount = 0,
-                feedbackMessage = message,
+                feedbackMessage = feedback,
                 fps = fps,
                 frameWidth = frameWidth,
                 frameHeight = frameHeight,
@@ -1178,7 +1290,13 @@ class GestureCameraService(
         processedFrameCount = 0L
         lastHandStateLogMs = 0L
         lastHandStateSignature = ""
-        sampleHistory.clear()
+        val interrupted = calibrationCapture.cancel()
+        _state.value = _state.value.copy(
+            calibrationCapturePhase = CalibrationCapturePhase.IDLE,
+            calibrationCaptureNotice = if (interrupted) CalibrationCaptureNotice.INTERRUPTED else CalibrationCaptureNotice.NONE,
+            calibrationCaptureElapsedMs = 0L,
+            calibrationSampleCount = 0
+        )
         if (clearSmoothing) {
             smoother.reset()
         }
@@ -1188,14 +1306,4 @@ class GestureCameraService(
         return if (rotation == 90 || rotation == 270) Size(height, width) else Size(width, height)
     }
 
-    private fun List<Float>.median(): Float {
-        if (isEmpty()) return 0f
-        val sorted = sorted()
-        val mid = sorted.size / 2
-        return if (sorted.size % 2 == 0) {
-            (sorted[mid - 1] + sorted[mid]) * 0.5f
-        } else {
-            sorted[mid]
-        }
-    }
 }

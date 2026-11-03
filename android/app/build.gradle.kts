@@ -16,8 +16,8 @@ android {
 
         // CI_VERSION_CODE / CI_VERSION_NAME 由 workflow 通过 -P 传入。
         // 云端使用同一提交的提交计数，确保 Debug 与 Release 的 versionCode 一致且单调递增。
-        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 100158
-        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.5.8"
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 100160
+        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.6.0"
 
         vectorDrawables {
             useSupportLibrary = true

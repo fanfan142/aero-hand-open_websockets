@@ -36,7 +36,7 @@ jobs:
           python "build_versions.py"
 
       - name: Check recommended firmware binaries
-        run: python "scripts/check_firmware_contract.py" "firmware_ws_build/firmware_v0.2.0_lefthand.bin" "firmware_ws_build/firmware_v0.2.0_righthand.bin"
+        run: python "scripts/check_firmware_contract.py" --require-ble "firmware_ws_build/firmware_v0.2.0_lefthand.bin" "firmware_ws_build/firmware_v0.2.0_righthand.bin"
 
       - name: List built firmware
         run: |
@@ -66,6 +66,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Aero Hand Firmware ${{ github.ref_name }}
           make_latest: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             Aero Hand WebSocket 固件正式发布。
 

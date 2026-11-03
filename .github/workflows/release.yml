@@ -126,12 +126,15 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Aero Hand Console ${{ github.ref_name }}
           make_latest: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            Android 正式发布构建。
+            Android 云端签名构建。带预发布后缀的标签为候选版，不代表已通过真机验收。
 
             - Commit: ${{ github.sha }}
             - Workflow: ${{ github.workflow }}
-            - WiFi 配网需搭配同一 Release 中声明 protocol_version=2 的 v0.2.0 左右手固件
+            - WiFi / USB / BLE 请搭配同一 Release 中的 v0.2.0 左右手固件；旧固件没有 BLE 服务
+            - BLE 使用加密绑定的 Just Works 配对，不具备 MITM 身份认证；首次测试请勿连接执行器
+            - 手机校准、无线往返与机械手低速安全验收记录见仓库 docs；云端绿灯不能替代真机结果
           generate_release_notes: true
 
       - name: Upload APK to release
@@ -144,7 +147,7 @@ jobs:
             "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/ANDROID_SHA256SUMS.txt" --clobber
 
       - name: Mark release latest after APK and firmware assets are ready
-        if: success()
+        if: success() && !contains(github.ref_name, '-')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
