@@ -15,10 +15,12 @@ import org.mockito.Mockito.`when`
 import org.mockito.Mockito.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @OptIn(TransformExperimental::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class GesturePreviewTransformTest {
     @Test
     fun croppedMediaPipePointsMatchPreviewAcrossRotationsMirroringAndLetterboxing() {
