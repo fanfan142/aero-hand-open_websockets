@@ -62,6 +62,13 @@ static uint32_t g_staConnectionStartedAt = 0;
 static bool g_staFallbackToAp = false;
 static bool g_staSetDualOnSuccess = false;
 static constexpr uint32_t STA_ASSOCIATION_TIMEOUT_MS = 15000;
+static bool g_apConfigOk = false;
+static bool g_apStarted = false;
+static bool g_apRetryPending = false;
+static uint8_t g_apStartAttempts = 0;
+static uint32_t g_apRetryAt = 0;
+static constexpr uint8_t AP_START_MAX_ATTEMPTS = 3;
+static constexpr uint32_t AP_START_RETRY_INTERVAL_MS = 1000;
 
 // 前置声明 (这些函数在原代码中定义较晚，但被更早的函数调用)
 static inline void sendAckFrame(uint8_t header, const uint8_t* payload, size_t n);
@@ -128,6 +135,7 @@ static const uint8_t GET_POS   = 0x22;
 static const uint8_t GET_VEL   = 0x23;
 static const uint8_t GET_CURR  = 0x24;
 static const uint8_t GET_TEMP  = 0x25;
+static const uint8_t GET_WIFI_DIAG = 0x26;
 static const uint8_t SET_SPE   = 0x31;
 static const uint8_t SET_TOR   = 0x32;
 
@@ -699,6 +707,21 @@ void sendTemps() {
   sendU16Frame(GET_TEMP, buf);
 }
 
+// Read-only diagnostic payload: mode, AP setup/start, retries, clients, AP IP, STA status.
+static void sendWifiDiagnostics() {
+  uint8_t payload[14] = {0};
+  IPAddress apIp = WiFi.softAPIP();
+  payload[0] = static_cast<uint8_t>(WiFi.getMode());
+  payload[1] = g_apConfigOk ? 1 : 0;
+  payload[2] = g_apStarted ? 1 : 0;
+  payload[3] = g_apStartAttempts;
+  payload[4] = g_apRetryPending ? 1 : 0;
+  payload[5] = static_cast<uint8_t>(WiFi.softAPgetStationNum());
+  for (uint8_t i = 0; i < 4; ++i) payload[6 + i] = apIp[i];
+  payload[10] = static_cast<uint8_t>(WiFi.status());
+  sendAckFrame(GET_WIFI_DIAG, payload, sizeof(payload));
+}
+
 // ----- Task - Sync Read running always on Core 1 -----
 static void TaskSyncRead_Core1(void *arg) {
   uint8_t  rx[REG_BLOCK_LEN];          // 15 bytes
@@ -990,6 +1013,10 @@ static bool handleHostFrame(uint8_t op, const uint8_t* payload) {
       sendCurrents();
       return true;
 
+    case GET_WIFI_DIAG:
+      sendWifiDiagnostics();
+      return true;
+
     default:
       return true;
   }
@@ -1279,27 +1306,51 @@ static void updateStaMdns(bool immediate = false) {
     }
 }
 
+static void attemptApStart() {
+    if (g_apStartAttempts > 0) {
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_AP);
+        WiFi.setSleep(false);
+    }
+    ++g_apStartAttempts;
+    IPAddress apIp(192, 168, 4, 1);
+    IPAddress apGateway(192, 168, 4, 1);
+    IPAddress apSubnet(255, 255, 255, 0);
+    g_apConfigOk = WiFi.softAPConfig(apIp, apGateway, apSubnet);
+    g_apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
+    g_apRetryPending = !g_apStarted &&
+        g_apStartAttempts < AP_START_MAX_ATTEMPTS;
+    if (g_apRetryPending) g_apRetryAt = millis() + AP_START_RETRY_INTERVAL_MS;
+    DEBUG_PRINTF("[WIFI] AP attempt=%u config=%s started=%s ssid=%s ip=%s\n",
+                 g_apStartAttempts,
+                 g_apConfigOk ? "ok" : "fail",
+                 g_apStarted ? "ok" : "fail",
+                 AP_SSID,
+                 WiFi.softAPIP().toString().c_str());
+}
+
+static void processApStartRetry() {
+    if (!g_apRetryPending || (int32_t)(millis() - g_apRetryAt) < 0) return;
+    g_apRetryPending = false;
+    attemptApStart();
+}
+
 void startApMode() {
     cancelWebSocketControlLease();
     g_staAssociationState = STA_ASSOCIATION_IDLE;
     g_staFallbackToAp = false;
     g_staSetDualOnSuccess = false;
+    g_apConfigOk = false;
+    g_apStarted = false;
+    g_apRetryPending = false;
+    g_apStartAttempts = 0;
     stopStaMdns();
     WiFi.persistent(false);
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true, false);
     WiFi.mode(WIFI_AP);
     WiFi.setSleep(false);
-    IPAddress apIp(192, 168, 4, 1);
-    IPAddress apGateway(192, 168, 4, 1);
-    IPAddress apSubnet(255, 255, 255, 0);
-    bool configOk = WiFi.softAPConfig(apIp, apGateway, apSubnet);
-    bool started = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, WS_MAX_CLIENTS);
-    DEBUG_PRINTF("[WIFI] AP config=%s started=%s ssid=%s ip=%s\n",
-                 configOk ? "ok" : "fail",
-                 started ? "ok" : "fail",
-                 AP_SSID,
-                 WiFi.softAPIP().toString().c_str());
+    attemptApStart();
 }
 
 void connectToSta(bool fallbackToAp, bool setDualOnSuccess) {
@@ -1311,6 +1362,10 @@ void connectToSta(bool fallbackToAp, bool setDualOnSuccess) {
         return;
     }
 
+    g_apConfigOk = false;
+    g_apStarted = false;
+    g_apRetryPending = false;
+    g_apStartAttempts = 0;
     cancelWebSocketControlLease();
     stopStaMdns();
     WiFi.softAPdisconnect(true);
@@ -1823,6 +1878,7 @@ void broadcastJointStates() {
 void loop() {
   wsServer.loop();
   processStaAssociation();
+  processApStartRetry();
   updateStaMdns();
 
   uint8_t serialBytes = 0;

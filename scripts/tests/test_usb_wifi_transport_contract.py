@@ -47,6 +47,29 @@ def test_usb_ctrl_pos_updates_joint_cache_and_targets_without_changing_frame_dec
     assert ctrl_pos.index("updateJointAnglesFromActuatorAngles") < ctrl_pos.index("markControlActivity")
 
 
+def test_ap_start_retries_are_bounded_and_reported_over_read_only_usb_query() -> None:
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start_ap = function_body(source, "void startApMode()")
+    attempt_ap = function_body(source, "static void attemptApStart()")
+    retry_ap = function_body(source, "static void processApStartRetry()")
+    diagnostics = function_body(source, "static void sendWifiDiagnostics()")
+    host_frames = function_body(source, "static bool handleHostFrame(")
+    loop = function_body(source, "void loop()")
+
+    assert "attemptApStart();" in start_ap
+    assert "g_apStartAttempts < AP_START_MAX_ATTEMPTS" in attempt_ap
+    assert "WiFi.softAPConfig" in attempt_ap
+    assert "WiFi.softAP(AP_SSID" in attempt_ap
+    assert "AP_START_RETRY_INTERVAL_MS" in attempt_ap
+    assert "g_apRetryPending" in retry_ap
+    assert "case GET_WIFI_DIAG:" in host_frames
+    assert "sendWifiDiagnostics();" in host_frames
+    assert "WiFi.getMode()" in diagnostics
+    assert "WiFi.softAPgetStationNum()" in diagnostics
+    assert "WiFi.softAPIP()" in diagnostics
+    assert "processApStartRetry();" in loop
+
+
 def test_sta_association_is_loop_driven_with_deadline_and_ap_fallback() -> None:
     source = FIRMWARE.read_text(encoding="utf-8")
     connect = function_body(source, "void connectToSta(")
