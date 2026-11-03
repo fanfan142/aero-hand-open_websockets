@@ -173,8 +173,8 @@ class GestureCalibrationControlsTest {
         val preview = compose.onNodeWithTag("preview").getUnclippedBoundsInRoot()
         assertTrue(panel.top >= preview.top && panel.bottom <= preview.bottom)
         assertTrue(panel.left >= preview.left && panel.right <= preview.right)
-        assertEquals(280.dp, preview.width)
-        assertEquals(240.dp, preview.height)
+        assertEquals(280.dp, preview.right - preview.left)
+        assertEquals(240.dp, preview.bottom - preview.top)
     }
 
     private fun readyState() = GestureCameraState(
