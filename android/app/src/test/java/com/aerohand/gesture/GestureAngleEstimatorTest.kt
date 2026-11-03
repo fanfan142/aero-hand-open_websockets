@@ -22,6 +22,8 @@ class GestureAngleEstimatorTest {
         val input = listOf(GestureLandmark(0.2f, 0.3f, 0.4f))
         val display = GestureLandmarkTransforms.forPreview(
             landmarks = input,
+            cropLeft = 0,
+            cropTop = 0,
             cropWidth = 200,
             cropHeight = 100,
             previewWidth = 100,
@@ -48,6 +50,8 @@ class GestureAngleEstimatorTest {
         val angles = AeroHandRetargeter.retarget(withWorld, "Right")
         val display = GestureLandmarkTransforms.forPreview(
             landmarks = withWorld.normalizedLandmarks,
+            cropLeft = 0,
+            cropTop = 0,
             cropWidth = 200,
             cropHeight = 100,
             previewWidth = 100,

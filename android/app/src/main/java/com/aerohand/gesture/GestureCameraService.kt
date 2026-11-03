@@ -14,7 +14,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.camera.view.TransformExperimental
 import androidx.camera.view.transform.CoordinateTransform
-import androidx.camera.view.transform.ImageProxyTransformFactory
 import androidx.camera.view.transform.OutputTransform
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -62,10 +61,7 @@ class GestureCameraService(
 
     private val calibrationStore = GestureCalibrationStore(context)
     private val frameConverter = GestureFrameConverter(DETECTION_BITMAP_MAX_SIDE)
-    private val imageProxyTransformFactory = ImageProxyTransformFactory().apply {
-        setUsingCropRect(true)
-        setUsingRotationDegrees(true)
-    }
+    private val imageProxyTransformFactory = gesturePreviewTransformFactory()
     private val smoother = GestureSmoother()
 
     private var cameraProvider: ProcessCameraProvider? = null
@@ -441,6 +437,8 @@ class GestureCameraService(
         val mappedPreviewLandmarks = if (transform != null && previewSize.width > 0 && previewSize.height > 0) {
             GestureLandmarkTransforms.forPreview(
                 landmarks = chosen.tracked.landmarks,
+                cropLeft = frame.cropLeft,
+                cropTop = frame.cropTop,
                 cropWidth = frame.cropWidth,
                 cropHeight = frame.cropHeight,
                 previewWidth = previewSize.width,

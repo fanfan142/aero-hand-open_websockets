@@ -7,6 +7,8 @@ package com.aerohand.gesture
 object GestureLandmarkTransforms {
     fun forPreview(
         landmarks: List<GestureLandmark>,
+        cropLeft: Int,
+        cropTop: Int,
         cropWidth: Int,
         cropHeight: Int,
         previewWidth: Int,
@@ -18,8 +20,8 @@ object GestureLandmarkTransforms {
         }
         return landmarks.map { landmark ->
             val point = floatArrayOf(
-                landmark.x * cropWidth,
-                landmark.y * cropHeight
+                cropLeft + landmark.x * cropWidth,
+                cropTop + landmark.y * cropHeight
             )
             mapPoint(point)
             landmark.copy(x = point[0] / previewWidth, y = point[1] / previewHeight)
