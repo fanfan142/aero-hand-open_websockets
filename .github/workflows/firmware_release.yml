@@ -51,6 +51,7 @@ jobs:
           test -n "$(ls -A firmware_release)"
           echo "=== Firmware package contents ==="
           ls -la firmware_release/
+          (cd firmware_release && sha256sum firmware_v*.bin > FIRMWARE_SHA256SUMS.txt)
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
