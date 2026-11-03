@@ -59,6 +59,28 @@ class GestureControlLogicTest {
     }
 
     @Test
+    fun calibrationRejectsThumbMovingAwayFromIndexForEitherHand() {
+        for (hand in listOf("Left", "Right")) {
+            val profile = calibrationProfile(
+                hand = hand, openThumbSwing = 50f, thumbInSwing = 10f
+            )
+            val failure = GestureCalibrationMapper.validateThumbRange(profile)
+            assertNotNull("Outward movement must not become the thumb-in endpoint", failure)
+            assertEquals(CalibrationRetryState.THUMB_IN, failure!!.retryState)
+        }
+    }
+
+    @Test
+    fun calibrationAcceptsInwardThumbMovementAtMinimumRange() {
+        for (hand in listOf("Left", "Right")) {
+            val profile = calibrationProfile(
+                hand = hand, openThumbSwing = 30f, thumbInSwing = 42f
+            )
+            assertNull(GestureCalibrationMapper.validateThumbRange(profile))
+        }
+    }
+
+    @Test
     fun captureIgnoresPreTapFramesAndRequiresFiveSpacedStableFrames() {
         val capture = CalibrationPoseCapture()
         val context = CalibrationCaptureContext("Right", GestureCameraFacing.FRONT, GestureMirrorMode.SELFIE, GestureTargetHand.AUTO)

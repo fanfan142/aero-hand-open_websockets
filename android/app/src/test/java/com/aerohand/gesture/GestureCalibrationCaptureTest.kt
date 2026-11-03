@@ -146,6 +146,18 @@ class GestureCalibrationCaptureTest {
     }
 
     @Test
+    fun outwardThumbPoseCannotBeSavedOrAuthorizeControl() {
+        service.startCalibration()
+        capture(open)
+        capture(fist)
+        capture(pose(10f, 10f))
+        assertEquals(CalibrationState.CALIBRATING_THUMB_IN, service.state.value.calibrationState)
+        assertEquals(CalibrationRetryState.THUMB_IN, service.state.value.calibrationRetryState)
+        assertTrue(GestureCalibrationStore(context).loadProfiles().isEmpty())
+        assertFalse(service.controlFrame.value.allowed)
+    }
+
+    @Test
     fun lossDiscardsAttemptAndReappearingHandCannotAutoResume() {
         service.startCalibration()
         detected()
