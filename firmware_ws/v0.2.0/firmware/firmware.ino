@@ -421,7 +421,7 @@ class AeroBleServerCallbacks : public NimBLEServerCallbacks {
 class AeroBleCommandCallbacks : public NimBLECharacteristicCallbacks {
  public:
   void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override {
-    const NimBLEAttValue& value = characteristic->getAttVal();
+    const NimBLEAttValue value = characteristic->getValue();
     if (!connInfo.isEncrypted() || !connInfo.isBonded() || value.size() != 16) return;
     const uint8_t* frame = value.data();
     const uint8_t op = frame[0];
