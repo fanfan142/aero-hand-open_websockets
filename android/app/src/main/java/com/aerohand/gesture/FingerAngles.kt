@@ -91,7 +91,7 @@ data class GestureTuningProfile(
 }
 
 data class GestureCalibrationProfile(
-    val schemaVersion: Int = 5,
+    val schemaVersion: Int = GestureCalibrationStore.SCHEMA_VERSION,
     val handSide: String = "",
     val cameraFacing: GestureCameraFacing = GestureCameraFacing.FRONT,
     val mirrorMode: GestureMirrorMode = GestureMirrorMode.SELFIE,
@@ -148,6 +148,7 @@ data class GestureCameraState(
     val frameWidth: Int = 0,
     val frameHeight: Int = 0,
     val trackerBackend: String = "",
+    val rawHands: List<MediaPipeRawHand> = emptyList(),
     val landmarks: List<GestureLandmark> = emptyList()
 )
 

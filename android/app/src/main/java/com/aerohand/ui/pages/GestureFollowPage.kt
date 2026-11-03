@@ -50,7 +50,6 @@ import androidx.core.content.ContextCompat
 import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.FingerAngles
 import com.aerohand.gesture.GestureCameraService
-import com.aerohand.gesture.GestureCameraFacing
 import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.gesture.GestureTuningChannel
 import com.aerohand.gesture.GestureTuningProfile
@@ -91,12 +90,7 @@ fun GestureFollowPage(
     // Visibility state for status overlay
     var showStatusOverlay by remember { mutableStateOf(true) }
     var showSkeletonOverlay by remember { mutableStateOf(true) }
-    var mirrorSkeletonOverlay by remember { mutableStateOf(cameraState.cameraFacing == GestureCameraFacing.FRONT) }
     var selectedTuningChannel by remember { mutableStateOf(GestureTuningChannel.THUMB_ABD) }
-
-    LaunchedEffect(cameraState.cameraFacing) {
-        mirrorSkeletonOverlay = cameraState.cameraFacing == GestureCameraFacing.FRONT
-    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -128,7 +122,6 @@ fun GestureFollowPage(
                             landmarks = cameraState.landmarks,
                             frameWidth = cameraState.frameWidth,
                             frameHeight = cameraState.frameHeight,
-                            mirrorX = mirrorSkeletonOverlay,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -194,19 +187,6 @@ fun GestureFollowPage(
                             ) {
                                 Text(
                                     text = if (showSkeletonOverlay) "骨架开" else "骨架关",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                )
-                            }
-
-                            Surface(
-                                modifier = Modifier.clickable { mirrorSkeletonOverlay = !mirrorSkeletonOverlay },
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color.Black.copy(alpha = 0.6f)
-                            ) {
-                                Text(
-                                    text = if (mirrorSkeletonOverlay) "骨架镜像" else "骨架正常",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
@@ -321,6 +301,15 @@ fun GestureFollowPage(
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
+            )
+
+            Text(
+                text = cameraState.rawHands.firstOrNull()?.let { raw ->
+                    "MediaPipe 原始：${raw.category.ifBlank { "未知" }} · ${"%.2f".format(raw.confidence)} · " +
+                        "${raw.normalizedLandmarks.size} normalized · ${raw.worldLandmarks.size} world"
+                } ?: "MediaPipe 原始：等待识别",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             if (cameraState.feedbackMessage.isNotBlank()) {

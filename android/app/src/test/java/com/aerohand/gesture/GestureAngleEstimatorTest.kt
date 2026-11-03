@@ -18,21 +18,54 @@ class GestureAngleEstimatorTest {
     }
 
     @Test
-    fun previewTransformKeepsMediaPipeCoordinatesForOverlay() {
-        val rawLandmarks = sampleLandmarks()
-        val previewLandmarks = GestureLandmarkTransforms.forPreview(
-            landmarks = rawLandmarks,
-            rotationDegrees = 90,
-            mirrorMode = GestureMirrorMode.SELFIE
-        )
+    fun previewUsesMappedCropCoordinatesWithoutMutatingMediaPipeResults() {
+        val input = listOf(GestureLandmark(0.2f, 0.3f, 0.4f))
+        val display = GestureLandmarkTransforms.forPreview(
+            landmarks = input,
+            cropWidth = 200,
+            cropHeight = 100,
+            previewWidth = 100,
+            previewHeight = 200
+        ) { point ->
+            val x = point[0]
+            point[0] = 100f - point[1]
+            point[1] = x
+        }.single()
 
-        val rawAngles = GestureAngleEstimator.estimate(rawLandmarks, "Right")
+        assertEquals(0.7f, display.x, 0.0001f)
+        assertEquals(0.2f, display.y, 0.0001f)
+        assertEquals(0.4f, display.z, 0f)
+        assertEquals(GestureLandmark(0.2f, 0.3f, 0.4f), input.single())
+    }
 
-        assertEquals(rawLandmarks, previewLandmarks)
-        assertTrue(rawAngles.indexTendon in 85f..90f)
-        assertTrue(rawAngles.middleTendon < 2f)
-        assertTrue(rawAngles.ringTendon in 85f..90f)
-        assertTrue(rawAngles.pinkyTendon < 2f)
+    @Test
+    fun rawMediaPipeResultsRemainUnchangedAcrossRetargetingAndPreview() {
+        val landmarks = sampleLandmarks().toList()
+        val raw = MediaPipeRawHand(landmarks, "Right", 0.87f)
+        val withWorld = raw.copy(worldLandmarks = listOf(GestureLandmark(0.1f, 0.2f, 0.3f)))
+        val before = withWorld.copy(normalizedLandmarks = withWorld.normalizedLandmarks.toList())
+
+        val angles = AeroHandRetargeter.retarget(withWorld, "Right")
+        val display = GestureLandmarkTransforms.forPreview(
+            landmarks = withWorld.normalizedLandmarks,
+            cropWidth = 200,
+            cropHeight = 100,
+            previewWidth = 100,
+            previewHeight = 200
+        ) { point ->
+            val x = point[0]
+            point[0] = 100f - point[1]
+            point[1] = x
+        }
+
+        assertEquals(before, withWorld)
+        assertEquals(GestureLandmark(0.1f, 0.2f, 0.3f), withWorld.worldLandmarks.single())
+        assertEquals(21, raw.normalizedLandmarks.size)
+        assertEquals("Right", raw.category)
+        assertEquals(0.87f, raw.confidence, 0f)
+        assertTrue(angles.indexTendon in 85f..90f)
+        assertEquals(7, angles.toControlArray().size)
+        assertTrue(display != withWorld.normalizedLandmarks)
     }
 
     @Test

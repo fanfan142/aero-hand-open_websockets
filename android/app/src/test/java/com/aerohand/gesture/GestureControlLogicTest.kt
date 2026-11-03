@@ -80,23 +80,24 @@ class GestureControlLogicTest {
     }
 
     @Test
-    fun handednessResolutionDoesNotDependOnSelectedTargetOrCalibration() {
-        assertEquals(
-            "Left",
-            GestureHandednessResolver.resolve(
-                rawHandedness = "Right",
-                inferredHandedness = "Right",
-                mirrorMode = GestureMirrorMode.SELFIE
-            )
-        )
-        assertEquals(
-            "Right",
-            GestureHandednessResolver.resolve(
-                rawHandedness = "Right",
-                inferredHandedness = "Left",
-                mirrorMode = GestureMirrorMode.NORMAL
-            )
-        )
+    fun unmirroredCameraFramesKeepMediaPipeSubjectHandLabels() {
+        assertEquals("Left", GestureHandednessResolver.resolve("Left", inputMirrored = false))
+        assertEquals("Right", GestureHandednessResolver.resolve("Right", inputMirrored = false))
+    }
+
+    @Test
+    fun mirroredInputSwapsMediaPipeSubjectHandLabels() {
+        assertEquals("Right", GestureHandednessResolver.resolve("Left", inputMirrored = true))
+        assertEquals("Left", GestureHandednessResolver.resolve("Right", inputMirrored = true))
+    }
+
+    @Test
+    fun missingOrUnknownCategoryCannotAuthorizeEvenAutoControl() {
+        for (raw in listOf("", "Unknown", "Both")) {
+            val resolved = GestureHandednessResolver.resolve(raw, inputMirrored = false)
+            assertEquals("", resolved)
+            assertFalse(resolved.isNotBlank() && GestureTargetHand.AUTO.matches(resolved))
+        }
     }
 
     @Test
