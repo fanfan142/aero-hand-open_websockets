@@ -44,6 +44,16 @@ jobs:
           chmod +x "./gradlew"
           "./gradlew" :app:testDebugUnitTest -PCI_VERSION_NAME="${VERSION_NAME}" -PCI_VERSION_CODE="${APP_VERSION_CODE}" --stacktrace --no-daemon
 
+      - name: Upload Android unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-unit-test-reports
+          path: |
+            android/app/build/test-results/testDebugUnitTest/
+            android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+
       - name: Prepare signing keystore from secrets
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
