@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.camera.view.PreviewView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -25,6 +26,7 @@ import com.aerohand.gesture.CalibrationRetryState
 import com.aerohand.gesture.CalibrationState
 import com.aerohand.gesture.GestureCameraState
 import com.aerohand.gesture.GestureTargetHand
+import com.aerohand.gesture.configureGesturePreview
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -38,6 +40,15 @@ import org.robolectric.annotation.Config
 class GestureCalibrationControlsTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun previewStartsInCompatibleModeSoSkeletonTransformMatchesTheView() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val preview = PreviewView(context)
+        configureGesturePreview(preview)
+        assertEquals(PreviewView.ImplementationMode.COMPATIBLE, preview.implementationMode)
+        assertEquals(PreviewView.ScaleType.FIT_CENTER, preview.scaleType)
+    }
 
     @Test
     fun introductionExplainsPosesAndSingleTapAndFitsRealSmallContainer() {

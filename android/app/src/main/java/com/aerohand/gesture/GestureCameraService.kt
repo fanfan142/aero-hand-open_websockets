@@ -161,7 +161,7 @@ class GestureCameraService(
     @OptIn(TransformExperimental::class)
     private fun attachPreviewTransformObservers(previewView: PreviewView) {
         detachPreviewTransformObservers()
-        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        configureGesturePreview(previewView)
         val previewTransformListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             refreshPreviewTransform(previewView)
             if (previewView.viewPort != null && !_state.value.isRunning && !cameraSetupInProgress) {
