@@ -202,8 +202,10 @@ internal object GestureCalibrationMapper {
     private const val THUMB_POSE_FINGER_TOLERANCE_DEGREES = 18f
 
     fun validateOpenFist(profile: GestureCalibrationProfile): CalibrationValidationFailure? {
+        // Thumb CMC is a 2D proxy and often barely changes during a correct fist.
+        // Four-finger flexion still has to move in the closing direction.
         GestureTuningChannel.entries
-            .filter { it != GestureTuningChannel.THUMB_ABD }
+            .filter { it != GestureTuningChannel.THUMB_ABD && it != GestureTuningChannel.THUMB_CMC_FLEX }
             .forEach { channel ->
                 val index = channel.ordinal
                 val difference = profile.fistAngles[index] - profile.openAngles[index]

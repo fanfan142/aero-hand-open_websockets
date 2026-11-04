@@ -135,6 +135,17 @@ class GestureControlLogicTest {
     }
 
     @Test
+    fun openFistAcceptsStableThumbCmcWhenFourFingersBend() {
+        val profile = calibrationProfile().let { base ->
+            base.copy(
+                openAngles = base.openAngles.copyOf().also { it[1] = 20f },
+                fistAngles = base.fistAngles.copyOf().also { it[1] = 20f }
+            )
+        }
+        assertNull(GestureCalibrationMapper.validateOpenFist(profile))
+    }
+
+    @Test
     fun calibrationRejectsSwappedFourFingerPosesAndNamesChannel() {
         val profile = calibrationProfile()
         val inverted = profile.copy(openAngles = profile.openAngles.copyOf().apply { this[3] = 80f },
