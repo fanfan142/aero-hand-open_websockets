@@ -3,8 +3,6 @@ package com.aerohand.bluetooth
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothProfile
 import android.os.Looper
 import com.aerohand.websocket.buildSerialGetPositionsFrame
@@ -115,43 +113,12 @@ class BleTransportServiceTest {
 
     @Test
     fun encryptionProbeFailureEndsTheSessionInsteadOfLeavingItConnecting() {
-        val callback = callbackForCurrentGeneration()
-        val bleService = mock(BluetoothGattService::class.java)
-        val commandCharacteristic = mock(BluetoothGattCharacteristic::class.java)
-        val responseCharacteristic = mock(BluetoothGattCharacteristic::class.java)
-        val identityCharacteristic = mock(BluetoothGattCharacteristic::class.java)
-        val cccd = mock(BluetoothGattDescriptor::class.java)
-        `when`(commandCharacteristic.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_WRITE)
-        `when`(responseCharacteristic.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_NOTIFY)
-        `when`(identityCharacteristic.properties).thenReturn(BluetoothGattCharacteristic.PROPERTY_READ)
-        `when`(identityCharacteristic.value).thenReturn(
-            """{"firmware_type":"firmware_ws","firmware_version":"v0.2.0","hand_type":"Left","protocol_version":2,"capabilities":["CTRL_POS","GET_POS","HOMING"]}""".toByteArray()
-        )
-        `when`(responseCharacteristic.getDescriptor(BleProtocol.CCCD_UUID)).thenReturn(cccd)
-        `when`(bleService.getCharacteristic(BleProtocol.COMMAND_UUID)).thenReturn(commandCharacteristic)
-        `when`(bleService.getCharacteristic(BleProtocol.RESPONSE_UUID)).thenReturn(responseCharacteristic)
-        `when`(bleService.getCharacteristic(BleProtocol.IDENTITY_UUID)).thenReturn(identityCharacteristic)
-        `when`(gatt.getService(BleProtocol.SERVICE_UUID)).thenReturn(bleService)
-        `when`(gatt.setCharacteristicNotification(responseCharacteristic, true)).thenReturn(true)
-        `when`(gatt.writeDescriptor(cccd)).thenReturn(true)
-        `when`(gatt.readCharacteristic(identityCharacteristic)).thenReturn(true)
-        `when`(gatt.writeCharacteristic(commandCharacteristic)).thenReturn(false)
         setField("gatt", gatt)
         connectionState().value = BleConnectionState.Connecting("Aero Hand")
 
-        val handshake = scope.async(start = CoroutineStart.UNDISPATCHED) {
-            val method = BleTransportService::class.java.getDeclaredMethod(
-                "initializeGatt", java.lang.Long.TYPE, BluetoothGatt::class.java
-            ).apply { isAccessible = true }
-            method.invoke(service, field("generation") as Long, gatt)
-        }
-        mainLooper.idle()
-        callback.onDescriptorWrite(gatt, cccd, BluetoothGatt.GATT_SUCCESS)
-        mainLooper.idle()
-        callback.onCharacteristicRead(gatt, identityCharacteristic, BluetoothGatt.GATT_SUCCESS)
+        assertFalse(service.finishEncryptionProbe(field("generation") as Long, false))
         mainLooper.idle()
 
-        assertTrue(handshake.isCompleted)
         val error = service.connectionState.value
         assertTrue(error is BleConnectionState.Error)
         assertTrue((error as BleConnectionState.Error).message.contains("加密"))
