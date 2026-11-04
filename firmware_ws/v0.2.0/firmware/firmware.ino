@@ -1410,6 +1410,10 @@ void setup() {
   // USB CDC is exclusively the official 16-byte binary protocol.
   // Never emit text here, including during boot or homing.
 
+  // Advertise before servo homing. A board with no actuators can spend the
+  // full per-servo homing timeout before reaching this point otherwise.
+  setupBlePeripheral();
+
   esp_reset_reason_t reason = esp_reset_reason();
   bool do_homing = false;
   if (reason == ESP_RST_POWERON) {
@@ -1430,7 +1434,6 @@ void setup() {
   gBusMux =xSemaphoreCreateMutex();
   gMetricsMux = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(TaskSyncRead_Core1, "SyncRead", 4096, NULL, 1, NULL, 1); // run on Core1
-  setupBlePeripheral();
 
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, HIGH);
