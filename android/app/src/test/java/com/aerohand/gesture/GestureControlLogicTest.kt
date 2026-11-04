@@ -59,8 +59,106 @@ class GestureControlLogicTest {
     }
 
     @Test
+    fun calibrationRejectsThumbMovingAwayFromIndexForEitherHand() {
+        for (hand in listOf("Left", "Right")) {
+            val profile = calibrationProfile(
+                hand = hand, openThumbSwing = 50f, thumbInSwing = 10f
+            )
+            val failure = GestureCalibrationMapper.validateThumbRange(profile)
+            assertNotNull("Outward movement must not become the thumb-in endpoint", failure)
+            assertEquals(CalibrationRetryState.THUMB_IN, failure!!.retryState)
+        }
+    }
+
+    @Test
+    fun calibrationAcceptsInwardThumbMovementAtMinimumRange() {
+        for (hand in listOf("Left", "Right")) {
+            val profile = calibrationProfile(
+                hand = hand, openThumbSwing = 30f, thumbInSwing = 42f
+            )
+            assertNull(GestureCalibrationMapper.validateThumbRange(profile))
+        }
+    }
+
+    @Test
+    fun captureIgnoresPreTapFramesAndRequiresFiveSpacedStableFrames() {
+        val capture = CalibrationPoseCapture()
+        val context = CalibrationCaptureContext("Right", GestureCameraFacing.FRONT, GestureMirrorMode.SELFIE, GestureTargetHand.AUTO)
+        val angles = FingerAngles(indexTendon = 10f, thumbSwing = 50f)
+        assertEquals(CalibrationCaptureResult.Ignored, capture.addFrame(context, true, angles, 900L))
+        capture.arm(context, 1_000L)
+        assertEquals(CalibrationCaptureResult.Ignored, capture.addFrame(context, true, angles, 999L))
+        assertEquals(CalibrationCaptureResult.Ignored, capture.addFrame(context, true, angles, 1_000L))
+        repeat(5) { index ->
+            assertTrue(capture.addFrame(context, true, angles, 1_001L + index) is CalibrationCaptureResult.Collecting)
+        }
+        assertEquals(1, capture.sampleCount)
+        listOf(1_151L, 1_301L, 1_451L).forEach { time ->
+            assertTrue(capture.addFrame(context, true, angles, time) is CalibrationCaptureResult.Collecting)
+        }
+        val complete = capture.addFrame(context, true, angles, 1_601L) as CalibrationCaptureResult.Complete
+        assertEquals(600L, complete.elapsedMs)
+        assertEquals(angles.indexTendon, complete.angles.indexTendon, 0f)
+        assertFalse(capture.isCollecting)
+        assertEquals(0, capture.sampleCount)
+    }
+
+    @Test
+    fun captureChecksMotionBetweenSampleSlotsAndRestartsStableWindow() {
+        val capture = CalibrationPoseCapture()
+        val context = CalibrationCaptureContext("Right", GestureCameraFacing.FRONT, GestureMirrorMode.SELFIE, GestureTargetHand.AUTO)
+        capture.arm(context, 1_000L)
+        capture.addFrame(context, true, FingerAngles(indexTendon = 10f), 1_001L)
+        val changed = capture.addFrame(context, true, FingerAngles(indexTendon = 30f), 1_050L) as CalibrationCaptureResult.Collecting
+        assertTrue(changed.restartedForInstability)
+        assertEquals(0L, changed.elapsedMs)
+        assertEquals(1, changed.sampleCount)
+        listOf(1_200L, 1_350L, 1_500L).forEach { time ->
+            assertTrue(capture.addFrame(context, true, FingerAngles(indexTendon = 30f), time) is CalibrationCaptureResult.Collecting)
+        }
+        assertTrue(capture.addFrame(context, true, FingerAngles(indexTendon = 30f), 1_650L) is CalibrationCaptureResult.Complete)
+    }
+
+    @Test
+    fun captureCancellationCannotResumeWithoutArm() {
+        val capture = CalibrationPoseCapture()
+        val context = CalibrationCaptureContext("Right", GestureCameraFacing.FRONT, GestureMirrorMode.SELFIE, GestureTargetHand.AUTO)
+        capture.arm(context, 1_000L)
+        capture.addFrame(context, true, FingerAngles(), 1_001L)
+        assertEquals(CalibrationCaptureResult.Cancelled, capture.addFrame(context.copy(hand = "Left"), true, FingerAngles(), 1_151L))
+        assertEquals(CalibrationCaptureResult.Ignored, capture.addFrame(context, true, FingerAngles(), 1_301L))
+        capture.arm(context, 2_000L)
+        assertEquals(CalibrationCaptureResult.Cancelled, capture.addFrame(context.copy(mirrorMode = GestureMirrorMode.NORMAL), true, FingerAngles(), 2_001L))
+        capture.arm(context, 3_000L)
+        capture.addFrame(context, true, FingerAngles(), 3_001L)
+        assertEquals(CalibrationCaptureResult.Cancelled, capture.addFrame(context, true, FingerAngles(), 3_402L))
+    }
+
+    @Test
+    fun openFistAcceptsStableThumbCmcWhenFourFingersBend() {
+        val profile = calibrationProfile().let { base ->
+            base.copy(
+                openAngles = base.openAngles.copyOf().also { it[1] = 20f },
+                fistAngles = base.fistAngles.copyOf().also { it[1] = 20f }
+            )
+        }
+        assertNull(GestureCalibrationMapper.validateOpenFist(profile))
+    }
+
+    @Test
+    fun calibrationRejectsSwappedFourFingerPosesAndNamesChannel() {
+        val profile = calibrationProfile()
+        val inverted = profile.copy(openAngles = profile.openAngles.copyOf().apply { this[3] = 80f },
+            fistAngles = profile.fistAngles.copyOf().apply { this[3] = 10f })
+        val failure = GestureCalibrationMapper.validateOpenFist(inverted)!!
+        assertEquals(CalibrationRetryState.OPEN_FIST, failure.retryState)
+        assertTrue(failure.message, failure.message.contains("食指"))
+        assertTrue(failure.message, failure.message.contains("张开/握拳"))
+    }
+
+    @Test
     fun calibrationMapsRecordedEndpointsToFullControlRange() {
-        val profile = calibrationProfile(openThumbSwing = 30f, thumbInSwing = 10f)
+        val profile = calibrationProfile(openThumbSwing = 30f, thumbInSwing = 50f)
 
         val open = GestureCalibrationMapper.remap(
             profile = profile,
@@ -166,7 +264,7 @@ class GestureControlLogicTest {
 
     private fun calibrationProfile(
         openThumbSwing: Float = 30f,
-        thumbInSwing: Float = 10f,
+        thumbInSwing: Float = 50f,
         hand: String = "Right",
         facing: GestureCameraFacing = GestureCameraFacing.FRONT,
         mirror: GestureMirrorMode = GestureMirrorMode.SELFIE

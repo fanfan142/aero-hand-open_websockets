@@ -42,9 +42,42 @@ def test_usb_ctrl_pos_updates_joint_cache_and_targets_without_changing_frame_dec
     assert "payload[2 * i]" in ctrl_pos
     assert "payload[2 * i + 1]" in ctrl_pos
     assert "mapU16ToRaw((uint8_t)i, u16)" in ctrl_pos
-    assert "updateJointAnglesFromActuatorAngles(g_actuatorAngles, g_jointAngles);" in ctrl_pos
-    assert "copyCurrentJointAnglesToTargets();" in ctrl_pos
+    assert "updateJointAnglesFromActuatorAngles(nextActuatorAngles, nextJointAngles);" in ctrl_pos
+    assert "memcpy(nextTargetJointAngles, nextJointAngles, sizeof(nextJointAngles));" in ctrl_pos
+    for update in (
+        "memcpy(g_actuatorAngles, nextActuatorAngles, sizeof(g_actuatorAngles));",
+        "memcpy(g_targetActuatorAngles, nextActuatorAngles, sizeof(g_targetActuatorAngles));",
+        "memcpy(g_jointAngles, nextJointAngles, sizeof(g_jointAngles));",
+        "memcpy(g_targetJointAngles, nextTargetJointAngles, sizeof(g_targetJointAngles));",
+    ):
+        # BLE and USB both commit the same derived state, only after the servo write.
+        assert ctrl_pos.count(update) == 2
+        assert ctrl_pos.index("hlscl.SyncWritePosEx") < ctrl_pos.index(update)
+        assert ctrl_pos.rindex(update) < ctrl_pos.index("markControlActivity(source)")
     assert ctrl_pos.index("updateJointAnglesFromActuatorAngles") < ctrl_pos.index("markControlActivity")
+
+
+def test_ap_start_retries_are_bounded_and_reported_over_read_only_usb_query() -> None:
+    source = FIRMWARE.read_text(encoding="utf-8")
+    start_ap = function_body(source, "void startApMode()")
+    attempt_ap = function_body(source, "static void attemptApStart()")
+    retry_ap = function_body(source, "static void processApStartRetry()")
+    diagnostics = function_body(source, "static void sendWifiDiagnostics()")
+    host_frames = function_body(source, "static bool handleHostFrame(")
+    loop = function_body(source, "void loop()")
+
+    assert "attemptApStart();" in start_ap
+    assert "g_apStartAttempts < AP_START_MAX_ATTEMPTS" in attempt_ap
+    assert "WiFi.softAPConfig" in attempt_ap
+    assert "WiFi.softAP(AP_SSID" in attempt_ap
+    assert "AP_START_RETRY_INTERVAL_MS" in attempt_ap
+    assert "g_apRetryPending" in retry_ap
+    assert "case GET_WIFI_DIAG:" in host_frames
+    assert "sendWifiDiagnostics();" in host_frames
+    assert "WiFi.getMode()" in diagnostics
+    assert "WiFi.softAPgetStationNum()" in diagnostics
+    assert "WiFi.softAPIP()" in diagnostics
+    assert "processApStartRetry();" in loop
 
 
 def test_sta_association_is_loop_driven_with_deadline_and_ap_fallback() -> None:

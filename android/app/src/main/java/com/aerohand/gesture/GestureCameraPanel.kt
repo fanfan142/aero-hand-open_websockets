@@ -8,6 +8,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 
+import androidx.camera.view.PreviewView
+
+internal fun configureGesturePreview(previewView: PreviewView) {
+    // PERFORMANCE can ignore the view matrix used by CoordinateTransform.
+    // The skeleton is mapped through PreviewView.getOutputTransform(), which
+    // CameraX only guarantees in COMPATIBLE mode.
+    previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+    previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
+}
+
 private val HAND_CONNECTIONS = listOf(
     Pair(0, 1), Pair(1, 2), Pair(2, 3), Pair(3, 4),
     Pair(0, 5), Pair(5, 6), Pair(6, 7), Pair(7, 8),

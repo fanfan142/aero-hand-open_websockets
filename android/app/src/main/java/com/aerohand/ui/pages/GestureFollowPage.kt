@@ -53,6 +53,7 @@ import com.aerohand.gesture.GestureTargetHand
 import com.aerohand.gesture.GestureTuningChannel
 import com.aerohand.gesture.GestureTuningProfile
 import com.aerohand.gesture.SkeletonOverlay
+import com.aerohand.gesture.configureGesturePreview
 
 @Composable
 fun GestureFollowPage(
@@ -68,10 +69,7 @@ fun GestureFollowPage(
     val cameraState by gestureService.state.collectAsState()
     val hasVisibleSkeleton = cameraState.handDetected && cameraState.landmarks.size >= 21
     val previewView = remember {
-        PreviewView(context).apply {
-            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-        }
+        PreviewView(context).also(::configureGesturePreview)
     }
 
     var hasCameraPermission by remember {
@@ -109,7 +107,8 @@ fun GestureFollowPage(
                         GestureCalibrationControls(
                             state = cameraState,
                             onStartCalibration = onStartCalibration,
-                            onRecordCalibrationPose = onRecordCalibrationPose
+                            onRecordCalibrationPose = onRecordCalibrationPose,
+                            onRetryCalibrationPose = gestureService::retryCalibrationPose
                         )
                     },
                     modifier = Modifier

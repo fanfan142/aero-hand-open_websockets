@@ -26,7 +26,10 @@ jobs:
       - name: Install PlatformIO
         run: python -m pip install platformio==6.1.19
 
-      - name: Run firmware checker tests
+      - name: Require native compiler for BLE queue behavior harness
+        run: command -v g++ || command -v clang++
+
+      - name: Run firmware source-contract and BLE queue behavior tests
         run: python -m unittest discover -s "scripts/tests" -p "test_*.py" -v
 
       - name: Check firmware source contracts
@@ -38,6 +41,10 @@ jobs:
       - name: Prepare recommended v0.2.0 projects
         run: python -c "from scripts.build_versions import create_project; create_project('v0.2.0', 'lefthand'); create_project('v0.2.0', 'righthand')"
 
+      - name: Verify generated v0.2.0 BLE dependencies
+        run: >-
+          python -c "from pathlib import Path; configs = [Path('firmware_ws_build/v0.2.0/lefthand/platformio.ini').read_text(encoding='utf-8'), Path('firmware_ws_build/v0.2.0/righthand/platformio.ini').read_text(encoding='utf-8')]; assert all('platform = espressif32@6.10.0' in c and 'h2zero/NimBLE-Arduino@2.3.6' in c for c in configs)"
+
       - name: Build recommended v0.2.0 firmware
         run: |
           pio run -d "firmware_ws_build/v0.2.0/lefthand" -e "esp32-s3-devkitc-1"
@@ -47,6 +54,12 @@ jobs:
         run: >-
           python "scripts/check_firmware_contract.py"
           "esp32_wifi/firmware/aero_hand_wifi/.pio/build/aero_hand_wifi/firmware.bin"
+          "firmware_ws_build/v0.2.0/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
+          "firmware_ws_build/v0.2.0/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
+
+      - name: Require BLE UUIDs in recommended v0.2.0 binaries
+        run: >-
+          python "scripts/check_firmware_contract.py" --require-ble
           "firmware_ws_build/v0.2.0/lefthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
           "firmware_ws_build/v0.2.0/righthand/.pio/build/esp32-s3-devkitc-1/firmware.bin"
 

@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aerohand.viewmodel.ConnectionMode
 import com.aerohand.viewmodel.WifiConfigUiState
+import com.aerohand.bluetooth.BleScanDevice
 import com.aerohand.wifi.DiscoveredHand
 
 // ============== 连接面板 ==============
@@ -52,6 +53,12 @@ fun ConnectionPanel(
     port: String,
     wifiConnected: Boolean,
     usbConnected: Boolean,
+    bleConnected: Boolean,
+    bleDevices: List<BleScanDevice>,
+    bleSelectedAddress: String?,
+    bleScanning: Boolean,
+    bleConnecting: Boolean,
+    blePermissionRequired: Boolean,
     statusMessage: String,
     wifiConfig: WifiConfigUiState,
     discoveredHands: List<DiscoveredHand>,
@@ -61,6 +68,10 @@ fun ConnectionPanel(
     wifiProvisioningSupported: Boolean,
     firmwareVersion: String?,
     onModeChange: (ConnectionMode) -> Unit,
+    onRequestBlePermission: () -> Unit,
+    onScanBle: () -> Unit,
+    onSelectBleDevice: (String) -> Unit,
+    onConnectSelectedBleDevice: () -> Unit,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
     onConnect: () -> Unit,
@@ -79,12 +90,20 @@ fun ConnectionPanel(
     expanded: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val connected = if (mode == ConnectionMode.WIFI) wifiConnected else usbConnected
+    val connected = when (mode) {
+        ConnectionMode.WIFI -> wifiConnected
+        ConnectionMode.USB -> usbConnected
+        ConnectionMode.BLE -> bleConnected
+    }
     val gradient = Brush.horizontalGradient(
         listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.secondaryContainer)
     )
 
-    val selectedTab = if (mode == ConnectionMode.WIFI) 0 else 1
+    val selectedTab = when (mode) {
+        ConnectionMode.WIFI -> 0
+        ConnectionMode.USB -> 1
+        ConnectionMode.BLE -> 2
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -135,6 +154,11 @@ fun ConnectionPanel(
                         onClick = { onModeChange(ConnectionMode.USB) },
                         text = { Text("USB OTG") }
                     )
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick = { onModeChange(ConnectionMode.BLE) },
+                        text = { Text("Bluetooth") }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -176,6 +200,20 @@ fun ConnectionPanel(
                         1 -> UsbConnectionContent(
                             connected = usbConnected,
                             onConnect = onConnect,
+                            onDisconnect = onDisconnect
+                        )
+                        2 -> BleConnectionContent(
+                            connected = bleConnected,
+                            devices = bleDevices,
+                            selectedAddress = bleSelectedAddress,
+                            scanning = bleScanning,
+                            connecting = bleConnecting,
+                            permissionRequired = blePermissionRequired,
+                            statusMessage = statusMessage,
+                            onRequestPermission = onRequestBlePermission,
+                            onScan = onScanBle,
+                            onSelectDevice = onSelectBleDevice,
+                            onConnectSelected = onConnectSelectedBleDevice,
                             onDisconnect = onDisconnect
                         )
                     }
@@ -446,6 +484,92 @@ private fun WifiConnectionContent(
                     color = MaterialTheme.colorScheme.tertiary
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BleConnectionContent(
+    connected: Boolean,
+    devices: List<BleScanDevice>,
+    selectedAddress: String?,
+    scanning: Boolean,
+    connecting: Boolean,
+    permissionRequired: Boolean,
+    statusMessage: String,
+    onRequestPermission: () -> Unit,
+    onScan: () -> Unit,
+    onSelectDevice: (String) -> Unit,
+    onConnectSelected: () -> Unit,
+    onDisconnect: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Bluetooth LE · 加密配对 · 16 字节协议",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (permissionRequired) {
+            Text(
+                "需要附近设备权限才能扫描并连接。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            Button(onClick = onRequestPermission, modifier = Modifier.fillMaxWidth()) {
+                Text("授予蓝牙权限")
+            }
+        } else if (connected) {
+            Button(
+                onClick = onDisconnect,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) { Text("断开 BLE") }
+        } else if (connecting) {
+            Text(statusMessage, style = MaterialTheme.typography.bodySmall)
+            Button(
+                onClick = onDisconnect,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) { Text("取消连接") }
+        } else {
+            Button(onClick = onScan, enabled = !scanning, modifier = Modifier.fillMaxWidth()) {
+                Text(if (scanning) "正在搜索..." else "扫描 Aero Hand")
+            }
+        }
+        if (!connected && statusMessage.isNotBlank() && statusMessage != "BLE 未连接") {
+            Text(statusMessage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        devices.forEach { device ->
+            Button(
+                onClick = { onSelectDevice(device.address) },
+                enabled = !connected && !connecting,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (selectedAddress == device.address) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    },
+                    contentColor = if (selectedAddress == device.address) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    }
+                )
+            ) {
+                Column(horizontalAlignment = Alignment.Start) {
+                    Text(if (selectedAddress == device.address) "已选择 · ${device.name}" else device.name)
+                    Text("${device.address} · RSSI ${device.rssi} dBm", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (!connected && !connecting && selectedAddress != null) {
+            Button(onClick = onConnectSelected, modifier = Modifier.fillMaxWidth()) {
+                Text("连接所选设备")
+            }
+        }
+        if (!connected && !scanning && devices.isEmpty() && !permissionRequired) {
+            Text("未发现设备。请确认 Aero Hand 已开机并处于广播状态。", style = MaterialTheme.typography.bodySmall)
         }
     }
 }

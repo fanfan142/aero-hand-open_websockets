@@ -88,6 +88,34 @@ fun HandControlScreen() {
     ) {
         viewModel.scanWifiNetworks()
     }
+    val blePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        viewModel.onBlePermissionResult(results.isNotEmpty() && results.values.all { it })
+    }
+    val requestBlePermission = {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        blePermissionLauncher.launch(permissions)
+    }
+    val requestBleScan = {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (permissions.all {
+                androidx.core.content.ContextCompat.checkSelfPermission(context, it) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }) {
+            viewModel.startBleScan()
+        } else {
+            viewModel.onBlePermissionResult(false)
+            blePermissionLauncher.launch(permissions)
+        }
+    }
     val requestWifiScan = {
         val permissions = buildList {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -109,8 +137,8 @@ fun HandControlScreen() {
         gestureService.setTargetHand(uiState.gestureTargetHand)
     }
 
-    LaunchedEffect(uiState.wifiConnected, uiState.usbConnected) {
-        if ((uiState.wifiConnected || uiState.usbConnected) &&
+    LaunchedEffect(uiState.wifiConnected, uiState.usbConnected, uiState.bleConnected) {
+        if ((uiState.wifiConnected || uiState.usbConnected || uiState.bleConnected) &&
             uiState.connectionPanelVisibility == ConnectionPanelVisibility.EXPANDED
         ) {
             viewModel.setConnectionPanelVisibility(ConnectionPanelVisibility.COLLAPSED)
@@ -173,6 +201,11 @@ fun HandControlScreen() {
                             } else {
                                 "USB · 未连接"
                             }
+                            ConnectionMode.BLE -> if (uiState.bleConnected) {
+                                "BLE · ${uiState.bleHandType ?: "Aero Hand"}"
+                            } else {
+                                "BLE · 未连接"
+                            }
                         }
                         Text(
                             "v${BuildConfig.VERSION_NAME} · $connectionLabel",
@@ -194,8 +227,8 @@ fun HandControlScreen() {
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    val isConnected = uiState.wifiConnected || uiState.usbConnected
-                    val handType = uiState.connectedHandType
+                    val isConnected = uiState.wifiConnected || uiState.usbConnected || uiState.bleConnected
+                    val handType = uiState.connectedHandType ?: uiState.bleHandType
                     if (isConnected && handType != null) {
                         Box(
                             modifier = Modifier
@@ -244,6 +277,12 @@ fun HandControlScreen() {
                         port = uiState.port,
                         wifiConnected = uiState.wifiConnected,
                         usbConnected = uiState.usbConnected,
+                        bleConnected = uiState.bleConnected,
+                        bleDevices = uiState.bleDevices,
+                        bleSelectedAddress = uiState.bleSelectedAddress,
+                        bleScanning = uiState.bleScanning,
+                        bleConnecting = uiState.bleConnecting,
+                        blePermissionRequired = uiState.blePermissionRequired,
                         statusMessage = uiState.statusMessage,
                         wifiConfig = uiState.wifiConfig,
                         discoveredHands = uiState.discoveredHands,
@@ -253,6 +292,10 @@ fun HandControlScreen() {
                         wifiProvisioningSupported = uiState.deviceCapabilities.wifiProvisioning,
                         firmwareVersion = uiState.firmwareVersion,
                         onModeChange = viewModel::setConnectionMode,
+                        onRequestBlePermission = requestBlePermission,
+                        onScanBle = requestBleScan,
+                        onSelectBleDevice = viewModel::selectBleDevice,
+                        onConnectSelectedBleDevice = viewModel::connectSelectedBleDevice,
                         onHostChange = viewModel::setHost,
                         onPortChange = viewModel::setPort,
                         onConnect = viewModel::connect,
@@ -301,6 +344,7 @@ fun HandControlScreen() {
                         isConnected = when (uiState.connectionMode) {
                             ConnectionMode.WIFI -> uiState.wifiConnected
                             ConnectionMode.USB -> uiState.usbConnected
+                            ConnectionMode.BLE -> uiState.bleConnected
                         },
                         presetRepeatCounts = uiState.presetRepeatCounts,
                         macroPresetIds = uiState.macroPresetIds,
@@ -333,6 +377,7 @@ fun HandControlScreen() {
                                 isConnected = when (uiState.connectionMode) {
                                     ConnectionMode.WIFI -> uiState.wifiConnected
                                     ConnectionMode.USB -> uiState.usbConnected
+                                    ConnectionMode.BLE -> uiState.bleConnected
                                 }
                             )
                             2 -> GestureFollowPage(

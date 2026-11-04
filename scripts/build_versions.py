@@ -35,7 +35,7 @@ PLATFORMIO_INI_TEMPLATE = '''; PlatformIO Project Configuration File
 ; Aero Hand WebSocket Firmware - {version} ({hand})
 
 [env:esp32-s3-devkitc-1]
-platform = espressif32
+platform = {pio_platform}
 board = esp32-s3-devkitc-1
 framework = arduino
 upload_speed = 921600
@@ -50,7 +50,7 @@ build_flags =
 lib_deps =
     links2004/WebSockets@^2.3.4
     bblanchon/ArduinoJson@^6.21.3
-
+{ble_dependency}
 upload_resetmethod = esptool
 '''
 
@@ -154,8 +154,17 @@ def create_project(version, hand):
 
     # Create platformio.ini
     ini_path = proj_dir / "platformio.ini"
+    ble_enabled = version == "v0.2.0"
+    ble_dependency = "    h2zero/NimBLE-Arduino@2.3.6" if ble_enabled else ""
+    pio_platform = "espressif32@6.10.0" if ble_enabled else "espressif32"
     with open(ini_path, 'w', encoding='utf-8') as f:
-        f.write(PLATFORMIO_INI_TEMPLATE.format(version=version, hand=hand, hand_flag=hand_flag))
+        f.write(PLATFORMIO_INI_TEMPLATE.format(
+            version=version,
+            hand=hand,
+            hand_flag=hand_flag,
+            ble_dependency=ble_dependency,
+            pio_platform=pio_platform,
+        ))
 
     return proj_dir
 

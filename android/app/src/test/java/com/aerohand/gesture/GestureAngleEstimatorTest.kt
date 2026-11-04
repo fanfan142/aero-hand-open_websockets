@@ -69,6 +69,18 @@ class GestureAngleEstimatorTest {
     }
 
     @Test
+    fun palmFacingInwardThumbSwingIncreasesForMirroredHandsAndRotations() {
+        for (hand in listOf("Left", "Right")) {
+            for (rotation in 0..3) {
+                val open = GestureAngleEstimator.estimate(palmFacingThumbPose(hand, false, rotation), hand)
+                val inward = GestureAngleEstimator.estimate(palmFacingThumbPose(hand, true, rotation), hand)
+                assertTrue("$hand rotation $rotation inward thumb must increase signed swing",
+                    inward.thumbSwing - open.thumbSwing >= 12f)
+            }
+        }
+    }
+
+    @Test
     fun tuningProfileAppliesGainAndOffsetWithinChannelLimits() {
         val profile = GestureTuningProfile.default()
             .withAdjustment(GestureTuningChannel.INDEX_TENDON, gainDelta = 0.5f, offsetDelta = 20f)
@@ -76,6 +88,25 @@ class GestureAngleEstimatorTest {
         val tuned = profile.applyTo(FingerAngles(indexTendon = 80f))
 
         assertEquals(90f, tuned.indexTendon, 0.001f)
+    }
+
+    private fun palmFacingThumbPose(hand: String, inward: Boolean, rotation: Int): List<GestureLandmark> {
+        // Unmirrored palm-facing left hand: index and thumb are left of the ring MCP.
+        val points = sampleLandmarks()
+        points[13] = GestureLandmark(0.6f, 0.5f)
+        points[5] = GestureLandmark(0.4f, 0.5f)
+        points[1] = GestureLandmark(0.4f, 0.8f)
+        points[2] = if (inward) GestureLandmark(0.38f, 0.6f) else GestureLandmark(0.2f, 0.7f)
+        return points.map { point ->
+            var x = if (hand == "Right") 1f - point.x else point.x
+            var y = point.y
+            repeat(rotation) {
+                val previousX = x
+                x = 1f - y
+                y = previousX
+            }
+            point.copy(x = x, y = y)
+        }
     }
 
     private fun sampleLandmarks(): MutableList<GestureLandmark> {

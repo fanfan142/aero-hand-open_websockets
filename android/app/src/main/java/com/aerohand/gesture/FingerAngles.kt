@@ -140,6 +140,10 @@ data class GestureCameraState(
     val smoothedAngles: FingerAngles = FingerAngles(),
     val calibratedAngles: FingerAngles = FingerAngles(),
     val calibrationState: CalibrationState = CalibrationState.NOT_CALIBRATED,
+    val calibrationCapturePhase: CalibrationCapturePhase = CalibrationCapturePhase.IDLE,
+    val calibrationCaptureNotice: CalibrationCaptureNotice = CalibrationCaptureNotice.NONE,
+    val calibrationCaptureElapsedMs: Long = 0L,
+    val calibrationRetryState: CalibrationRetryState = CalibrationRetryState.NONE,
     val calibrationSampleCount: Int = 0,
     val calibrationSamplesRequired: Int = GestureCameraService.CALIBRATION_SAMPLE_MIN,
     val calibrationProfile: GestureCalibrationProfile? = null,
@@ -160,6 +164,23 @@ enum class CalibrationState {
     CALIBRATING_FIST,
     CALIBRATING_THUMB_IN,
     CALIBRATED
+}
+
+enum class CalibrationCapturePhase {
+    IDLE,
+    COLLECTING
+}
+
+enum class CalibrationCaptureNotice {
+    NONE,
+    READY,
+    INTERRUPTED
+}
+
+enum class CalibrationRetryState {
+    NONE,
+    OPEN_FIST,
+    THUMB_IN
 }
 
 enum class GestureTargetHand(val label: String) {

@@ -19,6 +19,15 @@ extern const ServoData sd_base_right[7];
 bool HOMING_isBusy();
 void HOMING_start();
 
+struct HomingGuardContext {
+  uint32_t generation;
+  uint16_t connHandle;
+  uint32_t deadlineMs;
+};
+using HomingStartGuard = bool (*)(const HomingGuardContext& context);
+// Called with the bus acquired, before baseline reset or motor I/O. False means no homing ran.
+bool HOMING_startGuarded(HomingStartGuard guard, const HomingGuardContext& context);
+
 // Utility
 void resetSdToBaseline();                 // copy correct baseline -> sd
 

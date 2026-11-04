@@ -28,6 +28,12 @@ REQUIRED_PROTOCOL_MARKERS = (
     "wifi_start_ap",
     "wifi_clear_sta",
 )
+REQUIRED_BLE_UUID_MARKERS = (
+    "8c6f4a20-6c0b-4b7a-9d27-6df8a3210001",
+    "8c6f4a20-6c0b-4b7a-9d27-6df8a3210002",
+    "8c6f4a20-6c0b-4b7a-9d27-6df8a3210003",
+    "8c6f4a20-6c0b-4b7a-9d27-6df8a3210004",
+)
 WIFI_TRANSITION_ACTIONS = {
     "wifi_connect_sta": "WIFI_ACTION_CONNECT_STA",
     "wifi_start_ap": "WIFI_ACTION_START_AP",
@@ -204,16 +210,26 @@ def check_source_target(target: Path) -> list[str]:
     return errors
 
 
-def check_binary(target: Path) -> list[str]:
+def check_binary(target: Path, require_ble: bool = False) -> list[str]:
     try:
         content = target.read_bytes()
     except OSError as error:
         return [f"{target}: cannot read firmware binary: {error}"]
-    return check_required_markers(target, content)
+    errors = check_required_markers(target, content)
+    if require_ble:
+        missing = [uuid for uuid in REQUIRED_BLE_UUID_MARKERS if uuid.encode("ascii") not in content]
+        if missing:
+            errors.append(f"{target}: missing required BLE UUID markers: {', '.join(missing)}")
+    return errors
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--require-ble",
+        action="store_true",
+        help="also require all four BLE UUID strings in each compiled .bin target",
+    )
     parser.add_argument(
         "targets",
         nargs="*",
@@ -228,8 +244,10 @@ def main() -> int:
     args = parse_args()
     errors: list[str] = []
     for target in args.targets:
-        if target.is_file() and target.suffix.lower() == ".bin":
-            errors.extend(check_binary(target))
+        if target.suffix.lower() == ".bin":
+            errors.extend(check_binary(target, require_ble=args.require_ble))
+        elif args.require_ble:
+            errors.append(f"{target}: --require-ble requires a compiled .bin target")
         else:
             errors.extend(check_source_target(target))
 

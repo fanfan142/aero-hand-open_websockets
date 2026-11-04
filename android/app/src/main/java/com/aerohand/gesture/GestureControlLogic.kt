@@ -60,23 +60,200 @@ internal class GestureSmoother(
     }
 }
 
+internal data class CalibrationCaptureContext(
+    val hand: String,
+    val facing: GestureCameraFacing,
+    val mirrorMode: GestureMirrorMode,
+    val targetHand: GestureTargetHand
+)
+
+internal sealed interface CalibrationCaptureResult {
+    data class Collecting(
+        val sampleCount: Int,
+        val elapsedMs: Long,
+        val restartedForInstability: Boolean = false
+    ) : CalibrationCaptureResult
+    data class Complete(val angles: FingerAngles, val elapsedMs: Long) : CalibrationCaptureResult
+    data object Cancelled : CalibrationCaptureResult
+    data object Ignored : CalibrationCaptureResult
+}
+
+internal class CalibrationPoseCapture(
+    private val minimumSamples: Int = 5,
+    private val minimumSampleIntervalMs: Long = 150L,
+    private val minimumSpanMs: Long = 600L,
+    private val maximumFrameGapMs: Long = 400L,
+    private val maxChannelVariationDegrees: Float = 5f
+) {
+    private data class Sample(val angles: FingerAngles, val capturedAtMs: Long)
+
+    private var context: CalibrationCaptureContext? = null
+    private var armedAtMs = 0L
+    private var lastSampleAtMs = 0L
+    private val samples = mutableListOf<Sample>()
+
+    val sampleCount: Int
+        get() = samples.size
+
+    val isCollecting: Boolean
+        get() = context != null
+
+    fun arm(context: CalibrationCaptureContext, armedAtMs: Long) {
+        this.context = context
+        this.armedAtMs = armedAtMs
+        lastSampleAtMs = armedAtMs
+        samples.clear()
+    }
+
+    fun cancel(): Boolean {
+        val wasCollecting = context != null
+        context = null
+        samples.clear()
+        armedAtMs = 0L
+        lastSampleAtMs = 0L
+        return wasCollecting
+    }
+
+    fun addFrame(
+        context: CalibrationCaptureContext,
+        targetMatched: Boolean,
+        angles: FingerAngles,
+        capturedAtMs: Long
+    ): CalibrationCaptureResult {
+        val armedContext = this.context ?: return CalibrationCaptureResult.Ignored
+        if (!targetMatched || context != armedContext ||
+            !(angles.toControlArray() + angles.thumbSwing).all { it.isFinite() }
+        ) {
+            cancel()
+            return CalibrationCaptureResult.Cancelled
+        }
+        // Never accept a frame captured before (or at) the arming boundary.
+        if (capturedAtMs <= armedAtMs) return CalibrationCaptureResult.Ignored
+        if (capturedAtMs < lastSampleAtMs || capturedAtMs - lastSampleAtMs > maximumFrameGapMs) {
+            cancel()
+            return CalibrationCaptureResult.Cancelled
+        }
+
+        // Inspect even frames between sample slots, so a transient movement cannot be skipped.
+        val candidateSamples = samples + Sample(angles, capturedAtMs)
+        if (candidateSamples.size > 1 && !isStable(candidateSamples)) {
+            samples.clear()
+            samples += Sample(angles, capturedAtMs)
+            lastSampleAtMs = capturedAtMs
+            return CalibrationCaptureResult.Collecting(1, 0L, restartedForInstability = true)
+        }
+        if (samples.isNotEmpty() && capturedAtMs - lastSampleAtMs < minimumSampleIntervalMs) {
+            return CalibrationCaptureResult.Collecting(samples.size, elapsedMs())
+        }
+
+        lastSampleAtMs = capturedAtMs
+        samples += Sample(angles, capturedAtMs)
+        val spanMs = elapsedMs()
+        if (samples.size >= minimumSamples && spanMs >= minimumSpanMs) {
+            val median = medianSample(samples.map { it.angles })
+            val completedSpanMs = spanMs
+            cancel()
+            return CalibrationCaptureResult.Complete(median, completedSpanMs)
+        }
+        return CalibrationCaptureResult.Collecting(samples.size, spanMs)
+    }
+
+    private fun elapsedMs(): Long = if (samples.size < 2) {
+        0L
+    } else {
+        samples.last().capturedAtMs - samples.first().capturedAtMs
+    }
+
+    private fun isStable(candidates: List<Sample>): Boolean {
+        val channels = candidates.map { sample ->
+            sample.angles.toControlArray() + sample.angles.thumbSwing
+        }
+        return channels.first().indices.all { index ->
+            val values = channels.map { it[index] }
+            values.maxOrNull()!! - values.minOrNull()!! <= maxChannelVariationDegrees
+        }
+    }
+
+    private fun medianSample(candidates: List<FingerAngles>): FingerAngles {
+        val values = FloatArray(GestureTuningChannel.entries.size) { index ->
+            median(candidates.map { it.toControlArray()[index] })
+        }
+        return anglesFromArray(values, median(candidates.map { it.thumbSwing }))
+    }
+
+    private fun median(values: List<Float>): Float {
+        val sorted = values.sorted()
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 0) {
+            (sorted[middle - 1] + sorted[middle]) * 0.5f
+        } else {
+            sorted[middle]
+        }
+    }
+}
+
+internal data class CalibrationValidationFailure(
+    val message: String,
+    val retryState: CalibrationRetryState
+)
+
 internal object GestureCalibrationMapper {
     private const val MIN_RANGE_DEGREES = 12f
+    private const val THUMB_POSE_FINGER_TOLERANCE_DEGREES = 18f
 
-    fun validate(profile: GestureCalibrationProfile): String? {
+    fun validateOpenFist(profile: GestureCalibrationProfile): CalibrationValidationFailure? {
+        // Thumb CMC is a 2D proxy and often barely changes during a correct fist.
+        // Four-finger flexion still has to move in the closing direction.
         GestureTuningChannel.entries
-            .filter { it != GestureTuningChannel.THUMB_ABD }
+            .filter { it != GestureTuningChannel.THUMB_ABD && it != GestureTuningChannel.THUMB_CMC_FLEX }
             .forEach { channel ->
                 val index = channel.ordinal
-                if (abs(profile.fistAngles[index] - profile.openAngles[index]) < MIN_RANGE_DEGREES) {
-                    return "校准失败：${channel.label}张开/握拳差值太小，请重新记录"
+                val difference = profile.fistAngles[index] - profile.openAngles[index]
+                val validRange = if (index >= GestureTuningChannel.INDEX_TENDON.ordinal) {
+                    difference >= MIN_RANGE_DEGREES
+                } else {
+                    abs(difference) >= MIN_RANGE_DEGREES
+                }
+                if (!validRange) {
+                    return CalibrationValidationFailure(
+                        "校准失败：${channel.label}张开/握拳范围不足或方向相反，请确认张开后再握拳，并重采该姿势",
+                        CalibrationRetryState.OPEN_FIST
+                    )
                 }
             }
-        if (abs(profile.openThumbSwing - profile.thumbInSwing) < MIN_RANGE_DEGREES) {
-            return "校准失败：拇指内收幅度太小，请重新记录"
+        return null
+    }
+
+    fun validateThumbPose(openAngles: FloatArray, thumbInAngles: FloatArray): CalibrationValidationFailure? {
+        GestureTuningChannel.entries
+            .filter { it.ordinal >= GestureTuningChannel.INDEX_TENDON.ordinal }
+            .forEach { channel ->
+                val index = channel.ordinal
+                if (abs(thumbInAngles.getOrElse(index) { 0f } - openAngles.getOrElse(index) { 0f }) >
+                    THUMB_POSE_FINGER_TOLERANCE_DEGREES
+                ) {
+                    return CalibrationValidationFailure(
+                        "校准失败：拇指内收时请保持其它手指张开，并重新采集",
+                        CalibrationRetryState.THUMB_IN
+                    )
+                }
+            }
+        return null
+    }
+
+    fun validateThumbRange(profile: GestureCalibrationProfile): CalibrationValidationFailure? {
+        val inwardRange = profile.thumbInSwing - profile.openThumbSwing
+        if (!inwardRange.isFinite() || inwardRange < MIN_RANGE_DEGREES) {
+            return CalibrationValidationFailure(
+                "校准失败：拇指内收幅度不足或方向相反，请保持掌心朝向镜头，让拇指靠向食指后重新采集",
+                CalibrationRetryState.THUMB_IN
+            )
         }
         return null
     }
+
+    fun validate(profile: GestureCalibrationProfile): String? =
+        (validateOpenFist(profile) ?: validateThumbRange(profile))?.message
 
     fun remap(
         profile: GestureCalibrationProfile,
@@ -96,7 +273,7 @@ internal object GestureCalibrationMapper {
         }
 
         val thumbSwingRange = profile.openThumbSwing - profile.thumbInSwing
-        if (abs(thumbSwingRange) >= MIN_RANGE_DEGREES) {
+        if (thumbSwingRange <= -MIN_RANGE_DEGREES) {
             mapped[GestureTuningChannel.THUMB_ABD.ordinal] =
                 ((profile.openThumbSwing - thumbSwing) / thumbSwingRange * GestureTuningChannel.THUMB_ABD.maxValue)
                     .coerceIn(0f, GestureTuningChannel.THUMB_ABD.maxValue)
