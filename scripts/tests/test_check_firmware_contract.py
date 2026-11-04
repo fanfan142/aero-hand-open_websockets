@@ -247,6 +247,8 @@ class FirmwareWsBleSourceContractTest(unittest.TestCase):
         self.assertNotIn("sta_pass", self.ble_setup)
 
     def test_ble_command_requires_encrypted_bonded_exact_frame(self) -> None:
+        setup = cpp_function_definition(self.source, "void setup()")
+        self.assertLess(setup.index("setupBlePeripheral();"), setup.index("HOMING_start();"))
         self.assertIn("NimBLEDevice::setSecurityAuth(true, false, true)", self.source)
         self.assertIn("Just Works", self.source)
         self.assertIn("!connInfo.isEncrypted() || !connInfo.isBonded() || value.size() != 16", self.source)
