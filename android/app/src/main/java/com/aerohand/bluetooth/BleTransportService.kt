@@ -440,7 +440,10 @@ class BleTransportService(private val context: Context) {
                 callbackGatt.writeCharacteristic(command)
             }
         }
-        if (!secure.success) return
+        if (!secure.success) {
+            failGeneration(token, "BLE 加密链路未建立，请重新配对后再连接")
+            return
+        }
         if (isCurrent(token, callbackGatt)) {
             val deviceName = when (val state = _connectionState.value) {
                 is BleConnectionState.Connecting -> state.deviceName
