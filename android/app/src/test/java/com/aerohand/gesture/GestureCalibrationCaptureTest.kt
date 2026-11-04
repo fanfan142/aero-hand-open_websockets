@@ -58,6 +58,20 @@ class GestureCalibrationCaptureTest {
     }
 
     @Test
+    fun picturedPosesCompleteWhenThumbCmcStaysStill() {
+        service.startCalibration()
+        val openPose = pose(10f, 30f).copy(thumbCmcFlex = 20f)
+        val fistPose = pose(80f, 30f).copy(thumbCmcFlex = 20f)
+        val thumbPose = pose(10f, 70f).copy(thumbCmcFlex = 20f, thumbTendon = 45f)
+        capture(openPose)
+        capture(fistPose)
+        assertEquals(CalibrationState.CALIBRATING_THUMB_IN, service.state.value.calibrationState)
+        capture(thumbPose)
+        assertEquals(CalibrationState.CALIBRATED, service.state.value.calibrationState)
+        assertEquals(70f, service.state.value.calibrationProfile!!.thumbInSwing, 0f)
+    }
+
+    @Test
     fun repeatedTapDuringCollectionDoesNotResetProgress() {
         service.startCalibration()
         detected()
